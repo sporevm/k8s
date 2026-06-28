@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sporevm.dev/schemas/fleet/benchmark-summary.schema.json",
+  "title": "SporeVM fleet benchmark summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runID",
+    "childCount",
+    "targetConcurrency",
+    "cachePosture",
+    "successRate",
+    "admissionLatencyMs",
+    "timeToFirstChildReadyMs",
+    "timeToTargetConcurrencyMs",
+    "stagePercentilesMs",
+    "originBytes",
+    "cacheHitRate"
+  ],
+  "properties": {
+    "runID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "childCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "targetConcurrency": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cachePosture": {
+      "type": "string",
+      "enum": [
+        "cold-origin-cold-cache",
+        "warm-bundle-cold-materialization",
+        "warm-node-local-cache"
+      ]
+    },
+    "successRate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "admissionLatencyMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "timeToFirstChildReadyMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "timeToTargetConcurrencyMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "stagePercentilesMs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactPull",
+        "materialization",
+        "resume",
+        "guestReady",
+        "resultCommit"
+      ],
+      "properties": {
+        "artifactPull": {
+          "$ref": "#/$defs/percentiles"
+        },
+        "materialization": {
+          "$ref": "#/$defs/percentiles"
+        },
+        "resume": {
+          "$ref": "#/$defs/percentiles"
+        },
+        "guestReady": {
+          "$ref": "#/$defs/percentiles"
+        },
+        "resultCommit": {
+          "$ref": "#/$defs/percentiles"
+        }
+      }
+    },
+    "originBytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cacheHitRate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "$defs": {
+    "percentiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "p50",
+        "p95",
+        "p99"
+      ],
+      "properties": {
+        "p50": {
+          "type": "number",
+          "minimum": 0
+        },
+        "p95": {
+          "type": "number",
+          "minimum": 0
+        },
+        "p99": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

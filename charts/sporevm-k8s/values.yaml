@@ -1,0 +1,71 @@
+agent:
+  enabled: true
+  image:
+    repository: ghcr.io/sporevm/k8s-runtime
+    tag: latest
+    pullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+    name: spore-agent
+  service:
+    enabled: true
+    port: 8080
+  region: us-east-1
+  cellID: default
+  backend: kvm
+  slots: 1
+  sporePath: /usr/local/bin/spore
+  childTimeout: ""
+  nodeSelector:
+    kubernetes.io/arch: arm64
+    sporevm.io/agent: "true"
+    sporevm.io/arch: aarch64
+    sporevm.io/backend: kvm
+  tolerations:
+    - key: sporevm.io/agent
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  securityContext:
+    privileged: true
+    allowPrivilegeEscalation: true
+  cache:
+    hostPath: /var/lib/sporevm
+    mountPath: /var/lib/sporevm
+    kernelDir: /var/lib/sporevm/kernels
+    bundleDir: /var/lib/sporevm/bundle-cache
+    rootfsDir: /var/lib/sporevm/rootfs-cache
+    resultDir: /var/lib/sporevm/results
+    workDir: /var/lib/sporevm/work
+  kvm:
+    hostPath: /dev/kvm
+  registryCA:
+    enabled: false
+    secretName: spore-registry-ca
+
+registry:
+  enabled: false
+  image:
+    repository: public.ecr.aws/docker/library/registry
+    tag: "2"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5000
+  tlsSecretName: spore-registry-tls
+  storage:
+    storageClassName: gp3
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

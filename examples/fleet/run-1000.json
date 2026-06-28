@@ -1,0 +1,31 @@
+{
+  "runID": "ruby-counter-20260620",
+  "bundle": {
+    "uri": "s3://example-sporevm-artifacts/runs/ruby-counter.bundle",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "children": {
+    "start": 0,
+    "count": 1000
+  },
+  "hostClass": {
+    "id": "linux-aarch64-kvm-graviton1-v0",
+    "sporePlatformVersion": "v0",
+    "architecture": "aarch64",
+    "backend": "kvm",
+    "cpuProfile": "graviton1",
+    "deviceModel": "sporevm-aarch64-v0"
+  },
+  "execution": {
+    "childrenPerShard": 100,
+    "maxInFlightPerAgent": 100
+  },
+  "retryPolicy": {
+    "maxAttemptsPerChild": 2,
+    "rerunCommittedChildren": false
+  },
+  "sideEffects": {
+    "idempotencyRequired": true
+  },
+  "resultStore": "s3://example-sporevm-results/ruby-counter-20260620/"
+}

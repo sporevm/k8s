@@ -1,0 +1,39 @@
+{
+  "runID": "ruby-counter-20260620",
+  "childCount": 1000,
+  "targetConcurrency": 1000,
+  "cachePosture": "warm-bundle-cold-materialization",
+  "successRate": 1,
+  "admissionLatencyMs": 50,
+  "timeToFirstChildReadyMs": 882,
+  "timeToTargetConcurrencyMs": 1103,
+  "stagePercentilesMs": {
+    "artifactPull": {
+      "p50": 17,
+      "p95": 22,
+      "p99": 22
+    },
+    "materialization": {
+      "p50": 98,
+      "p95": 106,
+      "p99": 106
+    },
+    "resume": {
+      "p50": 23,
+      "p95": 26,
+      "p99": 26
+    },
+    "guestReady": {
+      "p50": 749,
+      "p95": 795,
+      "p99": 799
+    },
+    "resultCommit": {
+      "p50": 21,
+      "p95": 27,
+      "p99": 27
+    }
+  },
+  "originBytes": 9728000,
+  "cacheHitRate": 0.7272727272727273
+}

@@ -1,0 +1,20 @@
+{
+  "runID": "ruby-counter-20260620",
+  "bundleDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "childID": 742,
+  "attemptID": "ruby-counter-20260620-child-742-attempt-01",
+  "agentID": "spore-agent-us-east-1a-0001",
+  "shardID": "ruby-counter-20260620-shard-0007",
+  "status": "succeeded",
+  "startedAt": "2026-06-20T04:00:01Z",
+  "finishedAt": "2026-06-20T04:00:04Z",
+  "timingsMs": {
+    "artifactPull": 410.5,
+    "materialization": 102.1,
+    "resume": 28.7,
+    "guestReady": 930.2,
+    "resultCommit": 35.9
+  },
+  "terminal": true,
+  "resultURI": "s3://example-sporevm-results/ruby-counter-20260620/children/742/terminal.json"
+}

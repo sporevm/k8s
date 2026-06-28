@@ -1,0 +1,6 @@
+.git
+.terraform
+**/.terraform
+**/.terraform.lock.hcl
+tmp
+dist

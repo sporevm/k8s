@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sporevm-k8s
+description: Kubernetes cell components for SporeVM fan-out
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

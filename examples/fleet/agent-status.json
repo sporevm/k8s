@@ -1,0 +1,28 @@
+{
+  "agentID": "spore-agent-us-east-1a-0001",
+  "cellID": "default",
+  "observedAt": "2026-06-20T04:00:00Z",
+  "hostClass": {
+    "id": "linux-aarch64-kvm-graviton1-v0",
+    "sporePlatformVersion": "v0",
+    "architecture": "aarch64",
+    "backend": "kvm",
+    "cpuProfile": "graviton1",
+    "deviceModel": "sporevm-aarch64-v0"
+  },
+  "executionSlots": {
+    "total": 100,
+    "available": 96
+  },
+  "cache": {
+    "bundleCacheBytes": 2147483648,
+    "rootfsCacheBytes": 8589934592,
+    "bundleCacheEntries": 4,
+    "rootfsCacheEntries": 12
+  },
+  "pressure": {
+    "disk": "normal",
+    "memory": "normal"
+  },
+  "healthy": true
+}

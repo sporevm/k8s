@@ -1,0 +1,11 @@
+{
+  "runID": "ruby-counter-20260620",
+  "bundleDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "shardID": "ruby-counter-20260620-shard-0007",
+  "childStart": 700,
+  "childCount": 100,
+  "attemptBudget": 2,
+  "hostClassID": "linux-aarch64-kvm-graviton1-v0",
+  "agentID": "spore-agent-us-east-1a-0001",
+  "leaseDeadline": "2026-06-20T04:10:00Z"
+}

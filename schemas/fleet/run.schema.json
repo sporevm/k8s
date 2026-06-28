@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sporevm.dev/schemas/fleet/run.schema.json",
+  "title": "SporeVM fleet run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runID",
+    "bundle",
+    "children",
+    "hostClass",
+    "execution",
+    "retryPolicy",
+    "sideEffects",
+    "resultStore"
+  ],
+  "properties": {
+    "runID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri",
+        "digest"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "children": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "count"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "hostClass": {
+      "$ref": "#/$defs/hostClass"
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "childrenPerShard",
+        "maxInFlightPerAgent"
+      ],
+      "properties": {
+        "childrenPerShard": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxInFlightPerAgent": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxAttemptsPerChild",
+        "rerunCommittedChildren"
+      ],
+      "properties": {
+        "maxAttemptsPerChild": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rerunCommittedChildren": {
+          "type": "boolean",
+          "const": false
+        }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idempotencyRequired"
+      ],
+      "properties": {
+        "idempotencyRequired": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "resultStore": {
+      "type": "string",
+      "pattern": "^s3://[^/]+/.+/$"
+    }
+  },
+  "$defs": {
+    "hostClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sporePlatformVersion",
+        "architecture",
+        "backend",
+        "cpuProfile",
+        "deviceModel"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "sporePlatformVersion": {
+          "type": "string",
+          "enum": [
+            "v0"
+          ]
+        },
+        "architecture": {
+          "type": "string",
+          "enum": [
+            "aarch64"
+          ]
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "kvm"
+          ]
+        },
+        "cpuProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deviceModel": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

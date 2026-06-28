@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sporevm.dev/schemas/fleet/agent-status.schema.json",
+  "title": "SporeVM fleet agent status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agentID",
+    "cellID",
+    "observedAt",
+    "hostClass",
+    "executionSlots",
+    "cache",
+    "pressure",
+    "healthy"
+  ],
+  "properties": {
+    "agentID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "cellID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hostClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sporePlatformVersion",
+        "architecture",
+        "backend",
+        "cpuProfile",
+        "deviceModel"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        },
+        "sporePlatformVersion": {
+          "type": "string",
+          "enum": [
+            "v0"
+          ]
+        },
+        "architecture": {
+          "type": "string",
+          "enum": [
+            "aarch64"
+          ]
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "kvm"
+          ]
+        },
+        "cpuProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deviceModel": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "executionSlots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "available"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "available": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundleCacheBytes",
+        "rootfsCacheBytes",
+        "bundleCacheEntries",
+        "rootfsCacheEntries"
+      ],
+      "properties": {
+        "bundleCacheBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rootfsCacheBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bundleCacheEntries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rootfsCacheEntries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "pressure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "memory"
+      ],
+      "properties": {
+        "disk": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "warning",
+            "critical"
+          ]
+        },
+        "memory": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "warning",
+            "critical"
+          ]
+        }
+      }
+    },
+    "healthy": {
+      "type": "boolean"
+    }
+  }
+}

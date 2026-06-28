@@ -1,0 +1,17 @@
+{{- if .Values.registry.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: spore-registry
+  labels:
+    app.kubernetes.io/name: spore-registry
+    {{- include "sporevm-k8s.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: spore-registry
+    app.kubernetes.io/part-of: sporevm-k8s
+  ports:
+    - name: https
+      port: {{ .Values.registry.service.port }}
+      targetPort: https
+{{- end }}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spore-registry-data
+  namespace: sporevm-system
+  labels:
+    app.kubernetes.io/name: spore-registry
+    app.kubernetes.io/part-of: sporevm-k8s
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 20Gi

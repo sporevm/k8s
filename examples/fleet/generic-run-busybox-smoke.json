@@ -1,0 +1,40 @@
+{
+  "runID": "busybox-generic-smoke-20260624",
+  "source": {
+    "image": "public.ecr.aws/docker/library/busybox:latest",
+    "platform": "linux/arm64"
+  },
+  "prepare": {
+    "command": [
+      "/bin/sh",
+      "-c",
+      "trap '' USR1; echo SPOREVM_BUSYBOX_READY; sleep 5"
+    ],
+    "captureSignal": "USR1",
+    "readyMarker": "SPOREVM_BUSYBOX_READY"
+  },
+  "fork": {
+    "count": 1
+  },
+  "children": {
+    "start": 0,
+    "count": 1,
+    "command": [
+      "/bin/sh",
+      "-c",
+      "echo child ${SPORE_FORK_INDEX:-unknown}/${SPORE_FORK_COUNT:-unknown}; cat /run/sporevm/generation.json"
+    ]
+  },
+  "execution": {
+    "childrenPerShard": 1,
+    "maxInFlightPerAgent": 1
+  },
+  "retryPolicy": {
+    "maxAttemptsPerChild": 1,
+    "rerunCommittedChildren": false
+  },
+  "sideEffects": {
+    "idempotencyRequired": true
+  },
+  "resultStore": "s3://example-sporevm-results/busybox-generic-smoke-20260624/"
+}

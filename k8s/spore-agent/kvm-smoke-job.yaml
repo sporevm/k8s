@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spore-agent-kvm-smoke
+  namespace: sporevm-system
+  labels:
+    app.kubernetes.io/name: spore-agent-kvm-smoke
+    app.kubernetes.io/part-of: sporevm-k8s
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spore-agent-kvm-smoke
+        app.kubernetes.io/part-of: sporevm-k8s
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        sporevm.io/agent: "true"
+        sporevm.io/arch: aarch64
+        sporevm.io/backend: kvm
+      tolerations:
+        - key: sporevm.io/agent
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: kvm-smoke
+          image: public.ecr.aws/docker/library/python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              test "$(uname -m)" = "aarch64"
+              test -c /dev/kvm
+              python - <<'PY'
+              import fcntl
+              import os
+              import platform
+
+              KVM_GET_API_VERSION = 0xAE00
+
+              fd = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+              try:
+                  version = fcntl.ioctl(fd, KVM_GET_API_VERSION, 0)
+              finally:
+                  os.close(fd)
+
+              if version != 12:
+                  raise SystemExit(f"unexpected KVM API version {version}")
+
+              print(f"spore-agent-kvm-smoke-ok api_version={version} arch={platform.machine()}")
+              PY
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: kvm
+              mountPath: /dev/kvm
+      volumes:
+        - name: kvm
+          hostPath:
+            path: /dev/kvm
+            type: CharDevice

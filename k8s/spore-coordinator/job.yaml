@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spore-coordinator
+  namespace: sporevm-system
+  labels:
+    app.kubernetes.io/name: spore-coordinator
+    app.kubernetes.io/part-of: sporevm-k8s
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spore-coordinator
+        app.kubernetes.io/part-of: sporevm-k8s
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      tolerations:
+        - key: sporevm.io/agent
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: coordinator
+          image: sporevm-k8s-runtime:sporevm-1.2.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/spore-coordinator
+          args:
+            - --run=/etc/sporevm/run/run.json
+            - --agent-url=http://spore-agent.sporevm-system.svc.cluster.local:8080
+            - --result-store-root=/var/lib/sporevm/coordinator-results
+            - --timeout=30m
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: run
+              mountPath: /etc/sporevm/run
+              readOnly: true
+            - name: coordinator-results
+              mountPath: /var/lib/sporevm/coordinator-results
+      volumes:
+        - name: run
+          configMap:
+            name: spore-run
+        - name: coordinator-results
+          emptyDir: {}

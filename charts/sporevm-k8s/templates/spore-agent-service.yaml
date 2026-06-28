@@ -1,0 +1,17 @@
+{{- if and .Values.agent.enabled .Values.agent.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: spore-agent
+  labels:
+    app.kubernetes.io/name: spore-agent
+    {{- include "sporevm-k8s.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: spore-agent
+    app.kubernetes.io/part-of: sporevm-k8s
+  ports:
+    - name: http
+      port: {{ .Values.agent.service.port }}
+      targetPort: http
+{{- end }}

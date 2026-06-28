@@ -1,0 +1,16 @@
+{{- if .Values.registry.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spore-registry-data
+  labels:
+    app.kubernetes.io/name: spore-registry
+    {{- include "sporevm-k8s.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.registry.storage.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.registry.storage.size }}
+{{- end }}

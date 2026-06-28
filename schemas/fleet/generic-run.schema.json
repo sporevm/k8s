@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sporevm.dev/schemas/fleet/generic-run.schema.json",
+  "title": "SporeVM generic fleet run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runID",
+    "source",
+    "prepare",
+    "fork",
+    "children",
+    "execution",
+    "retryPolicy",
+    "sideEffects",
+    "resultStore"
+  ],
+  "properties": {
+    "runID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "platform"
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "linux/arm64"
+          ]
+        }
+      }
+    },
+    "prepare": {
+      "$ref": "#/$defs/prepareSpec"
+    },
+    "fork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "children": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "count",
+        "command"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "retryPolicy": {
+      "$ref": "#/$defs/retryPolicy"
+    },
+    "sideEffects": {
+      "$ref": "#/$defs/sideEffects"
+    },
+    "resultStore": {
+      "type": "string",
+      "pattern": "^s3://[^/]+/.+/$"
+    }
+  },
+  "$defs": {
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "childrenPerShard",
+        "maxInFlightPerAgent"
+      ],
+      "properties": {
+        "childrenPerShard": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxInFlightPerAgent": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxAttemptsPerChild",
+        "rerunCommittedChildren"
+      ],
+      "properties": {
+        "maxAttemptsPerChild": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rerunCommittedChildren": {
+          "type": "boolean",
+          "const": false
+        }
+      }
+    },
+    "sideEffects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idempotencyRequired"
+      ],
+      "properties": {
+        "idempotencyRequired": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "commandSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "prepareSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "dependentRequired": {
+        "captureSignal": [
+          "readyMarker"
+        ],
+        "readyMarker": [
+          "captureSignal"
+        ]
+      },
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "captureSignal": {
+          "type": "string",
+          "enum": [
+            "USR1"
+          ]
+        },
+        "readyMarker": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sporevm.dev/schemas/fleet/shard-lease.schema.json",
+  "title": "SporeVM fleet shard lease",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runID",
+    "bundleDigest",
+    "shardID",
+    "childStart",
+    "childCount",
+    "attemptBudget",
+    "hostClassID",
+    "agentID",
+    "leaseDeadline"
+  ],
+  "properties": {
+    "runID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "bundleDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "shardID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "childStart": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "childCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "attemptBudget": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "hostClassID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "agentID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "leaseDeadline": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
