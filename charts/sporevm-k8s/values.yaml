@@ -10,7 +10,7 @@ agent:
   service:
     enabled: true
     port: 8080
-  region: us-east-1
+  region: ""
   cellID: default
   backend: kvm
   slots: 1
@@ -53,14 +53,14 @@ agent:
 registry:
   enabled: false
   image:
-    repository: public.ecr.aws/docker/library/registry
+    repository: docker.io/library/registry
     tag: "2"
     pullPolicy: IfNotPresent
   service:
     port: 5000
   tlsSecretName: spore-registry-tls
   storage:
-    storageClassName: gp3
+    storageClassName: ""
     size: 20Gi
   resources:
     requests:

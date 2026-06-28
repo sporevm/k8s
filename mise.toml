@@ -18,13 +18,25 @@ run = "go run ./cmd/spore-fleet-benchmark --run examples/fleet/run-1000.json --a
 description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 1.2.0"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:sporevm-1.2.0 ."
 
-[tasks."runtime:image:push:dev"]
-description = "Build and push the arm64 runtime image to the dev ECR repository"
+[tasks."runtime:image:push"]
+description = "Build and push the arm64 runtime image to SPOREVM_K8S_RUNTIME_IMAGE"
 run = "docker buildx build --platform linux/arm64 -t \"$SPOREVM_K8S_RUNTIME_IMAGE\" --push ."
 
 [tasks."chart:lint"]
 description = "Lint the public Helm chart"
 run = "helm lint charts/sporevm-k8s"
+
+[tasks."chart:package"]
+description = "Package the public Helm chart"
+run = "mkdir -p dist/charts && helm package charts/sporevm-k8s --destination dist/charts"
+
+[tasks."chart:publish"]
+description = "Package and push the public Helm chart to GHCR OCI"
+run = "set -eu; mkdir -p dist/charts; helm package charts/sporevm-k8s --destination dist/charts; chart_version=$(sed -n 's/^version: //p' charts/sporevm-k8s/Chart.yaml); helm push \"dist/charts/sporevm-k8s-${chart_version}.tgz\" oci://ghcr.io/sporevm/charts"
+
+[tasks."public:leak-scan"]
+description = "Check for private infrastructure details before publishing"
+run = "scripts/public_leak_scan.sh"
 
 [tasks."fleet:test"]
 description = "Run all fleet contract and Go tests"

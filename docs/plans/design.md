@@ -52,7 +52,7 @@ The fleet has to avoid these failure modes:
   child, shard, agent, and result.
 - Run CI test fan-out for CI as the first concrete workload.
 - Keep Kubernetes useful as an adapter for compatible hosts, DaemonSets,
-  one-shot coordinator Jobs, private access, and later coarse queueing.
+  one-shot coordinator Jobs, private access, and later coarse admission.
 - Avoid one Kubernetes object, custom resource, or CI job per child.
 - Assign global child ids explicitly across runs, shards, agents, and cells.
 - Store detailed per-child results outside Kubernetes; keep control-plane status
@@ -241,14 +241,14 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 
 ## Current State
 
-- The local implementation branch contains the design plan plus the EKS adapter
-  cell, runtime image, `spore-agent`, `spore-coordinator`, `sporectl submit`,
-  and fleet contract code.
+- The local implementation branch contains the design plan plus the Kubernetes
+  adapter cell, runtime image, `spore-agent`, `spore-coordinator`,
+  `sporectl submit`, and fleet contract code.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
-  access, and finite SporeVM/KVM runs on EKS.
-- Live pressure-testing has reached 100 successful children on one `c6g.metal`
-  node with a temporary 100-slot, 60 GiB agent configuration.
+  access, and finite SporeVM/KVM runs on compatible Kubernetes nodes.
+- Live pressure-testing has reached 100 successful children on one compatible
+  KVM node.
 - The generic source/prepare/fork run contract now carries the warm-command
   capture trigger needed by the Rails/RSpec example and compiles to the
   existing immutable bundle run once a prepared bundle is available.
@@ -262,13 +262,13 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - `sporectl submit --generic-run` can render the Kubernetes ConfigMap and
   one-shot coordinator Job for a generic run. The Job passes the generic run
   contract through to `spore-coordinator --generic-run`.
-- A one-child public busybox generic run now completes in the dev EKS adapter
+- A one-child public busybox generic run now completes in the Kubernetes adapter
   cell through `sporectl submit --generic-run`, `spore-coordinator`, private
   ClusterIP agent access, agent-side prepare/fork/pack, local file-bundle
   handoff, shard execution, and create-only terminal result commit.
 - The dev cell now has a checked-in cluster-local OCI registry component for
-  app-level images. It is a private ClusterIP `registry:2` deployment with gp3
-  storage and a cluster-local TLS certificate; CI can push through
+  app-level images. It is a private ClusterIP `registry:2` deployment with
+  persistent storage and a cluster-local TLS certificate; CI can push through
   `kubectl port-forward`, and `spore-agent` trusts the registry CA before
   SporeVM resolves `source.image`.
 - A Rails/RSpec image from `sporevm-examples` was built as a linux/arm64 OCI
@@ -279,13 +279,11 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   `spore resume --generation FILE`; the adapter writes one generation JSON per
   child and passes that file when resuming materialized children.
 - The runtime image is pinned to SporeVM `v1.2.0`, whose Linux arm64 release
-  archive includes `spore resume --generation`. The dev EKS agent is running
-  `sporevm-1.2.0`.
+  archive includes `spore resume --generation`.
 - The real Rails/RSpec sharded smoke now succeeds in Kubernetes for one child
-  without the unsharded fallback. Run
-  `rails-rspec-sharded-v12-smoke-20260626224734` prepared/forked/packed in
-  23.5s, completed its shard in 36.8s, and wrote a succeeded terminal result
-  with artifact pull 13.5s, resume 23.3s, and guest-ready 2.5s.
+  without the unsharded fallback. The run prepared/forked/packed in 23.5s,
+  completed its shard in 36.8s, and wrote a succeeded terminal result with
+  artifact pull 13.5s, resume 23.3s, and guest-ready 2.5s.
 - The current generic path preserves `children.command` in the public contract,
   but the lower-level bundle execution still resumes the captured child
   continuation. Explicit child command injection remains follow-up work before
@@ -323,7 +321,7 @@ The local implementation supports `spore run --capture`, watches JSONL output
 for a configured `readyMarker`, sends `USR1`, runs `spore fork`, runs
 `spore pack`, and inspects the local file bundle. The real
 Rails/Postgres/RSpec warm command from `sporevm-examples` now prepares,
-captures, forks, packs, and inspects successfully on the compatible EKS agent.
+captures, forks, packs, and inspects successfully on a compatible KVM agent.
 
 Done when:
 
@@ -351,7 +349,7 @@ Done when:
 ### Slice 4: Kubernetes Adapter Cell
 
 Status: implemented for one-child public busybox and Rails/RSpec sharded generic
-smokes in the dev EKS cell; multi-agent bundle handoff pending.
+smokes in a compatible Kubernetes cell; multi-agent bundle handoff pending.
 
 Keep the existing adapter shape: DaemonSet agents plus one coordinator Job per
 run.
@@ -361,7 +359,7 @@ Done when:
 - `sporectl submit` creates the run ConfigMap and coordinator Job for either a
   prebuilt bundle run or a generic run;
 - the coordinator talks to agents through private cluster networking;
-- the same generic run completes in the EKS cell;
+- the same generic run completes in a compatible Kubernetes cell;
 - no per-child Kubernetes objects are created.
 
 ### Slice 5: CI Wrapper
@@ -411,7 +409,7 @@ Done when:
 - Kubernetes render checks for the agent DaemonSet and coordinator Job.
 - Kubernetes render checks for the cluster-local OCI registry and the dev
   agent CA trust patch.
-- Live EKS smoke for one-child, 10-child, 100-child, then 1,000-child runs.
+- Live Kubernetes smoke for one-child, 10-child, 100-child, then 1,000-child runs.
 - CI smoke that submits one logical run and fails the step on aggregate
   child failure.
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
@@ -433,8 +431,8 @@ Done when:
 - In the first generic coordinator path, the agent that prepares a local
   `file://` bundle also executes the shards. Multi-agent generic runs require
   publishing the prepared bundle first.
-- Runtime images stay in ECR; app-level source images can use the cluster-local
-  registry because SporeVM, not kubelet, pulls them inside `spore-agent`.
+- Public runtime images publish to GHCR; private environments can override the
+  image repository from their ops values.
 - `sporectl`/`spore-coordinator` must treat an aggregate runtime report with
   `state != succeeded` as a failed run even when the Kubernetes Job container
   reached the end of its process.

@@ -1,7 +1,7 @@
 {
   "runID": "busybox-generic-smoke-20260624",
   "source": {
-    "image": "public.ecr.aws/docker/library/busybox:latest",
+    "image": "docker.io/library/busybox:latest",
     "platform": "linux/arm64"
   },
   "prepare": {

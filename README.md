@@ -9,9 +9,9 @@ This repo owns the public product surface:
 - reusable Kubernetes bases
 - the `sporevm-k8s` Helm chart
 
-Private infrastructure belongs in an ops repo. Keep cloud accounts, live EKS
-roots, state buckets, private image repositories, queues, and operator runbooks
-out of this repository.
+Private infrastructure belongs in an ops repo. Keep cloud accounts, live
+cluster roots, state backends, private image repositories, queues, and operator
+runbooks out of this repository.
 
 ## Chart
 
@@ -36,12 +36,15 @@ helm upgrade --install sporevm-k8s oci://ghcr.io/sporevm/charts/sporevm-k8s \
 The chart installs long-lived cell pieces only. Per-run coordinator jobs are
 created by `sporectl submit`.
 
+Publishing notes live in [docs/publishing.md](docs/publishing.md).
+
 ## Development
 
 ```bash
 mise run fleet:contracts:test
 mise run fleet:go:test
 mise run fleet:test
+mise run public:leak-scan
 ```
 
 Build the runtime image:

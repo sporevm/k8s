@@ -28,7 +28,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: kvm-smoke
-          image: public.ecr.aws/docker/library/python:3.12-alpine
+          image: docker.io/library/python:3.12-alpine
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true

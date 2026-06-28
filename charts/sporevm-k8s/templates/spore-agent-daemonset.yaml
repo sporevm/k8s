@@ -56,7 +56,9 @@ spec:
             - --work-root={{ .Values.agent.cache.workDir }}
             - --bundle-cache-root={{ .Values.agent.cache.bundleDir }}
             - --rootfs-cache-root={{ .Values.agent.cache.rootfsDir }}
-            - --region=$(AWS_REGION)
+            {{- if .Values.agent.region }}
+            - --region={{ .Values.agent.region }}
+            {{- end }}
             - --backend={{ .Values.agent.backend }}
             {{- if .Values.agent.childTimeout }}
             - --child-timeout={{ .Values.agent.childTimeout }}
@@ -66,8 +68,6 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: AWS_REGION
-              value: {{ .Values.agent.region | quote }}
             - name: SPOREVM_KERNEL_CACHE_DIR
               value: {{ .Values.agent.cache.kernelDir | quote }}
             - name: SPOREVM_BUNDLE_CACHE_DIR
