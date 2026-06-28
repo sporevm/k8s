@@ -31,9 +31,12 @@ git push -u origin main
 Public runtime images should publish to GHCR:
 
 ```bash
-export SPOREVM_K8S_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:sporevm-1.2.0
+export SPOREVM_K8S_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:0.1.0
 mise run runtime:image:push
 ```
+
+Buildkite reads `SPOREVM_K8S_GITHUB_TOKEN` from the hosted cluster secrets and
+publishes runtime images and Helm charts on `v*` tags.
 
 ## Helm Chart
 

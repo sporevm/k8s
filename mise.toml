@@ -16,7 +16,7 @@ run = "go run ./cmd/spore-fleet-benchmark --run examples/fleet/run-1000.json --a
 
 [tasks."runtime:image:build"]
 description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 1.2.0"
-run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:sporevm-1.2.0 ."
+run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:0.1.0 ."
 
 [tasks."runtime:image:push"]
 description = "Build and push the arm64 runtime image to SPOREVM_K8S_RUNTIME_IMAGE"

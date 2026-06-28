@@ -1,0 +1,41 @@
+env:
+  MISE_YES: "1"
+
+steps:
+  - label: ":test_tube: Tests"
+    key: "tests"
+    command: |
+      set -euo pipefail
+      if ! command -v mise >/dev/null 2>&1; then
+        curl https://mise.run | sh
+        export PATH="$HOME/.local/bin:$HOME/.mise/bin:$PATH"
+      fi
+      mise trust -y mise.toml
+      mise run fleet:test
+      mise run public:leak-scan
+
+  - wait
+
+  - label: ":package: Publish"
+    key: "publish"
+    if: build.tag != null
+    secrets:
+      - SPOREVM_K8S_GITHUB_TOKEN
+    command: |
+      set -euo pipefail
+      if ! command -v mise >/dev/null 2>&1; then
+        curl https://mise.run | sh
+        export PATH="$HOME/.local/bin:$HOME/.mise/bin:$PATH"
+      fi
+      mise trust -y mise.toml
+
+      version="${BUILDKITE_TAG#v}"
+      chart_version="$(sed -n 's/^version: //p' charts/sporevm-k8s/Chart.yaml)"
+      test "$version" = "$chart_version"
+
+      echo "$SPOREVM_K8S_GITHUB_TOKEN" | docker login ghcr.io --username sporevm --password-stdin
+      echo "$SPOREVM_K8S_GITHUB_TOKEN" | helm registry login ghcr.io --username sporevm --password-stdin
+
+      export SPOREVM_K8S_RUNTIME_IMAGE="ghcr.io/sporevm/k8s-runtime:${version}"
+      mise run runtime:image:push
+      mise run chart:publish
