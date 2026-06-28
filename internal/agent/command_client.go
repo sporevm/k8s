@@ -266,8 +266,8 @@ func (c CommandClient) runSignalingOnMarker(ctx context.Context, marker string, 
 		stderrErr <- copyErr
 	}()
 
-	waitErr := cmd.Wait()
 	readErr := errors.Join(<-stdoutErr, <-stderrErr)
+	waitErr := cmd.Wait()
 	signalMu.Lock()
 	wasSignaled := signaled
 	err = signalErr
