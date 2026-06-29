@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-06-27
+last_reviewed: 2026-06-29
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -241,9 +241,12 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 
 ## Current State
 
-- The local implementation branch contains the design plan plus the Kubernetes
+- The public repository now contains the design plan plus the Kubernetes
   adapter cell, runtime image, `spore-agent`, `spore-coordinator`,
-  `sporectl submit`, and fleet contract code.
+  `sporectl submit`, schemas, examples, chart, and fleet contract code.
+- The public repository validation path is wired: CI runs `mise run fleet:test`
+  and `mise run public:leak-scan`, and tag builds publish the runtime image and
+  Helm chart to GHCR. No public release tag has been cut yet.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
   access, and finite SporeVM/KVM runs on compatible Kubernetes nodes.
@@ -288,9 +291,9 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   but the lower-level bundle execution still resumes the captured child
   continuation. Explicit child command injection remains follow-up work before
   the contract can run arbitrary per-child commands after resume.
-- The live generic smokes exposed that failed child results can still produce a
-  successful Kubernetes Job unless the coordinator maps aggregate report state
-  to process exit status. That is now part of the CI contract.
+- The coordinator now maps aggregate report state to process exit status, so a
+  failed child result fails the coordinator process instead of producing a
+  successful Kubernetes Job.
 - The useful next gaps are capturing guest output in per-child results, then
   increasing honest live capacity beyond the current one-slot dev agent.
 
@@ -333,7 +336,8 @@ Done when:
 ### Slice 3: Coordinator End-To-End Run
 
 Status: implemented locally and live-proved for single-agent file bundles;
-Rails control and one-child sharded smokes pass, published-bundle handoff
+Rails control and one-child sharded smokes pass. Published-bundle handoff,
+guest output capture, and explicit post-resume child command execution remain
 pending.
 
 Wire `spore-coordinator` so one generic run performs prepare, fork, bundle
@@ -364,6 +368,9 @@ Done when:
 
 ### Slice 5: CI Wrapper
 
+Status: not implemented. The current CI pipeline validates and publishes this
+repository; it does not yet submit a SporeVM fan-out run.
+
 Add the smallest CI-specific submitter behavior on top of the generic
 run.
 
@@ -375,6 +382,9 @@ Done when:
 - the step exits with the aggregate run result.
 
 ### Slice 6: Honest 1,000-Child Scale
+
+Status: partially implemented for synthetic planning only. Live 1,000-child
+capacity is still unproved.
 
 Scale by adding real capacity or reducing verified per-child requirements, not
 by overstating slots.
@@ -419,6 +429,8 @@ Done when:
   against the cluster-local registry image.
 - Live Rails/RSpec sharded generic smoke through `sporectl submit --generic-run`
   against the cluster-local registry image and SporeVM `v1.2.0` runtime.
+- Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
+  and tag-gated GHCR image/chart publishing.
 
 ## Resolved Decisions
 
@@ -433,9 +445,9 @@ Done when:
   publishing the prepared bundle first.
 - Public runtime images publish to GHCR; private environments can override the
   image repository from their ops values.
-- `sporectl`/`spore-coordinator` must treat an aggregate runtime report with
-  `state != succeeded` as a failed run even when the Kubernetes Job container
-  reached the end of its process.
+- `spore-coordinator` treats an aggregate runtime report with
+  `state != succeeded` as a failed run even when the container reached the end
+  of its process.
 - Add CRDs, Kueue, and operator UX later.
 
 ## Deferred Work
