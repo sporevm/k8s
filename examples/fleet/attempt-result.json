@@ -16,5 +16,9 @@
     "resultCommit": 35.9
   },
   "terminal": true,
-  "resultURI": "s3://example-sporevm-results/ruby-counter-20260620/children/742/terminal.json"
+  "resultURI": "s3://example-sporevm-results/ruby-counter-20260620/children/742/terminal.json",
+  "output": {
+    "stdoutBytes": 3,
+    "stdoutPreviewBase64": "b2sK"
+  }
 }

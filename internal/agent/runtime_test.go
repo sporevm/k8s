@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -357,6 +358,51 @@ func TestRunnerRunChildGuestFailureCommitsTerminalResult(t *testing.T) {
 	}
 	if _, ok, err := store.TerminalResult(context.Background(), run, 43); err != nil || !ok {
 		t.Fatalf("terminal ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRunnerRunChildRecordsGuestOutput(t *testing.T) {
+	store := newTestResultStore(t)
+	client := &fakeSporeClient{
+		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
+			return pullResult(req.OutDir, "42"), nil
+		},
+		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
+			return []RunEvent{
+				outputEvent("stdout", "hello\n"),
+				outputEvent("stderr", "warn\n"),
+				exitEvent(0),
+			}, nil
+		},
+	}
+	runner := newConfiguredRunner(t, client, store)
+	run := testRun()
+
+	result, err := runner.RunChild(context.Background(), RunChildRequest{
+		Run:      run,
+		Lease:    testLease(run),
+		ChildID:  42,
+		Attempt:  1,
+		Pressure: normalPressure(),
+	})
+	if err != nil {
+		t.Fatalf("RunChild: %v", err)
+	}
+	if result.Output == nil {
+		t.Fatal("result output is nil")
+	}
+	if result.Output.StdoutBytes != 6 || result.Output.StderrBytes != 5 {
+		t.Fatalf("output bytes = %+v", result.Output)
+	}
+	if result.Output.StdoutPreviewBase64 != base64.StdEncoding.EncodeToString([]byte("hello\n")) {
+		t.Fatalf("stdout preview = %q", result.Output.StdoutPreviewBase64)
+	}
+	terminal, ok, err := store.TerminalResult(context.Background(), run, 42)
+	if err != nil || !ok {
+		t.Fatalf("TerminalResult ok=%v err=%v", ok, err)
+	}
+	if terminal.Output == nil || terminal.Output.StderrPreviewBase64 != base64.StdEncoding.EncodeToString([]byte("warn\n")) {
+		t.Fatalf("terminal output = %+v", terminal.Output)
 	}
 }
 
@@ -1021,6 +1067,19 @@ func exitEvent(code int) RunEvent {
 		Timings: &RunEventTimings{
 			ExecResponseMS: uint64(10 + code),
 		},
+	}
+}
+
+func outputEvent(event string, data string) RunEvent {
+	backend := "kvm"
+	return RunEvent{
+		Schema:        runEventsSchema,
+		SchemaVersion: schemaVersion,
+		Event:         event,
+		Command:       "resume",
+		Backend:       &backend,
+		ByteCount:     len(data),
+		DataBase64:    base64.StdEncoding.EncodeToString([]byte(data)),
 	}
 }
 

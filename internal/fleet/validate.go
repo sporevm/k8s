@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -386,6 +387,11 @@ func (r AttemptResult) Validate(run Run) error {
 			return err
 		}
 	}
+	if r.Output != nil {
+		if err := r.Output.Validate("attemptResult.output"); err != nil {
+			return err
+		}
+	}
 	if (r.Status == AttemptSucceeded || r.Status == AttemptSkippedTerminalExists) && !r.Terminal {
 		return contractError("attemptResult.status requires terminal=true")
 	}
@@ -393,6 +399,43 @@ func (r AttemptResult) Validate(run Run) error {
 		if r.Error == nil || r.Error.Code == "" || r.Error.Message == "" {
 			return contractError("attemptResult.error requires code and message")
 		}
+	}
+	return nil
+}
+
+// Validate checks output summary fields.
+func (o AttemptOutput) Validate(path string) error {
+	if o.StdoutBytes < 0 {
+		return contractError("%s.stdoutBytes must be >= 0", path)
+	}
+	if o.StderrBytes < 0 {
+		return contractError("%s.stderrBytes must be >= 0", path)
+	}
+	if o.StdoutPreviewBase64 == "" && o.StdoutTruncated {
+		return contractError("%s.stdoutTruncated requires stdoutPreviewBase64", path)
+	}
+	if o.StderrPreviewBase64 == "" && o.StderrTruncated {
+		return contractError("%s.stderrTruncated requires stderrPreviewBase64", path)
+	}
+	if err := validateBase64Preview(o.StdoutPreviewBase64, o.StdoutBytes, path+".stdoutPreviewBase64"); err != nil {
+		return err
+	}
+	if err := validateBase64Preview(o.StderrPreviewBase64, o.StderrBytes, path+".stderrPreviewBase64"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBase64Preview(value string, totalBytes int64, path string) error {
+	if value == "" {
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return contractError("%s must be base64", path)
+	}
+	if int64(len(data)) > totalBytes {
+		return contractError("%s must not exceed total output bytes", path)
 	}
 	return nil
 }

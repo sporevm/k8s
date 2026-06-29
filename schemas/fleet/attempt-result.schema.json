@@ -99,6 +99,34 @@
       "type": "string",
       "pattern": "^s3://[^/]+/.+\\.json$"
     },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stdoutBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stderrBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stdoutPreviewBase64": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "stderrPreviewBase64": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "stdoutTruncated": {
+          "type": "boolean"
+        },
+        "stderrTruncated": {
+          "type": "boolean"
+        }
+      }
+    },
     "error": {
       "type": "object",
       "additionalProperties": false,

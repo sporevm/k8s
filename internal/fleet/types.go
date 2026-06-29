@@ -215,6 +215,16 @@ type AttemptError struct {
 	Message string `json:"message"`
 }
 
+// AttemptOutput records a bounded inline preview plus complete output byte counts.
+type AttemptOutput struct {
+	StdoutBytes         int64  `json:"stdoutBytes,omitempty"`
+	StderrBytes         int64  `json:"stderrBytes,omitempty"`
+	StdoutPreviewBase64 string `json:"stdoutPreviewBase64,omitempty"`
+	StderrPreviewBase64 string `json:"stderrPreviewBase64,omitempty"`
+	StdoutTruncated     bool   `json:"stdoutTruncated,omitempty"`
+	StderrTruncated     bool   `json:"stderrTruncated,omitempty"`
+}
+
 // AttemptResult is the per-child result document stored outside the coordinator.
 type AttemptResult struct {
 	RunID        string         `json:"runID"`
@@ -229,6 +239,7 @@ type AttemptResult struct {
 	TimingsMS    AttemptTimings `json:"timingsMs"`
 	Terminal     bool           `json:"terminal"`
 	ResultURI    string         `json:"resultURI,omitempty"`
+	Output       *AttemptOutput `json:"output,omitempty"`
 	Error        *AttemptError  `json:"error,omitempty"`
 }
 

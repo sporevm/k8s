@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 from pathlib import Path
@@ -460,6 +461,9 @@ def validate_attempt_result(result: Any, lease: dict[str, Any] | None = None) ->
     for key in TIMING_FIELDS:
         require_number(timings[key], f"attemptResult.timingsMs.{key}", 0.0)
 
+    if "output" in result:
+        validate_attempt_output(result["output"])
+
     if lease is not None:
         validate_shard_lease(lease)
         if result["runID"] != lease["runID"]:
@@ -473,6 +477,49 @@ def validate_attempt_result(result: Any, lease: dict[str, Any] | None = None) ->
         start, end = child_range(lease, "childStart", "childCount")
         if child_id < start or child_id >= end:
             raise ContractError("attemptResult.childID is outside the shard lease")
+
+
+def validate_attempt_output(output: Any) -> None:
+    output = require_object(output, "attemptResult.output")
+    allowed = {
+        "stdoutBytes",
+        "stderrBytes",
+        "stdoutPreviewBase64",
+        "stderrPreviewBase64",
+        "stdoutTruncated",
+        "stderrTruncated",
+    }
+    for key in output:
+        if key not in allowed:
+            raise ContractError(f"attemptResult.output has unknown field {key}")
+    stdout_bytes = require_int(output.get("stdoutBytes", 0), "attemptResult.output.stdoutBytes", 0)
+    stderr_bytes = require_int(output.get("stderrBytes", 0), "attemptResult.output.stderrBytes", 0)
+    validate_output_preview(
+        output.get("stdoutPreviewBase64", ""),
+        stdout_bytes,
+        "attemptResult.output.stdoutPreviewBase64",
+    )
+    validate_output_preview(
+        output.get("stderrPreviewBase64", ""),
+        stderr_bytes,
+        "attemptResult.output.stderrPreviewBase64",
+    )
+    for key in ("stdoutTruncated", "stderrTruncated"):
+        if key in output and not isinstance(output[key], bool):
+            raise ContractError(f"attemptResult.output.{key} must be boolean")
+
+
+def validate_output_preview(value: Any, total_bytes: int, path: str) -> None:
+    if value == "":
+        return
+    if not isinstance(value, str):
+        raise ContractError(f"{path} must be base64")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except ValueError as err:
+        raise ContractError(f"{path} must be base64") from err
+    if len(decoded) > total_bytes:
+        raise ContractError(f"{path} must not exceed total output bytes")
 
 
 def validate_benchmark_summary(summary: Any, run: dict[str, Any] | None = None) -> None:

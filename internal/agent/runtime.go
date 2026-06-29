@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/sporevm/k8s/internal/fleet"
 )
+
+// ponytail: inline previews keep terminal results useful; move to log object URIs when output size matters.
+const attemptOutputPreviewLimit = 16 * 1024
 
 var (
 	// ErrOversubscribed means the agent cannot reserve the requested slots.
@@ -574,6 +578,11 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	if terminal.Timings != nil {
 		result.TimingsMS.GuestReady = float64(terminal.Timings.ExecResponseMS)
 	}
+	output, outputErr := attemptOutputFromEvents(events)
+	if outputErr != nil {
+		return r.failAttemptFromError(ctx, req.Run, result, outputErr, false)
+	}
+	result.Output = output
 
 	commitTerminal := false
 	switch terminal.Event {
@@ -778,6 +787,59 @@ func elapsedMS(start, end time.Time) float64 {
 		return 0
 	}
 	return float64(end.Sub(start).Microseconds()) / 1000
+}
+
+func attemptOutputFromEvents(events []RunEvent) (*fleet.AttemptOutput, error) {
+	var output fleet.AttemptOutput
+	var stdoutPreview []byte
+	var stderrPreview []byte
+	for _, event := range events {
+		stream := event.Event
+		if stream == "output" {
+			stream = "stdout"
+		}
+		if stream != "stdout" && stream != "stderr" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(event.DataBase64)
+		if err != nil {
+			return nil, invalidMachineOutput("%s event has invalid data_base64", event.Event)
+		}
+		if event.ByteCount != 0 && event.ByteCount != len(data) {
+			return nil, invalidMachineOutput("%s event byte_count = %d, decoded %d", event.Event, event.ByteCount, len(data))
+		}
+		switch stream {
+		case "stdout":
+			output.StdoutBytes += int64(len(data))
+			stdoutPreview = appendOutputPreview(stdoutPreview, data)
+		case "stderr":
+			output.StderrBytes += int64(len(data))
+			stderrPreview = appendOutputPreview(stderrPreview, data)
+		}
+	}
+	if output.StdoutBytes == 0 && output.StderrBytes == 0 {
+		return nil, nil
+	}
+	if len(stdoutPreview) > 0 {
+		output.StdoutPreviewBase64 = base64.StdEncoding.EncodeToString(stdoutPreview)
+		output.StdoutTruncated = output.StdoutBytes > int64(len(stdoutPreview))
+	}
+	if len(stderrPreview) > 0 {
+		output.StderrPreviewBase64 = base64.StdEncoding.EncodeToString(stderrPreview)
+		output.StderrTruncated = output.StderrBytes > int64(len(stderrPreview))
+	}
+	return &output, nil
+}
+
+func appendOutputPreview(preview []byte, data []byte) []byte {
+	if len(preview) >= attemptOutputPreviewLimit {
+		return preview
+	}
+	remaining := attemptOutputPreviewLimit - len(preview)
+	if len(data) > remaining {
+		data = data[:remaining]
+	}
+	return append(preview, data...)
 }
 
 func attemptError(err error) *fleet.AttemptError {
