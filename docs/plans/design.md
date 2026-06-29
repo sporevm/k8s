@@ -126,9 +126,10 @@ work. The higher-level run is the normal user and CI entrypoint.
 
 ### Fleet Components
 
-`sporectl` is the user-facing submitter. It should support a generic run first,
-then add a thin CI wrapper that fills in build metadata, result paths,
-annotations, and exit-code behavior.
+`sporectl` is the user-facing submitter. CI should use the same generic submit
+path as every other caller: render or provide a generic run document, then call
+`sporectl submit --generic-run`. A separate CI subcommand can wait until the
+same CI-only defaults are repeated enough to justify it.
 
 `spore-coordinator` owns one run. It validates the run, chooses compatible
 agents, prepares or references the bundle, leases child ranges, tracks compact
@@ -174,14 +175,11 @@ itself:
 steps:
   - label: ":spore: RSpec fan-out"
     command: |
-      sporectl ci submit \
-        --image "$IMAGE_REF" \
-        --prepare "/bin/bash /usr/local/bin/sporevm-rails-coordinator --capture-delay 2" \
-        --children 1000 \
-        --result-store "s3://example-sporevm-results/$CI_RUN_ID/"
+      ./scripts/render-sporevm-run > sporevm-run.json
+      sporectl submit --generic-run sporevm-run.json
 ```
 
-The CI wrapper should:
+The CI step should:
 
 - derive `runID` from CI pipeline, run, job, and commit metadata;
 - use a deterministic result-store prefix;
@@ -369,13 +367,13 @@ Done when:
 - the same generic run completes in a compatible Kubernetes cell;
 - no per-child Kubernetes objects are created.
 
-### Slice 5: CI Wrapper
+### Slice 5: CI Submit Profile
 
 Status: not implemented. The current CI pipeline validates and publishes this
-repository; it does not yet submit a SporeVM fan-out run.
+repository; it does not yet submit a SporeVM fan-out run. The intended CLI path
+is still `sporectl submit --generic-run`, not a separate `sporectl ci` command.
 
-Add the smallest CI-specific submitter behavior on top of the generic
-run.
+Add the smallest CI-specific submit behavior on top of the generic run.
 
 Done when:
 
@@ -451,6 +449,9 @@ Done when:
 - `spore-coordinator` treats an aggregate runtime report with
   `state != succeeded` as a failed run even when the container reached the end
   of its process.
+- Do not add `sporectl ci` yet. CI uses `sporectl submit --generic-run`; helper
+  scripts or flags can render CI metadata until a separate subcommand earns its
+  keep.
 - Add CRDs, Kueue, and operator UX later.
 
 ## Deferred Work
