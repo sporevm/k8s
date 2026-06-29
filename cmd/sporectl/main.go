@@ -25,11 +25,11 @@ const (
 	defaultRunMountPath        = "/etc/sporevm/run/run.json"
 	defaultGenericRunMountPath = "/etc/sporevm/run/generic-run.json"
 	defaultRuntimePolicy       = "Always"
+	submitUsage                = "usage: sporectl submit [flags] RUN.json"
 )
 
 type submitOptions struct {
-	RunPath         string
-	GenericRunPath  string
+	InputPath       string
 	Namespace       string
 	Image           string
 	ImagePullPolicy string
@@ -67,13 +67,13 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: sporectl submit (--run run.json | --generic-run run.json) [flags]")
+		return errors.New(submitUsage)
 	}
 	switch args[0] {
 	case "submit":
 		return runSubmit(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
-		fmt.Fprintln(stdout, "usage: sporectl submit (--run run.json | --generic-run run.json) [flags]")
+		fmt.Fprintln(stdout, submitUsage)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -94,8 +94,10 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 
 	fs := flag.NewFlagSet("submit", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&opts.RunPath, "run", "", "fleet run JSON path")
-	fs.StringVar(&opts.GenericRunPath, "generic-run", "", "generic fleet run JSON path")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), submitUsage)
+		fs.PrintDefaults()
+	}
 	fs.StringVar(&opts.Namespace, "namespace", opts.Namespace, "Kubernetes namespace")
 	fs.StringVar(&opts.Image, "image", opts.Image, "coordinator image")
 	fs.StringVar(&opts.ImagePullPolicy, "image-pull-policy", opts.ImagePullPolicy, "coordinator image pull policy")
@@ -113,8 +115,13 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 		}
 		return err
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	switch fs.NArg() {
+	case 0:
+		return errors.New("run JSON path is required")
+	case 1:
+		opts.InputPath = fs.Arg(0)
+	default:
+		return fmt.Errorf("unexpected argument %q", fs.Arg(1))
 	}
 	if envURLs := os.Getenv("SPORE_AGENT_URLS"); envURLs != "" {
 		if err := opts.AgentURLs.Set(envURLs); err != nil {
@@ -168,35 +175,77 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 }
 
 func buildSubmitResourcesFromOptions(opts submitOptions) (resourceList, resourceNames, string, error) {
-	if opts.RunPath == "" && opts.GenericRunPath == "" {
-		return resourceList{}, resourceNames{}, "", errors.New("one of --run or --generic-run is required")
+	if opts.InputPath == "" {
+		return resourceList{}, resourceNames{}, "", errors.New("run JSON path is required")
 	}
-	if opts.RunPath != "" && opts.GenericRunPath != "" {
-		return resourceList{}, resourceNames{}, "", errors.New("only one of --run or --generic-run may be set")
+	runBytes, err := os.ReadFile(opts.InputPath)
+	if err != nil {
+		return resourceList{}, resourceNames{}, "", fmt.Errorf("read run: %w", err)
 	}
-	if opts.RunPath != "" {
-		runBytes, err := os.ReadFile(opts.RunPath)
-		if err != nil {
-			return resourceList{}, resourceNames{}, "", fmt.Errorf("read run: %w", err)
-		}
+	kind, err := detectSubmitRunKind(runBytes)
+	if err != nil {
+		return resourceList{}, resourceNames{}, "", err
+	}
+
+	switch kind {
+	case submitRunKindBundle:
 		run, err := fleet.DecodeRun(bytes.NewReader(runBytes))
 		if err != nil {
 			return resourceList{}, resourceNames{}, "", err
 		}
 		resources, names, err := buildSubmitResources(run, runBytes, opts)
 		return resources, names, run.RunID, err
+	case submitRunKindGeneric:
+		run, err := fleet.DecodeGenericRun(bytes.NewReader(runBytes))
+		if err != nil {
+			return resourceList{}, resourceNames{}, "", err
+		}
+		resources, names, err := buildGenericSubmitResources(run, runBytes, opts)
+		return resources, names, run.RunID, err
+	default:
+		return resourceList{}, resourceNames{}, "", fmt.Errorf("unsupported run document kind %q", kind)
+	}
+}
+
+type submitRunKind string
+
+const (
+	submitRunKindBundle  submitRunKind = "bundle"
+	submitRunKindGeneric submitRunKind = "generic"
+)
+
+func detectSubmitRunKind(data []byte) (submitRunKind, error) {
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&fields); err != nil {
+		return "", fmt.Errorf("%w: decode run input: %v", fleet.ErrInvalidContract, err)
+	}
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return "", fmt.Errorf("%w: run input must contain exactly one JSON document", fleet.ErrInvalidContract)
+		}
+		return "", fmt.Errorf("%w: decode trailing run input data: %v", fleet.ErrInvalidContract, err)
 	}
 
-	runBytes, err := os.ReadFile(opts.GenericRunPath)
-	if err != nil {
-		return resourceList{}, resourceNames{}, "", fmt.Errorf("read generic run: %w", err)
+	_, hasBundle := fields["bundle"]
+	_, hasHostClass := fields["hostClass"]
+	_, hasSource := fields["source"]
+	_, hasPrepare := fields["prepare"]
+	_, hasFork := fields["fork"]
+
+	hasBundleRunFields := hasBundle || hasHostClass
+	hasGenericRunFields := hasSource || hasPrepare || hasFork
+	if hasBundleRunFields && hasGenericRunFields {
+		return "", fmt.Errorf("%w: run input mixes bundle run fields with generic run fields", fleet.ErrInvalidContract)
 	}
-	run, err := fleet.DecodeGenericRun(bytes.NewReader(runBytes))
-	if err != nil {
-		return resourceList{}, resourceNames{}, "", err
+	if hasGenericRunFields {
+		return submitRunKindGeneric, nil
 	}
-	resources, names, err := buildGenericSubmitResources(run, runBytes, opts)
-	return resources, names, run.RunID, err
+	if hasBundleRunFields {
+		return submitRunKindBundle, nil
+	}
+	return "", fmt.Errorf("%w: run input must include either generic run fields (source, prepare, fork) or bundle run fields (bundle, hostClass)", fleet.ErrInvalidContract)
 }
 
 type resourceNames struct {

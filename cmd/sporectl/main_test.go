@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +97,102 @@ func TestBuildGenericSubmitResourcesUsesGenericRunArg(t *testing.T) {
 	}
 }
 
+func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
+	runBytes := mustJSON(t, testRun("ruby-counter-20260620"))
+	resources, _, runID, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
+	if err != nil {
+		t.Fatalf("build submit resources: %v", err)
+	}
+	if runID != "ruby-counter-20260620" {
+		t.Fatalf("runID = %q", runID)
+	}
+
+	configMap := resources.Items[0].(configMap)
+	if got := configMap.Data["run.json"]; got != string(runBytes) {
+		t.Fatalf("bundle run configmap data = %q", got)
+	}
+	payload, err := json.Marshal(resources)
+	if err != nil {
+		t.Fatalf("marshal resources: %v", err)
+	}
+	body := string(payload)
+	if !strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
+		t.Fatalf("bundle resource JSON missing coordinator run arg:\n%s", body)
+	}
+}
+
+func TestBuildSubmitResourcesFromOptionsInfersGenericRun(t *testing.T) {
+	runBytes := mustJSON(t, testGenericRun("rails-rspec-20260624"))
+	resources, _, runID, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
+	if err != nil {
+		t.Fatalf("build submit resources: %v", err)
+	}
+	if runID != "rails-rspec-20260624" {
+		t.Fatalf("runID = %q", runID)
+	}
+
+	configMap := resources.Items[0].(configMap)
+	if got := configMap.Data["generic-run.json"]; got != string(runBytes) {
+		t.Fatalf("generic run configmap data = %q", got)
+	}
+	payload, err := json.Marshal(resources)
+	if err != nil {
+		t.Fatalf("marshal resources: %v", err)
+	}
+	body := string(payload)
+	if !strings.Contains(body, `--generic-run=/etc/sporevm/run/generic-run.json`) {
+		t.Fatalf("generic resource JSON missing coordinator generic-run arg:\n%s", body)
+	}
+	if strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
+		t.Fatalf("generic resource JSON included bundle run arg:\n%s", body)
+	}
+}
+
+func TestDetectSubmitRunKindRejectsAmbiguousOrUnknownRunShape(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "mixed",
+			body: `{"runID":"mixed","bundle":{},"source":{}}`,
+			want: "mixes bundle run fields with generic run fields",
+		},
+		{
+			name: "unknown",
+			body: `{"runID":"unknown"}`,
+			want: "must include either generic run fields",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := detectSubmitRunKind([]byte(tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSubmitDryRunReadsPositionalRunFile(t *testing.T) {
+	path := writeRunFile(t, mustJSON(t, testGenericRun("rails-rspec-20260624")))
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"submit", "--dry-run", path}, &stdout, &stderr); err != nil {
+		t.Fatalf("dry-run submit: %v\nstderr=%s", err, stderr.String())
+	}
+
+	body := stdout.String()
+	for _, want := range []string{
+		`"kind": "List"`,
+		`"generic-run.json"`,
+		`"--generic-run=/etc/sporevm/run/generic-run.json"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dry-run output missing %s:\n%s", want, body)
+		}
+	}
+}
+
 func TestKubernetesNameIsDNSLabelSized(t *testing.T) {
 	name := kubernetesName("spore-coordinator", "UPPER.long_name.with.dots.and.enough.characters.to.force.truncation.20260620")
 	if len(name) > 63 {
@@ -144,12 +242,12 @@ func TestSubmitHelpExitsZero(t *testing.T) {
 	if err := run([]string{"submit", "--help"}, &stdout, &stderr); err != nil {
 		t.Fatalf("help returned error: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "Usage of submit:") {
+	if !strings.Contains(stderr.String(), "usage: sporectl submit [flags] RUN.json") {
 		t.Fatalf("help did not print flag usage: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
-func TestSubmitRequiresExactlyOneRunInput(t *testing.T) {
+func TestSubmitRequiresOneRunInput(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -158,12 +256,12 @@ func TestSubmitRequiresExactlyOneRunInput(t *testing.T) {
 		{
 			name: "missing",
 			args: []string{"submit", "--dry-run"},
-			want: "one of --run or --generic-run is required",
+			want: "run JSON path is required",
 		},
 		{
-			name: "both",
-			args: []string{"submit", "--run", "run.json", "--generic-run", "generic-run.json", "--dry-run"},
-			want: "only one of --run or --generic-run may be set",
+			name: "extra",
+			args: []string{"submit", "--dry-run", "run.json", "other.json"},
+			want: `unexpected argument "other.json"`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,6 +272,40 @@ func TestSubmitRequiresExactlyOneRunInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal JSON: %v", err)
+	}
+	return data
+}
+
+func testSubmitOptions(t *testing.T, runBytes []byte) submitOptions {
+	t.Helper()
+
+	return submitOptions{
+		InputPath:       writeRunFile(t, runBytes),
+		Namespace:       "sporevm-system",
+		Image:           "example.com/sporevm-k8s-runtime:dev",
+		ImagePullPolicy: "Always",
+		AgentURLs:       stringsFlag{"http://spore-agent.sporevm-system.svc.cluster.local:8080"},
+		ResultStoreRoot: "/var/lib/sporevm/coordinator-results",
+		Timeout:         30 * time.Minute,
+	}
+}
+
+func writeRunFile(t *testing.T, runBytes []byte) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "run.json")
+	if err := os.WriteFile(path, runBytes, 0o600); err != nil {
+		t.Fatalf("write run JSON: %v", err)
+	}
+	return path
 }
 
 func testRun(id string) fleet.Run {

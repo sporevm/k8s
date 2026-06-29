@@ -128,8 +128,10 @@ work. The higher-level run is the normal user and CI entrypoint.
 
 `sporectl` is the user-facing submitter. CI should use the same generic submit
 path as every other caller: render or provide a generic run document, then call
-`sporectl submit --generic-run`. A separate CI subcommand can wait until the
-same CI-only defaults are repeated enough to justify it.
+`sporectl submit RUN.json`. The submitter infers whether the document is a
+generic source/prepare/fork run or a lower-level prebuilt bundle run. A
+separate CI subcommand can wait until the same CI-only defaults are repeated
+enough to justify it.
 
 `spore-coordinator` owns one run. It validates the run, chooses compatible
 agents, prepares or references the bundle, leases child ranges, tracks compact
@@ -176,7 +178,7 @@ steps:
   - label: ":spore: RSpec fan-out"
     command: |
       ./scripts/render-sporevm-run > sporevm-run.json
-      sporectl submit --generic-run sporevm-run.json
+      sporectl submit sporevm-run.json
 ```
 
 The CI step should:
@@ -260,13 +262,14 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   can prepare a generic run on one agent, compile it to a bundle run, and execute
   the shards on that same agent while the bundle remains a local `file://`
   artifact.
-- `sporectl submit --generic-run` can render the Kubernetes ConfigMap and
-  one-shot coordinator Job for a generic run. The Job passes the generic run
-  contract through to `spore-coordinator --generic-run`.
+- `sporectl submit RUN.json` can render the Kubernetes ConfigMap and one-shot
+  coordinator Job for either a generic run or a prebuilt bundle run. The
+  submitter infers the run shape and passes generic contracts through to
+  `spore-coordinator --generic-run`.
 - A one-child public busybox generic run now completes in the Kubernetes adapter
-  cell through `sporectl submit --generic-run`, `spore-coordinator`, private
-  ClusterIP agent access, agent-side prepare/fork/pack, local file-bundle
-  handoff, shard execution, and create-only terminal result commit.
+  cell through `sporectl submit`, `spore-coordinator`, private ClusterIP agent
+  access, agent-side prepare/fork/pack, local file-bundle handoff, shard
+  execution, and create-only terminal result commit.
 - The dev cell now has a checked-in cluster-local OCI registry component for
   app-level images. It is a private ClusterIP `registry:2` deployment with
   persistent storage and a cluster-local TLS certificate; CI can push through
@@ -362,7 +365,7 @@ run.
 Done when:
 
 - `sporectl submit` creates the run ConfigMap and coordinator Job for either a
-  prebuilt bundle run or a generic run;
+  prebuilt bundle run or a generic run from one positional run document;
 - the coordinator talks to agents through private cluster networking;
 - the same generic run completes in a compatible Kubernetes cell;
 - no per-child Kubernetes objects are created.
@@ -371,7 +374,7 @@ Done when:
 
 Status: not implemented. The current CI pipeline validates and publishes this
 repository; it does not yet submit a SporeVM fan-out run. The intended CLI path
-is still `sporectl submit --generic-run`, not a separate `sporectl ci` command.
+is `sporectl submit sporevm-run.json`, not a separate `sporectl ci` command.
 
 Add the smallest CI-specific submit behavior on top of the generic run.
 
@@ -426,10 +429,10 @@ Done when:
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
   push it into `spore-registry.sporevm-system.svc.cluster.local:5000`, and
   resolve it from `spore-agent` with `spore rootfs resolve`.
-- Live Rails/RSpec generic control smoke through `sporectl submit --generic-run`
-  against the cluster-local registry image.
-- Live Rails/RSpec sharded generic smoke through `sporectl submit --generic-run`
-  against the cluster-local registry image and SporeVM `v1.2.0` runtime.
+- Live Rails/RSpec generic control smoke through `sporectl submit` against the
+  cluster-local registry image.
+- Live Rails/RSpec sharded generic smoke through `sporectl submit` against the
+  cluster-local registry image and SporeVM `v1.2.0` runtime.
 - Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
   and tag-gated GHCR image/chart publishing.
 
@@ -449,7 +452,7 @@ Done when:
 - `spore-coordinator` treats an aggregate runtime report with
   `state != succeeded` as a failed run even when the container reached the end
   of its process.
-- Do not add `sporectl ci` yet. CI uses `sporectl submit --generic-run`; helper
+- Do not add `sporectl ci` yet. CI uses `sporectl submit RUN.json`; helper
   scripts or flags can render CI metadata until a separate subcommand earns its
   keep.
 - Add CRDs, Kueue, and operator UX later.
