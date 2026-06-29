@@ -291,11 +291,13 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   but the lower-level bundle execution still resumes the captured child
   continuation. Explicit child command injection remains follow-up work before
   the contract can run arbitrary per-child commands after resume.
+- Per-child terminal results now include bounded stdout/stderr previews and
+  complete output byte counts from SporeVM JSONL output events.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- The useful next gaps are capturing guest output in per-child results, then
-  increasing honest live capacity beyond the current one-slot dev agent.
+- The useful next gaps are explicit child command injection, then increasing
+  honest live capacity beyond the current one-slot dev agent.
 
 ## Delivery Strategy
 
@@ -337,8 +339,9 @@ Done when:
 
 Status: implemented locally and live-proved for single-agent file bundles;
 Rails control and one-child sharded smokes pass. Published-bundle handoff,
-guest output capture, and explicit post-resume child command execution remain
-pending.
+and explicit post-resume child command execution remain pending. Per-child
+terminal results now capture bounded guest output previews and total output
+byte counts.
 
 Wire `spore-coordinator` so one generic run performs prepare, fork, bundle
 publication or local file-bundle handoff, shard execution, and aggregate
@@ -484,6 +487,6 @@ Done when:
 - Rails/RSpec proves that plain child `spore resume` is not equivalent to
   `spore fanout`: sharded workloads need stable `/run/sporevm/env` or
   `/run/sporevm/generation.json` identity on every resumed child.
-- The next useful implementation work is capturing guest output in per-child
-  results and scaling honest live capacity beyond the current one-slot dev
-  agent. CRDs and Kueue can wait.
+- The next useful implementation work is deciding the child command execution
+  path and scaling honest live capacity beyond the current one-slot dev agent.
+  CRDs and Kueue can wait.
