@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-06-29
+last_reviewed: 2026-07-02
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -119,10 +119,13 @@ bundle:
 children:
   start: 0
   count: 1000
+childCommand:
+  - /usr/local/bin/sporevm-rspec-shard
 ```
 
 The lower-level bundle run remains useful for prebuilt bundles and benchmark
-work. The higher-level run is the normal user and CI entrypoint.
+work. The higher-level run is the normal user and CI entrypoint; its
+`children.command` compiles to the lower-level `childCommand`.
 
 ### Fleet Components
 
@@ -282,23 +285,24 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - SporeVM now exposes single-child resume identity with
   `spore resume --generation FILE`; the adapter writes one generation JSON per
   child and passes that file when resuming materialized children.
-- The runtime image is pinned to SporeVM `v1.2.0`, whose Linux arm64 release
-  archive includes `spore resume --generation`.
+- The runtime image is pinned to SporeVM `v1.3.0`, whose Linux arm64 release
+  archive includes `spore resume --generation`, named resume, `spore exec`, and
+  `spore rm`.
 - The real Rails/RSpec sharded smoke now succeeds in Kubernetes for one child
   without the unsharded fallback. The run prepared/forked/packed in 23.5s,
   completed its shard in 36.8s, and wrote a succeeded terminal result with
   artifact pull 13.5s, resume 23.3s, and guest-ready 2.5s.
-- The current generic path preserves `children.command` in the public contract,
-  but the lower-level bundle execution still resumes the captured child
-  continuation. Explicit child command injection remains follow-up work before
-  the contract can run arbitrary per-child commands after resume.
+- The generic path now preserves `children.command` as the lower-level
+  `childCommand`, and the agent executes it through a named child resume plus
+  `spore exec` when present. A live Kubernetes smoke for this command-injection
+  path is still pending.
 - Per-child terminal results now include bounded stdout/stderr previews and
   complete output byte counts from SporeVM JSONL output events.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- The useful next gaps are explicit child command injection, then increasing
-  honest live capacity beyond the current one-slot dev agent.
+- The useful next gaps are a live child-command smoke, then increasing honest
+  live capacity beyond the current one-slot dev agent.
 
 ## Delivery Strategy
 
@@ -339,10 +343,11 @@ Done when:
 ### Slice 3: Coordinator End-To-End Run
 
 Status: implemented locally and live-proved for single-agent file bundles;
-Rails control and one-child sharded smokes pass. Published-bundle handoff,
-and explicit post-resume child command execution remain pending. Per-child
-terminal results now capture bounded guest output previews and total output
-byte counts.
+Rails control and one-child sharded smokes pass. Explicit post-resume child
+command execution is implemented locally through named resume plus `spore exec`.
+Published-bundle handoff and a live Kubernetes smoke for child-command execution
+remain pending. Per-child terminal results now capture bounded guest output
+previews and total output byte counts.
 
 Wire `spore-coordinator` so one generic run performs prepare, fork, bundle
 publication or local file-bundle handoff, shard execution, and aggregate
@@ -432,7 +437,7 @@ Done when:
 - Live Rails/RSpec generic control smoke through `sporectl submit` against the
   cluster-local registry image.
 - Live Rails/RSpec sharded generic smoke through `sporectl submit` against the
-  cluster-local registry image and SporeVM `v1.2.0` runtime.
+  cluster-local registry image and SporeVM `v1.3.0` runtime.
 - Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
   and tag-gated GHCR image/chart publishing.
 

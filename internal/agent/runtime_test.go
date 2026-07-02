@@ -406,6 +406,105 @@ func TestRunnerRunChildRecordsGuestOutput(t *testing.T) {
 	}
 }
 
+func TestRunnerRunChildExecutesChildCommand(t *testing.T) {
+	store := newTestResultStore(t)
+	client := &fakeSporeClient{
+		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
+			return pullResult(req.OutDir, "42"), nil
+		},
+		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
+			if req.Name == "" {
+				t.Fatal("resume name is empty")
+			}
+			if req.GenerationPath == "" {
+				t.Fatal("resume generation path is empty")
+			}
+			return []RunEvent{exitEvent(0)}, nil
+		},
+		execFunc: func(_ context.Context, req ExecRequest) ([]RunEvent, error) {
+			if req.Name == "" {
+				t.Fatal("exec name is empty")
+			}
+			return []RunEvent{
+				outputEvent("stdout", "ok\n"),
+				exitEvent(0),
+			}, nil
+		},
+	}
+	runner := newConfiguredRunner(t, client, store)
+	run := testRun()
+	run.ChildCommand = []string{"/usr/local/bin/sporevm-rspec-shard", "--seed", "1"}
+
+	result, err := runner.RunChild(context.Background(), RunChildRequest{
+		Run:      run,
+		Lease:    testLease(run),
+		ChildID:  42,
+		Attempt:  1,
+		Pressure: normalPressure(),
+	})
+	if err != nil {
+		t.Fatalf("RunChild: %v", err)
+	}
+	if result.Status != fleet.AttemptSucceeded || !result.Terminal {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Output == nil || result.Output.StdoutBytes != 3 {
+		t.Fatalf("output = %+v", result.Output)
+	}
+
+	resumes := client.resumeRequests()
+	execs := client.execRequests()
+	removes := client.removeRequests()
+	if len(resumes) != 1 || len(execs) != 1 || len(removes) != 1 {
+		t.Fatalf("resumes=%+v execs=%+v removes=%+v", resumes, execs, removes)
+	}
+	if resumes[0].Name == "" || execs[0].Name != resumes[0].Name || removes[0].Name != resumes[0].Name {
+		t.Fatalf("names resumes=%+v execs=%+v removes=%+v", resumes, execs, removes)
+	}
+	if !equalStrings(execs[0].Command, run.ChildCommand) {
+		t.Fatalf("exec command = %+v, want %+v", execs[0].Command, run.ChildCommand)
+	}
+}
+
+func TestRunnerRunChildChildCommandResumeExitFailsBeforeExec(t *testing.T) {
+	store := newTestResultStore(t)
+	client := &fakeSporeClient{
+		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
+			return pullResult(req.OutDir, "42"), nil
+		},
+		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
+			return []RunEvent{exitEvent(7)}, nil
+		},
+		execFunc: func(context.Context, ExecRequest) ([]RunEvent, error) {
+			t.Fatal("exec called after failed named resume")
+			return nil, nil
+		},
+	}
+	runner := newConfiguredRunner(t, client, store)
+	run := testRun()
+	run.ChildCommand = []string{"/usr/local/bin/sporevm-rspec-shard"}
+
+	result, err := runner.RunChild(context.Background(), RunChildRequest{
+		Run:      run,
+		Lease:    testLease(run),
+		ChildID:  42,
+		Attempt:  1,
+		Pressure: normalPressure(),
+	})
+	if err == nil {
+		t.Fatal("RunChild succeeded")
+	}
+	if result.Status != fleet.AttemptFailed || result.Terminal {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(client.execRequests()) != 0 || len(client.removeRequests()) != 1 {
+		t.Fatalf("execs=%+v removes=%+v", client.execRequests(), client.removeRequests())
+	}
+	if _, ok, err := store.TerminalResult(context.Background(), run, 42); err != nil || ok {
+		t.Fatalf("terminal ok=%v err=%v", ok, err)
+	}
+}
+
 func TestRunnerRunChildWritesAttemptAfterContextCancellation(t *testing.T) {
 	store := newTestResultStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -760,10 +859,15 @@ type fakeSporeClient struct {
 	packFunc    func(context.Context, PackRequest) error
 	pullFunc    func(context.Context, PullRequest) (PullResult, error)
 	resumeFunc  func(context.Context, ResumeRequest) ([]RunEvent, error)
+	execFunc    func(context.Context, ExecRequest) ([]RunEvent, error)
+	removeFunc  func(context.Context, RemoveVMRequest) error
 	runCaptures []RunCaptureRequest
 	forks       []ForkRequest
 	packs       []PackRequest
 	pulls       []PullRequest
+	resumes     []ResumeRequest
+	execs       []ExecRequest
+	removes     []RemoveVMRequest
 	outDir      string
 }
 
@@ -820,10 +924,33 @@ func (c *fakeSporeClient) Pull(ctx context.Context, req PullRequest) (PullResult
 }
 
 func (c *fakeSporeClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEvent, error) {
+	c.mu.Lock()
+	c.resumes = append(c.resumes, req)
+	c.mu.Unlock()
 	if c.resumeFunc == nil {
 		return []RunEvent{exitEvent(0)}, nil
 	}
 	return c.resumeFunc(ctx, req)
+}
+
+func (c *fakeSporeClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, error) {
+	c.mu.Lock()
+	c.execs = append(c.execs, req)
+	c.mu.Unlock()
+	if c.execFunc == nil {
+		return []RunEvent{exitEvent(0)}, nil
+	}
+	return c.execFunc(ctx, req)
+}
+
+func (c *fakeSporeClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error {
+	c.mu.Lock()
+	c.removes = append(c.removes, req)
+	c.mu.Unlock()
+	if c.removeFunc == nil {
+		return nil
+	}
+	return c.removeFunc(ctx, req)
 }
 
 func (c *fakeSporeClient) runCaptureRequests() []RunCaptureRequest {
@@ -848,6 +975,24 @@ func (c *fakeSporeClient) pullRequests() []PullRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]PullRequest(nil), c.pulls...)
+}
+
+func (c *fakeSporeClient) resumeRequests() []ResumeRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ResumeRequest(nil), c.resumes...)
+}
+
+func (c *fakeSporeClient) execRequests() []ExecRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ExecRequest(nil), c.execs...)
+}
+
+func (c *fakeSporeClient) removeRequests() []RemoveVMRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]RemoveVMRequest(nil), c.removes...)
 }
 
 func (c *fakeSporeClient) lastOutDir() string {

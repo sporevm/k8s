@@ -50,6 +50,8 @@ type SporeClient interface {
 	Pack(context.Context, PackRequest) error
 	Pull(context.Context, PullRequest) (PullResult, error)
 	Resume(context.Context, ResumeRequest) ([]RunEvent, error)
+	Exec(context.Context, ExecRequest) ([]RunEvent, error)
+	RemoveVM(context.Context, RemoveVMRequest) error
 }
 
 // RunnerOption configures a node-local Runner.
@@ -560,11 +562,7 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	if r.childTimeout > 0 {
 		resumeCtx, cancelResume = context.WithTimeout(ctx, r.childTimeout)
 	}
-	events, resumeErr := r.client.Resume(resumeCtx, ResumeRequest{
-		SporeDir:       outDir,
-		Backend:        backend,
-		GenerationPath: generationPath,
-	})
+	events, resumeErr := r.executeChild(resumeCtx, ctx, req, outDir, backend, generationPath, attemptID)
 	cancelResume()
 	result.TimingsMS.Resume = elapsedMS(resumeStart, r.now())
 
@@ -618,6 +616,10 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 		return r.failAttempt(ctx, req.Run, result, "runtime.invalid_terminal_event", "unsupported terminal event "+terminal.Event, false)
 	}
 	if resumeErr != nil && result.Error == nil {
+		result.Status = fleet.AttemptFailed
+		result.Terminal = false
+		result.ResultURI = ""
+		commitTerminal = false
 		result.Error = attemptError(resumeErr)
 	}
 	result.FinishedAt = r.now()
@@ -649,6 +651,47 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	}
 	r.observeAttempt(result, pull, commitTerminal, commitTerminal)
 	return result, nil
+}
+
+func (r *Runner) executeChild(ctx context.Context, cleanupParent context.Context, req RunChildRequest, sporeDir string, backend string, generationPath string, attemptID string) (events []RunEvent, err error) {
+	resumeReq := ResumeRequest{
+		SporeDir:       sporeDir,
+		Backend:        backend,
+		GenerationPath: generationPath,
+	}
+	if len(req.Run.ChildCommand) == 0 {
+		return r.client.Resume(ctx, resumeReq)
+	}
+
+	name := childVMName(attemptID)
+	resumeReq.Name = name
+	defer func() {
+		cleanupCtx := cleanupParent
+		cleanupCancel := func() {}
+		if cleanupCtx.Err() != nil {
+			cleanupCtx, cleanupCancel = context.WithTimeout(context.Background(), 5*time.Second)
+		}
+		cleanupErr := r.client.RemoveVM(cleanupCtx, RemoveVMRequest{Name: name})
+		cleanupCancel()
+		if err == nil {
+			err = cleanupErr
+		}
+	}()
+
+	resumeEvents, err := r.client.Resume(ctx, resumeReq)
+	if err != nil {
+		return nil, err
+	}
+	if terminal, err := TerminalEvent(resumeEvents); err != nil {
+		return nil, err
+	} else if terminal.ExitCode != nil && *terminal.ExitCode != 0 {
+		return nil, fmt.Errorf("named child resume exited with code %d before child command", *terminal.ExitCode)
+	}
+	events, err = r.client.Exec(ctx, ExecRequest{
+		Name:    name,
+		Command: req.Run.ChildCommand,
+	})
+	return events, err
 }
 
 func (r *Runner) validateRunChildRequest(req RunChildRequest) error {
@@ -727,6 +770,28 @@ func resultWriteContext(ctx context.Context) (context.Context, context.CancelFun
 
 func (r *Runner) childWorkDir(run fleet.Run, lease fleet.ShardLease, childID int, attemptID string) string {
 	return filepath.Join(r.workRoot, run.RunID, lease.ShardID, "child-"+strconv.Itoa(childID), attemptID+".spore")
+}
+
+func childVMName(attemptID string) string {
+	var name strings.Builder
+	name.Grow(len("sporevm-") + len(attemptID))
+	name.WriteString("sporevm-")
+	lastDash := true
+	for _, r := range strings.ToLower(attemptID) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			name.WriteRune(r)
+			lastDash = false
+		case !lastDash:
+			name.WriteByte('-')
+			lastDash = true
+		}
+	}
+	clean := strings.TrimRight(name.String(), "-")
+	if clean == "sporevm" {
+		return "sporevm-child"
+	}
+	return clean
 }
 
 func (r *Runner) prepareWorkDir(run fleet.GenericRun) string {

@@ -63,7 +63,7 @@ func TestRunCoordinatorGenericRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 func TestRunCoordinatorGenericRunReturnsErrorForFailedRuntimeReport(t *testing.T) {
 	generic := testGenericRun()
 	runPath := writeJSONFile(t, generic)
-	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1, resumeExitCode: 1}
+	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1, execExitCode: 1}
 	server := newTestAgentServer(t, spore, 1)
 
 	var stdout bytes.Buffer
@@ -220,6 +220,7 @@ type fakeSporeClient struct {
 	digest         string
 	childCount     int
 	resumeExitCode int
+	execExitCode   int
 	runCaptures    []agent.RunCaptureRequest
 	pulls          []agent.PullRequest
 }
@@ -303,6 +304,21 @@ func (c *fakeSporeClient) Resume(context.Context, agent.ResumeRequest) ([]agent.
 		ExitCode:      &exitCode,
 		Timings:       &agent.RunEventTimings{ExecResponseMS: 7},
 	}}, nil
+}
+
+func (c *fakeSporeClient) Exec(context.Context, agent.ExecRequest) ([]agent.RunEvent, error) {
+	exitCode := c.execExitCode
+	return []agent.RunEvent{{
+		Schema:        "spore.run-events.v1",
+		SchemaVersion: 1,
+		Event:         "exit",
+		Command:       "exec",
+		ExitCode:      &exitCode,
+	}}, nil
+}
+
+func (c *fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error {
+	return nil
 }
 
 func (c *fakeSporeClient) runCaptureCount() int {

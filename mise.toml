@@ -15,7 +15,7 @@ description = "Run the synthetic 1,000-child coordinator benchmark harness"
 run = "go run ./cmd/spore-fleet-benchmark --run examples/fleet/run-1000.json --agents 10 --slots-per-agent 100 --target-concurrency 1000"
 
 [tasks."runtime:image:build"]
-description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 1.2.0"
+description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 1.3.0"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:0.1.0 ."
 
 [tasks."runtime:image:push"]
