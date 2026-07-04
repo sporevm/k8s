@@ -109,14 +109,15 @@ type PreparedBundle struct {
 
 // Run is the admitted fleet run contract.
 type Run struct {
-	RunID       string      `json:"runID"`
-	Bundle      Bundle      `json:"bundle"`
-	Children    ChildRange  `json:"children"`
-	HostClass   HostClass   `json:"hostClass"`
-	Execution   Execution   `json:"execution"`
-	RetryPolicy RetryPolicy `json:"retryPolicy"`
-	SideEffects SideEffects `json:"sideEffects"`
-	ResultStore string      `json:"resultStore"`
+	RunID        string      `json:"runID"`
+	Bundle       Bundle      `json:"bundle"`
+	Children     ChildRange  `json:"children"`
+	ChildCommand []string    `json:"childCommand,omitempty"`
+	HostClass    HostClass   `json:"hostClass"`
+	Execution    Execution   `json:"execution"`
+	RetryPolicy  RetryPolicy `json:"retryPolicy"`
+	SideEffects  SideEffects `json:"sideEffects"`
+	ResultStore  string      `json:"resultStore"`
 }
 
 // ExecutionSlots reports an agent's current execution capacity.

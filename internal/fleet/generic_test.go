@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -50,6 +51,9 @@ func TestGenericRunCompilesToBundleRun(t *testing.T) {
 	}
 	if run.Children != (ChildRange{Start: 0, Count: 1000}) {
 		t.Fatalf("children = %#v, want 0/1000", run.Children)
+	}
+	if !slices.Equal(run.ChildCommand, generic.Children.Command) {
+		t.Fatalf("childCommand = %#v, want %#v", run.ChildCommand, generic.Children.Command)
 	}
 	if run.ResultStore != generic.ResultStore {
 		t.Fatalf("resultStore = %q, want %q", run.ResultStore, generic.ResultStore)

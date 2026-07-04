@@ -315,6 +315,21 @@ func (c fakeSporeClient) Resume(context.Context, agent.ResumeRequest) ([]agent.R
 	}}, nil
 }
 
+func (c fakeSporeClient) Exec(context.Context, agent.ExecRequest) ([]agent.RunEvent, error) {
+	exitCode := 0
+	return []agent.RunEvent{{
+		Schema:        "spore.run-events.v1",
+		SchemaVersion: 1,
+		Event:         "exit",
+		Command:       "exec",
+		ExitCode:      &exitCode,
+	}}, nil
+}
+
+func (c fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error {
+	return nil
+}
+
 func testDigest(raw string) agent.DigestRef {
 	return agent.DigestRef{
 		Algorithm: "sha256",

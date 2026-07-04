@@ -295,6 +295,119 @@ exit 2
 	}
 }
 
+func TestCommandClientResumeSupportsName(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "resume" ]; then
+  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"resume","backend":"kvm","exit_code":0}'
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	if _, err := client.Resume(context.Background(), ResumeRequest{
+		SporeDir:       "/work/child-42.spore",
+		GenerationPath: "/work/child-42.generation.json",
+		Name:           "sporevm-child-42",
+	}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	args := strings.TrimSpace(readFile(t, argsFile))
+	if args != "resume --events=jsonl --generation /work/child-42.generation.json /work/child-42.spore --name sporevm-child-42" {
+		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestCommandClientExecTreatsGuestExitAsResult(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "exec" ]; then
+  printf 'hello\n'
+  printf 'warn\n' >&2
+  exit 7
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	events, err := client.Exec(context.Background(), ExecRequest{
+		Name:    "sporevm-child-42",
+		Command: []string{"/bin/sh", "-c", "exit 7"},
+	})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	terminal, err := TerminalEvent(events)
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if terminal.ExitCode == nil || *terminal.ExitCode != 7 {
+		t.Fatalf("exit code = %v", terminal.ExitCode)
+	}
+	if len(events) != 3 || events[0].Event != "stdout" || events[1].Event != "stderr" || events[2].Command != "exec" {
+		t.Fatalf("events = %+v", events)
+	}
+
+	args := strings.TrimSpace(readFile(t, argsFile))
+	if args != "exec sporevm-child-42 -- /bin/sh -c exit 7" {
+		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestCommandClientExecReturnsSporeCommandError(t *testing.T) {
+	spore := fakeSpore(t, `
+if [ "$1" = "exec" ]; then
+  echo "spore exec: VM is not ready: $2" >&2
+  exit 2
+fi
+echo unexpected "$*" >&2
+exit 2
+`, "")
+
+	client := CommandClient{Path: spore}
+	events, err := client.Exec(context.Background(), ExecRequest{
+		Name:    "sporevm-child-42",
+		Command: []string{"/bin/true"},
+	})
+	if err == nil {
+		t.Fatal("Exec succeeded")
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want none", events)
+	}
+	if !strings.Contains(err.Error(), "VM is not ready") {
+		t.Fatalf("Exec error = %v, want VM readiness error", err)
+	}
+}
+
+func TestCommandClientRemoveVM(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "rm" ]; then
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	if err := client.RemoveVM(context.Background(), RemoveVMRequest{Name: "sporevm-child-42"}); err != nil {
+		t.Fatalf("RemoveVM: %v", err)
+	}
+
+	args := strings.TrimSpace(readFile(t, argsFile))
+	if args != "rm sporevm-child-42" {
+		t.Fatalf("args = %q", args)
+	}
+}
+
 func TestCommandClientResumeRejectsExitMismatch(t *testing.T) {
 	spore := fakeSpore(t, `
 if [ "$1" = "resume" ]; then
@@ -381,6 +494,12 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	}
 	if _, err := client.Resume(context.Background(), ResumeRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Resume error = %v, want ErrInvalidSporeRequest", err)
+	}
+	if _, err := client.Exec(context.Background(), ExecRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+		t.Fatalf("Exec error = %v, want ErrInvalidSporeRequest", err)
+	}
+	if err := client.RemoveVM(context.Background(), RemoveVMRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+		t.Fatalf("RemoveVM error = %v, want ErrInvalidSporeRequest", err)
 	}
 	if _, err := client.RunCapture(context.Background(), RunCaptureRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("RunCapture error = %v, want ErrInvalidSporeRequest", err)

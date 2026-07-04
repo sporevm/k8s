@@ -161,14 +161,15 @@ func (r GenericRun) Compile(prepared PreparedBundle) (Run, error) {
 		return Run{}, err
 	}
 	run := Run{
-		RunID:       r.RunID,
-		Bundle:      prepared.Bundle,
-		Children:    r.Children.ChildRange(),
-		HostClass:   prepared.HostClass,
-		Execution:   r.Execution,
-		RetryPolicy: r.RetryPolicy,
-		SideEffects: r.SideEffects,
-		ResultStore: r.ResultStore,
+		RunID:        r.RunID,
+		Bundle:       prepared.Bundle,
+		Children:     r.Children.ChildRange(),
+		ChildCommand: append([]string(nil), r.Children.Command...),
+		HostClass:    prepared.HostClass,
+		Execution:    r.Execution,
+		RetryPolicy:  r.RetryPolicy,
+		SideEffects:  r.SideEffects,
+		ResultStore:  r.ResultStore,
 	}
 	if err := run.Validate(); err != nil {
 		return Run{}, err
@@ -189,6 +190,11 @@ func (r Run) Validate() error {
 	}
 	if err := r.Children.Validate("children"); err != nil {
 		return err
+	}
+	if len(r.ChildCommand) > 0 {
+		if err := (CommandSpec{Command: r.ChildCommand}).Validate("childCommand"); err != nil {
+			return err
+		}
 	}
 	if err := r.HostClass.Validate("hostClass"); err != nil {
 		return err

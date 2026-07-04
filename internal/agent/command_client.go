@@ -148,6 +148,9 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 		args = append(args, "--generation", req.GenerationPath)
 	}
 	args = append(args, req.SporeDir)
+	if req.Name != "" {
+		args = append(args, "--name", req.Name)
+	}
 
 	stdout, stderr, err := c.run(ctx, args...)
 	events, _, decodeErr := decodeRunEventsAfterCommand("spore resume", stdout, stderr, err, false)
@@ -155,6 +158,46 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 		return events, decodeErr
 	}
 	return events, nil
+}
+
+// Exec runs `spore exec` against a named resumed VM.
+func (c CommandClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, error) {
+	if err := req.validate(); err != nil {
+		return nil, err
+	}
+	args := []string{"exec", req.Name, "--"}
+	args = append(args, req.Command...)
+
+	stdout, stderr, err := c.run(ctx, args...)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if err != nil {
+		if machineErr := machineErrorFromStderr(stderr); machineErr != nil {
+			return nil, machineErr
+		}
+		if strings.HasPrefix(string(bytes.TrimSpace(stderr)), "spore exec:") {
+			return nil, commandError(err, stderr)
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return nil, commandError(err, stderr)
+		}
+		return commandRunEvents("exec", stdout, stderr, exitErr.ExitCode()), nil
+	}
+	return commandRunEvents("exec", stdout, stderr, 0), nil
+}
+
+// RemoveVM runs `spore rm` against a named VM.
+func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	_, stderr, err := c.run(ctx, "rm", req.Name)
+	if err != nil {
+		return commandError(err, stderr)
+	}
+	return nil
 }
 
 func (c CommandClient) runJSON(ctx context.Context, out any, args ...string) error {
@@ -318,16 +361,52 @@ func runEventLineContains(line []byte, marker string) bool {
 }
 
 func commandError(err error, stderr []byte) error {
+	if machineErr := machineErrorFromStderr(stderr); machineErr != nil {
+		return machineErr
+	}
+	if len(stderr) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, bytes.TrimSpace(stderr))
+}
+
+func machineErrorFromStderr(stderr []byte) error {
 	var envelope MachineErrorEnvelope
 	if jsonErr := json.Unmarshal(bytes.TrimSpace(stderr), &envelope); jsonErr == nil {
 		if validateErr := envelope.Validate(); validateErr == nil {
 			return &MachineError{Envelope: envelope, Stderr: string(stderr)}
 		}
 	}
-	if len(stderr) == 0 {
-		return err
+	return nil
+}
+
+func commandRunEvents(command string, stdout []byte, stderr []byte, exitCode int) []RunEvent {
+	events := make([]RunEvent, 0, 3)
+	if len(stdout) > 0 {
+		events = append(events, commandOutputEvent(command, "stdout", stdout))
 	}
-	return fmt.Errorf("%w: %s", err, bytes.TrimSpace(stderr))
+	if len(stderr) > 0 {
+		events = append(events, commandOutputEvent(command, "stderr", stderr))
+	}
+	events = append(events, RunEvent{
+		Schema:        runEventsSchema,
+		SchemaVersion: schemaVersion,
+		Event:         "exit",
+		Command:       command,
+		ExitCode:      &exitCode,
+	})
+	return events
+}
+
+func commandOutputEvent(command string, event string, data []byte) RunEvent {
+	return RunEvent{
+		Schema:        runEventsSchema,
+		SchemaVersion: schemaVersion,
+		Event:         event,
+		Command:       command,
+		ByteCount:     len(data),
+		DataBase64:    base64.StdEncoding.EncodeToString(data),
+	}
 }
 
 func decodeRunEventsAfterCommand(name string, stdout []byte, stderr []byte, runErr error, guestExitIsError bool) ([]RunEvent, RunEvent, error) {

@@ -131,6 +131,8 @@ def validate_run(run: Any) -> None:
     require_keys(children, {"start", "count"}, "run.children")
     require_int(children["start"], "run.children.start", 0)
     require_int(children["count"], "run.children.count", 1)
+    if "childCommand" in run:
+        validate_command_spec({"command": run["childCommand"]}, "run.childCommand")
 
     validate_host_class(run["hostClass"], "run.hostClass")
 

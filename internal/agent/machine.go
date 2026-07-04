@@ -378,11 +378,45 @@ type ResumeRequest struct {
 	SporeDir       string
 	Backend        string
 	GenerationPath string
+	Name           string
 }
 
 func (r ResumeRequest) validate() error {
 	if r.SporeDir == "" {
 		return invalidSporeRequest("resume spore dir is required")
+	}
+	return nil
+}
+
+// ExecRequest is one command execution inside a named resumed VM.
+type ExecRequest struct {
+	Name    string
+	Command []string
+}
+
+func (r ExecRequest) validate() error {
+	if r.Name == "" {
+		return invalidSporeRequest("exec VM name is required")
+	}
+	if len(r.Command) == 0 {
+		return invalidSporeRequest("exec command is required")
+	}
+	for i, arg := range r.Command {
+		if arg == "" {
+			return invalidSporeRequest("exec command[%d] must not be empty", i)
+		}
+	}
+	return nil
+}
+
+// RemoveVMRequest removes one named SporeVM lifecycle target.
+type RemoveVMRequest struct {
+	Name string
+}
+
+func (r RemoveVMRequest) validate() error {
+	if r.Name == "" {
+		return invalidSporeRequest("remove VM name is required")
 	}
 	return nil
 }
