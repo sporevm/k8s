@@ -50,6 +50,57 @@ func TestCoordinatorRunExecutesSingleCellPlan(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
+	run := loadExampleRun(t)
+	agents := makeAgents(t, 1, 100, run.HostClass)
+	store := newFakeTerminalStore()
+	executor := &fakeShardExecutor{
+		fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+			if req.Lease.ChildCount != 1000 {
+				t.Fatalf("lease child count = %d, want 1000", req.Lease.ChildCount)
+			}
+			results := make([]AttemptResult, 0, req.Lease.ChildCount)
+			for childID := req.Lease.ChildStart; childID < req.Lease.ChildRange().End(); childID++ {
+				result := runtimeAttemptResult(run, req.Lease, childID, req.Attempt, AttemptSucceeded, true)
+				store.commit(result)
+				results = append(results, result)
+			}
+			return results, nil
+		},
+	}
+	coordinator, err := NewCoordinator(
+		agents,
+		fakeBundleInspector{inspection: BundleInspection{
+			BundleDigest: run.Bundle.Digest,
+			ChildCount:   run.Children.End(),
+			HostClass:    run.HostClass,
+		}},
+		store,
+		map[string]ShardExecutor{agents[0].AgentID: executor},
+		CoordinatorOptions{PlanBuilder: BuildSingleAgentSequentialPlan},
+	)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	report, err := coordinator.Run(context.Background(), run)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if executor.callCount() != 1 {
+		t.Fatalf("executor calls = %d, want 1", executor.callCount())
+	}
+	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 1000 {
+		t.Fatalf("summary = %+v", report.Summary)
+	}
+	if report.Summary.AssignedShards != 1 || report.Summary.AssignedChildren != 1000 {
+		t.Fatalf("assignment summary = %+v", report.Summary)
+	}
+	if err := ValidateCompleteCoverage(run, report.Plan.Leases); err != nil {
+		t.Fatalf("ValidateCompleteCoverage: %v", err)
+	}
+}
+
 func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 10, 100, run.HostClass)

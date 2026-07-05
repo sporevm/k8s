@@ -38,10 +38,14 @@ type ShardExecutor interface {
 	RunShard(context.Context, ShardExecutionRequest) ([]AttemptResult, error)
 }
 
+// PlanBuilder assigns shard leases for a validated run and agent inventory.
+type PlanBuilder func(Run, []AgentStatus, DryRunOptions) (Plan, error)
+
 // CoordinatorOptions configures a single-cell coordinator.
 type CoordinatorOptions struct {
-	Now      func() time.Time
-	LeaseTTL time.Duration
+	Now         func() time.Time
+	LeaseTTL    time.Duration
+	PlanBuilder PlanBuilder
 }
 
 // Coordinator owns run admission and static single-cell shard execution.
@@ -52,6 +56,7 @@ type Coordinator struct {
 	executors map[string]ShardExecutor
 	now       func() time.Time
 	leaseTTL  time.Duration
+	plan      PlanBuilder
 }
 
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
@@ -76,6 +81,10 @@ func NewCoordinator(
 	if leaseTTL <= 0 {
 		leaseTTL = 10 * time.Minute
 	}
+	planBuilder := opts.PlanBuilder
+	if planBuilder == nil {
+		planBuilder = BuildDryRunPlan
+	}
 	copiedAgents := append([]AgentStatus(nil), agents...)
 	copiedExecutors := make(map[string]ShardExecutor, len(executors))
 	for agentID, executor := range executors {
@@ -91,6 +100,7 @@ func NewCoordinator(
 		executors: copiedExecutors,
 		now:       now,
 		leaseTTL:  leaseTTL,
+		plan:      planBuilder,
 	}, nil
 }
 
@@ -108,7 +118,7 @@ func (c *Coordinator) Run(ctx context.Context, run Run) (RuntimeReport, error) {
 		return RuntimeReport{}, err
 	}
 
-	plan, err := BuildDryRunPlan(run, c.agents, DryRunOptions{
+	plan, err := c.plan(run, c.agents, DryRunOptions{
 		Now:      startedAt,
 		LeaseTTL: c.leaseTTL,
 	})

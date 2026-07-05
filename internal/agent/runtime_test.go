@@ -788,6 +788,53 @@ func TestRunnerRunShardExecutesEveryChildAndReleasesSlots(t *testing.T) {
 	}
 }
 
+func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
+	store := newTestResultStore(t)
+	client := &fakeSporeClient{
+		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
+			return pullResult(req.OutDir, req.ChildID), nil
+		},
+		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
+			return []RunEvent{exitEvent(0)}, nil
+		},
+	}
+	runner, err := NewRunner(
+		2,
+		WithSporeClient(client),
+		WithResultStore(store),
+		WithWorkRoot(t.TempDir()),
+	)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	run := testRun()
+	run.Children = fleet.ChildRange{Start: 10, Count: 5}
+	run.Execution.ChildrenPerShard = 2
+	run.Execution.MaxInFlightPerAgent = 2
+	lease := testLease(run)
+	lease.ChildStart = 10
+	lease.ChildCount = 5
+
+	results, err := runner.RunShard(context.Background(), RunShardRequest{
+		Run:      run,
+		Lease:    lease,
+		Attempt:  1,
+		Pressure: normalPressure(),
+	})
+	if err != nil {
+		t.Fatalf("RunShard: %v", err)
+	}
+	if len(results) != 5 {
+		t.Fatalf("results len = %d, want 5", len(results))
+	}
+	if got := len(client.pullRequests()); got != 5 {
+		t.Fatalf("pull requests = %d, want 5", got)
+	}
+	if runner.AvailableSlots() != 2 {
+		t.Fatalf("available slots = %d, want 2", runner.AvailableSlots())
+	}
+}
+
 func TestBundleSourceRequiresExactDigestSuffix(t *testing.T) {
 	run := testRun()
 	run.Bundle.URI = "s3://example-sporevm-artifacts/runs/ruby@base.bundle"

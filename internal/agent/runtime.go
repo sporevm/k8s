@@ -433,7 +433,10 @@ func (r *Runner) RunShard(ctx context.Context, req RunShardRequest) ([]fleet.Att
 	if req.Attempt < 1 || req.Attempt > req.Lease.AttemptBudget {
 		return nil, ErrInvalidLease
 	}
-	release, err := r.AdmitShard(req.Lease, req.Pressure)
+	workerCount := fleet.ShardSlotDemand(req.Run, req.Lease)
+	slotLease := req.Lease
+	slotLease.ChildCount = workerCount
+	release, err := r.AdmitShard(slotLease, req.Pressure)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +448,6 @@ func (r *Runner) RunShard(ctx context.Context, req RunShardRequest) ([]fleet.Att
 	var mu sync.Mutex
 	var errs []error
 
-	workerCount := min(req.Lease.ChildCount, req.Run.Execution.MaxInFlightPerAgent)
 	for range workerCount {
 		wg.Add(1)
 		go func() {

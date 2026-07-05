@@ -128,6 +128,12 @@ The lower-level bundle run remains useful for prebuilt bundles and benchmark
 work. The higher-level run is the normal user and CI entrypoint; its
 `children.command` compiles to the lower-level `childCommand`.
 
+When the prepared bundle is still a local `file://` bundle, the preparing agent
+also executes the run through one sequential lease. That lease may cover the
+full child range, but local execution still reserves only the configured
+in-flight child slots. Multi-agent generic runs require publishing the prepared
+bundle first so other agents can materialize the same immutable input.
+
 ### Fleet Components
 
 `sporectl` is the user-facing submitter. CI should use the same generic submit
@@ -164,7 +170,8 @@ Kubernetes owns deployment and coarse lifecycle for a cell:
 1. Resolve the source image, rootfs, existing spore, or prebuilt bundle.
 2. Prepare a parent VM by running the warm command until the capture point.
 3. Capture and fork the parent into `N` children.
-4. Pack and publish the child bundle under immutable digest identity.
+4. Pack the child bundle under immutable digest identity, publishing it before
+   multi-agent handoff or reuse.
 5. Admit the child range against compatible agents with honest slots.
 6. Lease non-overlapping child ranges to agents.
 7. Agents materialize and resume selected children.
@@ -204,6 +211,11 @@ Slots must be honest. The first implementation can clamp configured slots by
 container cgroup memory, CPU policy, and fixed per-child memory budget. Later it
 should use bundle-specific memory once SporeVM exposes it in machine-readable
 inspection output.
+
+For local generic runs, admission compares the preparing agent against in-flight
+slot demand, not total child count. The prebuilt bundle planner remains stricter
+and still requires enough compatible fleet slots to cover every child
+concurrently.
 
 ### Results And Retries
 
@@ -442,7 +454,9 @@ Done when:
 - Kubernetes render checks for the agent DaemonSet and coordinator Job.
 - Kubernetes render checks for the cluster-local OCI registry and the dev
   agent CA trust patch.
-- Live Kubernetes smoke for 100 children is done; 1,000 children remains.
+- Live Kubernetes smoke for 100 children is done; 1,000 children remains. The
+  coordinator now has the single-agent sequential generic path needed to test it
+  honestly on one compatible node.
 - CI smoke that submits one logical run and fails the step on aggregate
   child failure.
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
@@ -464,8 +478,8 @@ Done when:
 - Keep per-child results outside Kubernetes.
 - Keep KVM, credentials, caches, and SporeVM execution inside agents.
 - In the first generic coordinator path, the agent that prepares a local
-  `file://` bundle also executes the shards. Multi-agent generic runs require
-  publishing the prepared bundle first.
+  `file://` bundle also executes a single sequential lease bounded by in-flight
+  slots. Multi-agent generic runs require publishing the prepared bundle first.
 - Public runtime images publish to GHCR; private environments can override the
   image repository from their ops values.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
