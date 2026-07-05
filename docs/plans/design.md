@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-02
+last_reviewed: 2026-07-05
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -255,7 +255,8 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
   access, and finite SporeVM/KVM runs on compatible Kubernetes nodes.
 - Live pressure-testing has reached 100 successful children on one compatible
-  KVM node.
+  KVM node: one shard, 100 attempts, 100 completed, no failed children, with
+  prepare taking 18.1s and shard execution taking 21.0s.
 - The generic source/prepare/fork run contract now carries the warm-command
   capture trigger needed by the Rails/RSpec example and compiles to the
   existing immutable bundle run once a prepared bundle is available.
@@ -300,15 +301,16 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - Generic runs can set `prepare.memory`, which is passed to `spore run --memory`
   before capture so small fan-out smokes do not inherit an oversized default
   guest memory budget.
-- A 10-child busybox generic run now succeeds on one compatible KVM node with
-  `prepare.memory: 512mb`, 10 advertised slots, one shard, 10 terminal results,
-  and generation-aware child command output for every child.
+- A 10-child busybox generic run first proved the `prepare.memory: 512mb`
+  fix. The follow-up 100-child run used the same memory setting, 100 advertised
+  slots, one shard, 100 terminal results, and generation-aware child command
+  output for every sampled child.
 - Per-child terminal results now include bounded stdout/stderr previews and
   complete output byte counts from SporeVM JSONL output events.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- The useful next gap is increasing honest live scale to 100 children without
+- The useful next gap is increasing honest live scale to 1,000 children without
   overstating memory capacity.
 
 ## Delivery Strategy
@@ -399,8 +401,9 @@ Done when:
 
 ### Slice 6: Honest 1,000-Child Scale
 
-Status: partially implemented for synthetic planning only. Live 1,000-child
-capacity is still unproved.
+Status: partially implemented. Synthetic planning covers 1,000 children, and a
+live single-agent run has proved 100 children. Live 1,000-child capacity is
+still unproved.
 
 Scale by adding real capacity or reducing verified per-child requirements, not
 by overstating slots.
@@ -435,7 +438,7 @@ Done when:
 - Kubernetes render checks for the agent DaemonSet and coordinator Job.
 - Kubernetes render checks for the cluster-local OCI registry and the dev
   agent CA trust patch.
-- Live Kubernetes smoke for 100-child, then 1,000-child runs.
+- Live Kubernetes smoke for 100 children is done; 1,000 children remains.
 - CI smoke that submits one logical run and fails the step on aggregate
   child failure.
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
@@ -444,7 +447,7 @@ Done when:
 - Live Rails/RSpec generic control smoke through `sporectl submit` against the
   cluster-local registry image.
 - Live Rails/RSpec sharded generic smoke through `sporectl submit` against the
-  cluster-local registry image and SporeVM `v1.3.0` runtime.
+  cluster-local registry image and the pinned SporeVM release runtime.
 - Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
   and tag-gated GHCR image/chart publishing.
 
@@ -506,5 +509,7 @@ Done when:
 - Rails/RSpec proves that plain child `spore resume` is not equivalent to
   `spore fanout`: sharded workloads need stable `/run/sporevm/env` or
   `/run/sporevm/generation.json` identity on every resumed child.
-- The next useful implementation work is scaling honest live capacity beyond the
-  current one-slot dev agent. CRDs and Kueue can wait.
+- The 100-child run held on one compatible KVM node with explicit 512 MB guest
+  memory, which moves the next pressure point to honest 1,000-child capacity.
+- The next useful implementation work is scaling honest live capacity beyond
+  the current single-agent proof. CRDs and Kueue can wait.
