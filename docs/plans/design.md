@@ -270,9 +270,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
   access, and finite SporeVM/KVM runs on compatible Kubernetes nodes.
-- Live pressure-testing has reached 100 successful children on one compatible
-  KVM node: one shard, 100 attempts, 100 completed, no failed children, with
-  prepare taking 18.1s and shard execution taking 21.0s.
+- Live pressure-testing has reached 1,000 successful children on one compatible
+  KVM node using public runtime `v0.1.1`: one sequential local lease, 100
+  in-flight slots, 1,000 attempts, 1,000 completed, no failed children, with
+  prepare taking 18.6s and shard execution taking 2m45.9s.
 - The generic source/prepare/fork run contract now carries the warm-command
   capture trigger needed by the Rails/RSpec example and compiles to the
   existing immutable bundle run once a prepared bundle is available.
@@ -454,9 +455,7 @@ Done when:
 - Kubernetes render checks for the agent DaemonSet and coordinator Job.
 - Kubernetes render checks for the cluster-local OCI registry and the dev
   agent CA trust patch.
-- Live Kubernetes smoke for 100 children is done; 1,000 children remains. The
-  coordinator now has the single-agent sequential generic path needed to test it
-  honestly on one compatible node.
+- Live Kubernetes smoke has reached 1,000 children on one compatible node.
 - CI smoke that submits one logical run and fails the step on aggregate
   child failure.
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
