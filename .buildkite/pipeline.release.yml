@@ -2,7 +2,7 @@ steps:
   - label: ":package: Publish"
     key: "publish"
     secrets:
-      - SPOREVM_K8S_GITHUB_TOKEN
+      - SPOREVM_GITHUB_TOKEN
     command: |
       set -euo pipefail
       if ! command -v mise >/dev/null 2>&1; then
@@ -19,8 +19,8 @@ steps:
       fi
 
       ghcr_user="$${SPOREVM_K8S_GITHUB_USER:-sporevm}"
-      echo "$$SPOREVM_K8S_GITHUB_TOKEN" | docker login ghcr.io --username "$$ghcr_user" --password-stdin
-      echo "$$SPOREVM_K8S_GITHUB_TOKEN" | helm registry login ghcr.io --username "$$ghcr_user" --password-stdin
+      echo "$$SPOREVM_GITHUB_TOKEN" | docker login ghcr.io --username "$$ghcr_user" --password-stdin
+      echo "$$SPOREVM_GITHUB_TOKEN" | helm registry login ghcr.io --username "$$ghcr_user" --password-stdin
 
       export SPOREVM_K8S_RUNTIME_IMAGE="ghcr.io/sporevm/k8s-runtime:$$version"
       mise run runtime:image:push

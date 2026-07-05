@@ -26,7 +26,7 @@ export SPOREVM_K8S_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:0.1.0
 mise run runtime:image:push
 ```
 
-Buildkite reads `SPOREVM_K8S_GITHUB_TOKEN` from its secret store and publishes
+Buildkite reads `SPOREVM_GITHUB_TOKEN` from its secret store and publishes
 runtime images and Helm charts on matching `v*` tags. Set
 `SPOREVM_K8S_GITHUB_USER` only when the token must log in as a user other than
 `sporevm`.
