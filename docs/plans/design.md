@@ -285,24 +285,24 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - SporeVM now exposes single-child resume identity with
   `spore resume --generation FILE`; the adapter writes one generation JSON per
   child and passes that file when resuming materialized children.
-- The runtime image is pinned to SporeVM `v1.3.0`, whose Linux arm64 release
-  archive includes `spore resume --generation`, named resume, `spore exec`, and
-  `spore rm`.
+- The runtime image can be pinned to a SporeVM release tarball. The latest live
+  child-command smoke used a SporeVM release with `spore resume --generation`,
+  named resume, `spore exec`, and `spore rm`.
 - The real Rails/RSpec sharded smoke now succeeds in Kubernetes for one child
   without the unsharded fallback. The run prepared/forked/packed in 23.5s,
   completed its shard in 36.8s, and wrote a succeeded terminal result with
   artifact pull 13.5s, resume 23.3s, and guest-ready 2.5s.
 - The generic path now preserves `children.command` as the lower-level
   `childCommand`, and the agent executes it through a named child resume plus
-  `spore exec` when present. A live Kubernetes smoke for this command-injection
-  path is still pending.
+  `spore exec` when present. A live one-child busybox smoke now verifies this
+  path through `sporectl submit`, including child stdout and generation identity.
 - Per-child terminal results now include bounded stdout/stderr previews and
   complete output byte counts from SporeVM JSONL output events.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- The useful next gaps are a live child-command smoke, then increasing honest
-  live capacity beyond the current one-slot dev agent.
+- The useful next gap is increasing honest live scale beyond the current
+  one-slot dev agent.
 
 ## Delivery Strategy
 
@@ -428,7 +428,7 @@ Done when:
 - Kubernetes render checks for the agent DaemonSet and coordinator Job.
 - Kubernetes render checks for the cluster-local OCI registry and the dev
   agent CA trust patch.
-- Live Kubernetes smoke for one-child, 10-child, 100-child, then 1,000-child runs.
+- Live Kubernetes smoke for 10-child, 100-child, then 1,000-child runs.
 - CI smoke that submits one logical run and fails the step on aggregate
   child failure.
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
@@ -496,6 +496,5 @@ Done when:
 - Rails/RSpec proves that plain child `spore resume` is not equivalent to
   `spore fanout`: sharded workloads need stable `/run/sporevm/env` or
   `/run/sporevm/generation.json` identity on every resumed child.
-- The next useful implementation work is deciding the child command execution
-  path and scaling honest live capacity beyond the current one-slot dev agent.
-  CRDs and Kueue can wait.
+- The next useful implementation work is scaling honest live capacity beyond the
+  current one-slot dev agent. CRDs and Kueue can wait.

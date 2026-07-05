@@ -310,6 +310,7 @@ exit 2
 	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
 	if _, err := client.Resume(context.Background(), ResumeRequest{
 		SporeDir:       "/work/child-42.spore",
+		Backend:        "kvm",
 		GenerationPath: "/work/child-42.generation.json",
 		Name:           "sporevm-child-42",
 	}); err != nil {
@@ -317,7 +318,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "resume --events=jsonl --generation /work/child-42.generation.json /work/child-42.spore --name sporevm-child-42" {
+	if args != "resume --events=jsonl --backend kvm --generation /work/child-42.generation.json /work/child-42.spore --name sporevm-child-42" {
 		t.Fatalf("args = %q", args)
 	}
 }
