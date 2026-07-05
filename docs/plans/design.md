@@ -300,13 +300,16 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - Generic runs can set `prepare.memory`, which is passed to `spore run --memory`
   before capture so small fan-out smokes do not inherit an oversized default
   guest memory budget.
+- A 10-child busybox generic run now succeeds on one compatible KVM node with
+  `prepare.memory: 512mb`, 10 advertised slots, one shard, 10 terminal results,
+  and generation-aware child command output for every child.
 - Per-child terminal results now include bounded stdout/stderr previews and
   complete output byte counts from SporeVM JSONL output events.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- The useful next gap is increasing honest live scale beyond the current
-  one-slot dev agent.
+- The useful next gap is increasing honest live scale to 100 children without
+  overstating memory capacity.
 
 ## Delivery Strategy
 
@@ -432,7 +435,7 @@ Done when:
 - Kubernetes render checks for the agent DaemonSet and coordinator Job.
 - Kubernetes render checks for the cluster-local OCI registry and the dev
   agent CA trust patch.
-- Live Kubernetes smoke for 10-child, 100-child, then 1,000-child runs.
+- Live Kubernetes smoke for 100-child, then 1,000-child runs.
 - CI smoke that submits one logical run and fails the step on aggregate
   child failure.
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
@@ -494,6 +497,9 @@ Done when:
   high-value profile.
 - Static slots are dangerous. Capacity has to reflect cgroup memory and, later,
   bundle-specific memory.
+- Guest memory is part of the fleet contract in practice: 10 children inherited
+  the default guest memory and OOM-killed the agent until the prepared parent
+  used an explicit smaller memory budget.
 - Signal-based parent capture is part of the generic run contract for
   long-lived warm commands. The agent owns that host-side trigger; Kubernetes
   should only see the resulting run and aggregate status.
