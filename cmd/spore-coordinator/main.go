@@ -206,6 +206,10 @@ func discoverAgentEndpoints(ctx context.Context, urls []string, httpClient *http
 }
 
 func runBundle(ctx context.Context, run fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
+	return runBundleWithOptions(ctx, run, store, endpoints, fleet.CoordinatorOptions{})
+}
+
+func runBundleWithOptions(ctx context.Context, run fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions) (fleet.RuntimeReport, error) {
 	if len(endpoints) == 0 {
 		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
 	}
@@ -220,7 +224,7 @@ func runBundle(ctx context.Context, run fleet.Run, store fleet.TerminalResultRea
 		endpoints[0].Client,
 		store,
 		executors,
-		fleet.CoordinatorOptions{},
+		opts,
 	)
 	if err != nil {
 		return fleet.RuntimeReport{}, fmt.Errorf("create coordinator: %w", err)
@@ -243,13 +247,16 @@ func runGeneric(ctx context.Context, generic fleet.GenericRun, store fleet.Termi
 		return fleet.RuntimeReport{}, err
 	}
 	endpoint.Status.HostClass = prepared.HostClass
-	return runBundle(ctx, run, store, []agentEndpoint{endpoint})
+	return runBundleWithOptions(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
+		PlanBuilder: fleet.BuildSingleAgentSequentialPlan,
+	})
 }
 
 func selectGenericPrepareEndpoint(generic fleet.GenericRun, endpoints []agentEndpoint) (agentEndpoint, error) {
 	if err := generic.Validate(); err != nil {
 		return agentEndpoint{}, err
 	}
+	requiredCapacity := fleet.RequiredInFlightSlots(generic.Children.Count, generic.Execution)
 	bestCapacity := 0
 	healthy := false
 	for _, endpoint := range endpoints {
@@ -262,14 +269,14 @@ func selectGenericPrepareEndpoint(generic fleet.GenericRun, endpoints []agentEnd
 		if capacity > bestCapacity {
 			bestCapacity = capacity
 		}
-		if capacity >= generic.Children.Count {
+		if capacity >= requiredCapacity {
 			return endpoint, nil
 		}
 	}
 	if !healthy {
 		return agentEndpoint{}, fleet.ErrNoCompatibleAgents
 	}
-	return agentEndpoint{}, fmt.Errorf("%w: generic run needs %d slots on one preparing agent while bundle URI is local, have %d", fleet.ErrInsufficientCapacity, generic.Children.Count, bestCapacity)
+	return agentEndpoint{}, fmt.Errorf("%w: generic run needs %d in-flight slots on one preparing agent while bundle URI is local, have %d", fleet.ErrInsufficientCapacity, requiredCapacity, bestCapacity)
 }
 
 func envString(name, fallback string) string {

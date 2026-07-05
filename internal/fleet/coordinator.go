@@ -25,6 +25,17 @@ type candidateAgent struct {
 	remaining int
 }
 
+// RequiredInFlightSlots returns the child slots needed to run a lease without
+// exceeding the run's shard and per-agent concurrency limits.
+func RequiredInFlightSlots(childCount int, execution Execution) int {
+	return min(childCount, execution.ChildrenPerShard, execution.MaxInFlightPerAgent)
+}
+
+// ShardSlotDemand returns the execution slots a lease can consume at once.
+func ShardSlotDemand(run Run, lease ShardLease) int {
+	return RequiredInFlightSlots(lease.ChildCount, run.Execution)
+}
+
 // DeriveShardRanges expands a run into non-overlapping global child ranges.
 func DeriveShardRanges(run Run) ([]ChildRange, error) {
 	if err := run.Validate(); err != nil {
@@ -49,12 +60,7 @@ func BuildDryRunPlan(run Run, agents []AgentStatus, opts DryRunOptions) (Plan, e
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
 	}
-	if opts.Now.IsZero() {
-		opts.Now = time.Now().UTC()
-	}
-	if opts.LeaseTTL <= 0 {
-		opts.LeaseTTL = 10 * time.Minute
-	}
+	opts = normalizeDryRunOptions(opts)
 
 	ranges, err := DeriveShardRanges(run)
 	if err != nil {
@@ -112,6 +118,56 @@ func BuildDryRunPlan(run Run, agents []AgentStatus, opts DryRunOptions) (Plan, e
 	}
 	summary.State = "planned"
 	return Plan{Summary: summary, Leases: leases}, nil
+}
+
+// BuildSingleAgentSequentialPlan assigns an entire run to one compatible agent.
+//
+// This is used for local generic runs where the prepared bundle only exists on
+// the preparing agent. The lease may cover more children than the agent can run
+// concurrently; execution remains bounded by RequiredInFlightSlots.
+func BuildSingleAgentSequentialPlan(run Run, agents []AgentStatus, opts DryRunOptions) (Plan, error) {
+	if err := run.Validate(); err != nil {
+		return Plan{}, err
+	}
+	opts = normalizeDryRunOptions(opts)
+
+	candidates, summary, err := candidateAgents(run, agents)
+	summary.RunID = run.RunID
+	summary.State = "refused"
+	summary.ChildCount = run.Children.Count
+	summary.ShardCount = 1
+	if err != nil {
+		return Plan{Summary: summary}, err
+	}
+
+	required := RequiredInFlightSlots(run.Children.Count, run.Execution)
+	candidateIndex := firstCandidateWithCapacity(candidates, required)
+	if candidateIndex < 0 {
+		return Plan{Summary: summary}, fmt.Errorf(
+			"%w: need %d compatible in-flight child slots on one agent, have %d",
+			ErrInsufficientCapacity,
+			required,
+			bestCandidateCapacity(candidates),
+		)
+	}
+
+	candidate := candidates[candidateIndex]
+	lease := ShardLease{
+		RunID:         run.RunID,
+		BundleDigest:  run.Bundle.Digest,
+		ShardID:       fmt.Sprintf("%s-shard-%04d", run.RunID, 0),
+		ChildStart:    run.Children.Start,
+		ChildCount:    run.Children.Count,
+		AttemptBudget: run.RetryPolicy.MaxAttemptsPerChild,
+		HostClassID:   run.HostClass.ID,
+		AgentID:       candidate.status.AgentID,
+		LeaseDeadline: opts.Now.Add(opts.LeaseTTL).UTC(),
+	}
+
+	summary.AssignedShards = 1
+	summary.AssignedChildren = run.Children.Count
+	summary.State = "planned"
+	return Plan{Summary: summary, Leases: []ShardLease{lease}}, nil
 }
 
 // ValidateCompleteCoverage checks that shard leases exactly cover the run.
@@ -191,4 +247,24 @@ func firstCandidateWithCapacity(candidates []candidateAgent, required int) int {
 		}
 	}
 	return -1
+}
+
+func bestCandidateCapacity(candidates []candidateAgent) int {
+	best := 0
+	for _, candidate := range candidates {
+		if candidate.remaining > best {
+			best = candidate.remaining
+		}
+	}
+	return best
+}
+
+func normalizeDryRunOptions(opts DryRunOptions) DryRunOptions {
+	if opts.Now.IsZero() {
+		opts.Now = time.Now().UTC()
+	}
+	if opts.LeaseTTL <= 0 {
+		opts.LeaseTTL = 10 * time.Minute
+	}
+	return opts
 }

@@ -60,6 +60,43 @@ func TestRunCoordinatorGenericRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	}
 }
 
+func TestRunCoordinatorGenericRunExecutesSingleAgentSequentially(t *testing.T) {
+	generic := testGenericRun()
+	generic.Fork.Count = 2
+	generic.Children.Count = 2
+	generic.Execution.ChildrenPerShard = 1
+	generic.Execution.MaxInFlightPerAgent = 1
+	runPath := writeJSONFile(t, generic)
+	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 2}
+	server := newTestAgentServer(t, spore, 1)
+
+	var stdout bytes.Buffer
+	err := runCoordinator(context.Background(), coordinatorConfig{
+		GenericRunPath:  runPath,
+		ResultStoreRoot: t.TempDir(),
+		Timeout:         time.Minute,
+		AgentURLs:       agentURLsFlag{server.URL},
+		HTTPClient:      server.Client(),
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("runCoordinator: %v\nstdout=%s", err, stdout.String())
+	}
+
+	var report fleet.RuntimeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 2 {
+		t.Fatalf("summary = %+v", report.Summary)
+	}
+	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].ChildCount != 2 {
+		t.Fatalf("leases = %+v", report.Plan.Leases)
+	}
+	if got := len(spore.pullRequests()); got != 2 {
+		t.Fatalf("pull count = %d, want 2", got)
+	}
+}
+
 func TestRunCoordinatorGenericRunReturnsErrorForFailedRuntimeReport(t *testing.T) {
 	generic := testGenericRun()
 	runPath := writeJSONFile(t, generic)
@@ -94,6 +131,8 @@ func TestRunCoordinatorGenericRunCapacityErrorDoesNotWriteEmptyReport(t *testing
 	generic := testGenericRun()
 	generic.Fork.Count = 2
 	generic.Children.Count = 2
+	generic.Execution.ChildrenPerShard = 2
+	generic.Execution.MaxInFlightPerAgent = 2
 	runPath := writeJSONFile(t, generic)
 	server := newTestAgentServer(t, &fakeSporeClient{digest: testBundleDigest, childCount: 2}, 1)
 
@@ -113,16 +152,36 @@ func TestRunCoordinatorGenericRunCapacityErrorDoesNotWriteEmptyReport(t *testing
 	}
 }
 
-func TestSelectGenericPrepareEndpointRequiresSingleAgentCapacity(t *testing.T) {
+func TestSelectGenericPrepareEndpointRequiresSingleAgentInFlightCapacity(t *testing.T) {
 	generic := testGenericRun()
 	generic.Children.Count = 2
 	generic.Fork.Count = 2
+	generic.Execution.ChildrenPerShard = 2
+	generic.Execution.MaxInFlightPerAgent = 2
 	endpoint := agentEndpoint{Status: testAgentStatus()}
 	endpoint.Status.ExecutionSlots.Available = 1
 
 	_, err := selectGenericPrepareEndpoint(generic, []agentEndpoint{endpoint})
 	if !errors.Is(err, fleet.ErrInsufficientCapacity) {
 		t.Fatalf("selectGenericPrepareEndpoint error = %v, want ErrInsufficientCapacity", err)
+	}
+}
+
+func TestSelectGenericPrepareEndpointAllowsSequentialCapacity(t *testing.T) {
+	generic := testGenericRun()
+	generic.Children.Count = 2
+	generic.Fork.Count = 2
+	generic.Execution.ChildrenPerShard = 1
+	generic.Execution.MaxInFlightPerAgent = 1
+	endpoint := agentEndpoint{Status: testAgentStatus()}
+	endpoint.Status.ExecutionSlots.Available = 1
+
+	selected, err := selectGenericPrepareEndpoint(generic, []agentEndpoint{endpoint})
+	if err != nil {
+		t.Fatalf("selectGenericPrepareEndpoint: %v", err)
+	}
+	if selected.Status.AgentID != endpoint.Status.AgentID {
+		t.Fatalf("selected agent = %q, want %q", selected.Status.AgentID, endpoint.Status.AgentID)
 	}
 }
 

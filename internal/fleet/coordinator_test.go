@@ -85,6 +85,57 @@ func TestBuildDryRunPlanAssigns1000Children(t *testing.T) {
 	}
 }
 
+func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
+	run := loadExampleRun(t)
+	agents := makeAgents(t, 1, 100, run.HostClass)
+	now := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
+
+	plan, err := BuildSingleAgentSequentialPlan(run, agents, DryRunOptions{
+		Now:      now,
+		LeaseTTL: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("BuildSingleAgentSequentialPlan: %v", err)
+	}
+
+	if plan.Summary.ShardCount != 1 || len(plan.Leases) != 1 {
+		t.Fatalf("shards = summary %d leases %d, want 1", plan.Summary.ShardCount, len(plan.Leases))
+	}
+	if plan.Summary.AvailableChildSlots != 100 {
+		t.Fatalf("available slots = %d, want 100", plan.Summary.AvailableChildSlots)
+	}
+	if plan.Summary.AssignedChildren != 1000 {
+		t.Fatalf("assigned children = %d, want 1000", plan.Summary.AssignedChildren)
+	}
+	if err := ValidateCompleteCoverage(run, plan.Leases); err != nil {
+		t.Fatalf("ValidateCompleteCoverage: %v", err)
+	}
+
+	lease := plan.Leases[0]
+	if lease.AgentID != agents[0].AgentID {
+		t.Fatalf("lease agent = %q, want %q", lease.AgentID, agents[0].AgentID)
+	}
+	if lease.ChildStart != 0 || lease.ChildCount != 1000 {
+		t.Fatalf("lease range = [%d, %d), want [0, 1000)", lease.ChildStart, lease.ChildStart+lease.ChildCount)
+	}
+	if !lease.LeaseDeadline.Equal(now.Add(10 * time.Minute)) {
+		t.Fatalf("lease deadline = %s", lease.LeaseDeadline)
+	}
+}
+
+func TestBuildSingleAgentSequentialPlanRejectsInsufficientInFlightCapacity(t *testing.T) {
+	run := loadExampleRun(t)
+	agents := makeAgents(t, 1, 99, run.HostClass)
+
+	plan, err := BuildSingleAgentSequentialPlan(run, agents, DryRunOptions{})
+	if !errors.Is(err, ErrInsufficientCapacity) {
+		t.Fatalf("BuildSingleAgentSequentialPlan error = %v, want ErrInsufficientCapacity", err)
+	}
+	if plan.Summary.State != "refused" {
+		t.Fatalf("summary state = %q, want refused", plan.Summary.State)
+	}
+}
+
 func TestBuildDryRunPlanRejectsInsufficientCapacity(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 9, 100, run.HostClass)
