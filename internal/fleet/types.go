@@ -68,6 +68,7 @@ type PrepareSpec struct {
 	Command       []string `json:"command"`
 	CaptureSignal string   `json:"captureSignal,omitempty"`
 	ReadyMarker   string   `json:"readyMarker,omitempty"`
+	Memory        string   `json:"memory,omitempty"`
 }
 
 // ForkSpec describes how many children are forked from the prepared parent.

@@ -202,6 +202,7 @@ exit 2
 		CaptureSignal: "USR1",
 		ReadyMarker:   "SPOREVM_RAILS_READY",
 		Backend:       "kvm",
+		Memory:        "512mb",
 		Command:       []string{"/bin/bash", "/usr/local/bin/sporevm-rails-coordinator"},
 	})
 	if err != nil {
@@ -216,7 +217,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "run --events=jsonl --backend kvm --image example.com/sporevm/rails-rspec:sha-1111111 --capture /work/parent.spore --capture-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
+	want := "run --events=jsonl --backend kvm --memory 512mb --image example.com/sporevm/rails-rspec:sha-1111111 --capture /work/parent.spore --capture-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}

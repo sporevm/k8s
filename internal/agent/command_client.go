@@ -86,6 +86,9 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
+	if req.Memory != "" {
+		args = append(args, "--memory", req.Memory)
+	}
 	args = append(args, "--image", req.Image, "--capture", req.CaptureDir)
 	if req.CaptureSignal != "" {
 		args = append(args, "--capture-on", req.CaptureSignal)

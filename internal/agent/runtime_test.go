@@ -154,6 +154,7 @@ func TestRunnerStatusReportsHostClassAndSlots(t *testing.T) {
 
 func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	generic := testGenericRun()
+	generic.Prepare.Memory = "512mb"
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
 		hostInfo: validHostInfo(),
@@ -207,7 +208,7 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	}
 	capture := runCaptures[0]
 	wantParent := filepath.Join(workRoot, generic.RunID, "prepare", "parent.spore")
-	if capture.Image != generic.Source.Image || capture.CaptureDir != wantParent || capture.CaptureSignal != "USR1" || capture.ReadyMarker != "SPOREVM_RAILS_READY" {
+	if capture.Image != generic.Source.Image || capture.CaptureDir != wantParent || capture.CaptureSignal != "USR1" || capture.ReadyMarker != "SPOREVM_RAILS_READY" || capture.Memory != "512mb" {
 		t.Fatalf("run capture request = %+v", capture)
 	}
 	if got, want := capture.Command, generic.Prepare.Command; !equalStrings(got, want) {

@@ -13,6 +13,7 @@ class ContractError(ValueError):
 
 DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
+MEMORY_RE = re.compile(r"^[A-Za-z0-9]+$")
 HOST_CLASS_FIELDS = {
     "id",
     "sporePlatformVersion",
@@ -168,7 +169,7 @@ def validate_command_spec(command_spec: Any, path: str, allow_capture: bool = Fa
     require_keys(spec, {"command"}, path)
     allowed = {"command"}
     if allow_capture:
-        allowed |= {"captureSignal", "readyMarker"}
+        allowed |= {"captureSignal", "readyMarker", "memory"}
     extra = sorted(set(spec.keys()) - allowed)
     if extra:
         raise ContractError(f"{path} has unsupported keys: {', '.join(extra)}")
@@ -180,6 +181,9 @@ def validate_command_spec(command_spec: Any, path: str, allow_capture: bool = Fa
             raise ContractError(f"{path}.command[{i}] must not be empty")
     if not allow_capture:
         return
+    memory = spec.get("memory")
+    if memory is not None and (not isinstance(memory, str) or not MEMORY_RE.fullmatch(memory)):
+        raise ContractError(f"{path}.memory must be a SporeVM memory value like 512mb, 2gb, or auto")
     capture_signal = spec.get("captureSignal")
     ready_marker = spec.get("readyMarker")
     if capture_signal is None and ready_marker is None:

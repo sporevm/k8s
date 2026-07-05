@@ -11,7 +11,8 @@
       "trap '' USR1; echo SPOREVM_BUSYBOX_READY; sleep 5"
     ],
     "captureSignal": "USR1",
-    "readyMarker": "SPOREVM_BUSYBOX_READY"
+    "readyMarker": "SPOREVM_BUSYBOX_READY",
+    "memory": "512mb"
   },
   "fork": {
     "count": 1

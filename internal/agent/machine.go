@@ -303,6 +303,7 @@ type RunCaptureRequest struct {
 	CaptureSignal string
 	ReadyMarker   string
 	Backend       string
+	Memory        string
 	Command       []string
 }
 

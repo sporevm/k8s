@@ -112,6 +112,19 @@ func TestGenericRunRejectsUnsupportedCaptureSignal(t *testing.T) {
 	}
 }
 
+func TestGenericRunRejectsInvalidPrepareMemory(t *testing.T) {
+	run := loadGenericRunExample(t)
+	run.Prepare.Memory = "512 mb"
+
+	err := run.Validate()
+	if err == nil {
+		t.Fatal("Validate succeeded with invalid prepare memory")
+	}
+	if !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("Validate error = %v, want ErrInvalidContract", err)
+	}
+}
+
 func TestGenericRunRejectsMissingResultStore(t *testing.T) {
 	run := loadGenericRunExample(t)
 	run.ResultStore = ""

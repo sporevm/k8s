@@ -14,6 +14,7 @@ import (
 var (
 	idPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,127}$`)
 	digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	memoryPattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
 
 	// ErrInvalidContract identifies invalid fleet contract documents.
 	ErrInvalidContract = errors.New("invalid fleet contract")
@@ -127,6 +128,9 @@ func (c CommandSpec) Validate(path string) error {
 func (p PrepareSpec) Validate(path string) error {
 	if err := (CommandSpec{Command: p.Command}).Validate(path); err != nil {
 		return err
+	}
+	if p.Memory != "" && !memoryPattern.MatchString(p.Memory) {
+		return contractError("%s.memory must be a SporeVM memory value like 512mb, 2gb, or auto", path)
 	}
 	if p.CaptureSignal == "" && p.ReadyMarker == "" {
 		return nil

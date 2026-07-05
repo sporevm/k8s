@@ -91,6 +91,7 @@ prepare:
     - "2"
   captureSignal: USR1
   readyMarker: SPOREVM_RAILS_READY
+  memory: 2gb
 fork:
   count: 1000
 children:
@@ -296,6 +297,9 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   `childCommand`, and the agent executes it through a named child resume plus
   `spore exec` when present. A live one-child busybox smoke now verifies this
   path through `sporectl submit`, including child stdout and generation identity.
+- Generic runs can set `prepare.memory`, which is passed to `spore run --memory`
+  before capture so small fan-out smokes do not inherit an oversized default
+  guest memory budget.
 - Per-child terminal results now include bounded stdout/stderr previews and
   complete output byte counts from SporeVM JSONL output events.
 - The coordinator now maps aggregate report state to process exit status, so a

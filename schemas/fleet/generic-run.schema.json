@@ -196,6 +196,10 @@
         "readyMarker": {
           "type": "string",
           "minLength": 1
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]+$"
         }
       }
     }

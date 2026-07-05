@@ -330,6 +330,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 		CaptureSignal: req.Run.Prepare.CaptureSignal,
 		ReadyMarker:   req.Run.Prepare.ReadyMarker,
 		Backend:       backend,
+		Memory:        req.Run.Prepare.Memory,
 		Command:       req.Run.Prepare.Command,
 	})
 	if err != nil {
