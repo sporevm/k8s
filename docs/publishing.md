@@ -19,6 +19,12 @@ git@github.com:sporevm/k8s.git
 
 ## Runtime Image
 
+Current public release:
+
+```text
+ghcr.io/sporevm/k8s-runtime:0.1.0
+```
+
 Public runtime images should publish to GHCR:
 
 ```bash
@@ -34,6 +40,10 @@ runtime images and Helm charts on matching `v*` tags. Set
 ## Helm Chart
 
 The chart is published as an OCI artifact under GHCR:
+
+```text
+oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.0
+```
 
 ```bash
 helm registry login ghcr.io

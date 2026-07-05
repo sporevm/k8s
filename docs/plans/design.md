@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-05
+last_reviewed: 2026-07-06
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -250,7 +250,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   `sporectl submit`, schemas, examples, chart, and fleet contract code.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
-  Helm chart to GHCR. No public release tag has been cut yet.
+  Helm chart to GHCR.
+- Public release `v0.1.0` has been cut and published. Anonymous GHCR reads now
+  verify `ghcr.io/sporevm/k8s-runtime:0.1.0` and
+  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.0`.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
   access, and finite SporeVM/KVM runs on compatible Kubernetes nodes.
@@ -449,7 +452,7 @@ Done when:
 - Live Rails/RSpec sharded generic smoke through `sporectl submit` against the
   cluster-local registry image and the pinned SporeVM release runtime.
 - Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
-  and tag-gated GHCR image/chart publishing.
+  and tag-gated GHCR image/chart publishing is done for `v0.1.0`.
 
 ## Resolved Decisions
 
