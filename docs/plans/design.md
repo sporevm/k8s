@@ -263,9 +263,9 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
   Helm chart to GHCR.
-- Public release `v0.1.0` has been cut and published. Anonymous GHCR reads now
-  verify `ghcr.io/sporevm/k8s-runtime:0.1.0` and
-  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.0`.
+- Public release `v0.1.1` has been cut and published. Anonymous GHCR reads now
+  verify `ghcr.io/sporevm/k8s-runtime:0.1.1` and
+  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.1`.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
@@ -467,7 +467,7 @@ Done when:
 - Live Rails/RSpec sharded generic smoke through `sporectl submit` against the
   cluster-local registry image and the pinned SporeVM release runtime.
 - Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
-  and tag-gated GHCR image/chart publishing is done for `v0.1.0`.
+  and tag-gated GHCR image/chart publishing is done for `v0.1.1`.
 
 ## Resolved Decisions
 
