@@ -254,6 +254,7 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - Public release `v0.1.0` has been cut and published. Anonymous GHCR reads now
   verify `ghcr.io/sporevm/k8s-runtime:0.1.0` and
   `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.0`.
+- The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
   access, and finite SporeVM/KVM runs on compatible Kubernetes nodes.
@@ -467,6 +468,7 @@ Done when:
   publishing the prepared bundle first.
 - Public runtime images publish to GHCR; private environments can override the
   image repository from their ops values.
+- The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - `spore-coordinator` treats an aggregate runtime report with
   `state != succeeded` as a failed run even when the container reached the end
   of its process.
