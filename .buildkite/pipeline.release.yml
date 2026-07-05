@@ -13,10 +13,14 @@ steps:
 
       version="$${BUILDKITE_TAG#v}"
       chart_version="$(sed -n 's/^version: //p' charts/sporevm-k8s/Chart.yaml)"
-      test "$$version" = "$$chart_version"
+      if [ "$$version" != "$$chart_version" ]; then
+        echo "Chart version $$chart_version does not match tag $$BUILDKITE_TAG" >&2
+        exit 1
+      fi
 
-      echo "$$SPOREVM_K8S_GITHUB_TOKEN" | docker login ghcr.io --username sporevm --password-stdin
-      echo "$$SPOREVM_K8S_GITHUB_TOKEN" | helm registry login ghcr.io --username sporevm --password-stdin
+      ghcr_user="$${SPOREVM_K8S_GITHUB_USER:-sporevm}"
+      echo "$$SPOREVM_K8S_GITHUB_TOKEN" | docker login ghcr.io --username "$$ghcr_user" --password-stdin
+      echo "$$SPOREVM_K8S_GITHUB_TOKEN" | helm registry login ghcr.io --username "$$ghcr_user" --password-stdin
 
       export SPOREVM_K8S_RUNTIME_IMAGE="ghcr.io/sporevm/k8s-runtime:$$version"
       mise run runtime:image:push

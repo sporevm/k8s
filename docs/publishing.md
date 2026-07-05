@@ -1,14 +1,7 @@
 # Publishing
 
-Target public repository:
-
-```bash
-git@github.com:sporevm/k8s.git
-```
-
 Do not store private environment values here. Runtime image tags, chart values,
-and cluster-specific overlays for private deployments belong in
-`/Users/lachlan/Develop/spore-ops`.
+and cluster-specific overlays for private deployments belong in ops.
 
 Before publishing:
 
@@ -18,12 +11,10 @@ mise run public:leak-scan
 helm lint charts/sporevm-k8s
 ```
 
-When the GitHub repository is created, add the remote and push only after
-explicit approval:
+The public repository is:
 
 ```bash
-git remote add origin git@github.com:sporevm/k8s.git
-git push -u origin main
+git@github.com:sporevm/k8s.git
 ```
 
 ## Runtime Image
@@ -35,8 +26,10 @@ export SPOREVM_K8S_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:0.1.0
 mise run runtime:image:push
 ```
 
-Buildkite reads `SPOREVM_K8S_GITHUB_TOKEN` from the hosted cluster secrets and
-publishes runtime images and Helm charts on `v*` tags.
+Buildkite reads `SPOREVM_K8S_GITHUB_TOKEN` from its secret store and publishes
+runtime images and Helm charts on matching `v*` tags. Set
+`SPOREVM_K8S_GITHUB_USER` only when the token must log in as a user other than
+`sporevm`.
 
 ## Helm Chart
 
