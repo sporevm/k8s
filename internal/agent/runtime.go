@@ -46,6 +46,7 @@ type SporeClient interface {
 	HostInfo(context.Context) (HostInfo, error)
 	InspectBundle(context.Context, InspectBundleRequest) (InspectBundleResult, error)
 	RunCapture(context.Context, RunCaptureRequest) ([]RunEvent, error)
+	CreateVM(context.Context, CreateVMRequest) error
 	Fork(context.Context, ForkRequest) error
 	Pack(context.Context, PackRequest) error
 	Pull(context.Context, PullRequest) (PullResult, error)

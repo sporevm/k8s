@@ -903,6 +903,7 @@ type fakeSporeClient struct {
 	hostInfo    HostInfo
 	inspectFunc func(context.Context, InspectBundleRequest) (InspectBundleResult, error)
 	runFunc     func(context.Context, RunCaptureRequest) ([]RunEvent, error)
+	createFunc  func(context.Context, CreateVMRequest) error
 	forkFunc    func(context.Context, ForkRequest) error
 	packFunc    func(context.Context, PackRequest) error
 	pullFunc    func(context.Context, PullRequest) (PullResult, error)
@@ -910,6 +911,7 @@ type fakeSporeClient struct {
 	execFunc    func(context.Context, ExecRequest) ([]RunEvent, error)
 	removeFunc  func(context.Context, RemoveVMRequest) error
 	runCaptures []RunCaptureRequest
+	creates     []CreateVMRequest
 	forks       []ForkRequest
 	packs       []PackRequest
 	pulls       []PullRequest
@@ -938,6 +940,16 @@ func (c *fakeSporeClient) RunCapture(ctx context.Context, req RunCaptureRequest)
 		return []RunEvent{captureExitEvent(req.CaptureDir)}, nil
 	}
 	return c.runFunc(ctx, req)
+}
+
+func (c *fakeSporeClient) CreateVM(ctx context.Context, req CreateVMRequest) error {
+	c.mu.Lock()
+	c.creates = append(c.creates, req)
+	c.mu.Unlock()
+	if c.createFunc == nil {
+		return nil
+	}
+	return c.createFunc(ctx, req)
 }
 
 func (c *fakeSporeClient) Fork(ctx context.Context, req ForkRequest) error {

@@ -43,6 +43,9 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /inspect-run-bundle", s.handleInspectRunBundle)
 	mux.HandleFunc("POST /prepare-bundle", s.handlePrepareBundle)
 	mux.HandleFunc("POST /run-shard", s.handleRunShard)
+	mux.HandleFunc("POST /hot-vms", s.handleCreateHotVM)
+	mux.HandleFunc("POST /hot-vms/{name}/exec", s.handleExecHotVM)
+	mux.HandleFunc("DELETE /hot-vms/{name}", s.handleDeleteHotVM)
 	return mux, nil
 }
 
@@ -149,6 +152,43 @@ func (s *Server) handleRunShard(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("run-shard complete run_id=%s shard_id=%s results=%d duration=%s", req.Run.RunID, req.Lease.ShardID, resultCount, time.Since(start))
 	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) handleCreateHotVM(w http.ResponseWriter, r *http.Request) {
+	var req agent.CreateVMRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Backend == "" {
+		req.Backend = s.backend()
+	}
+	if err := s.Client.CreateVM(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name})
+}
+
+func (s *Server) handleExecHotVM(w http.ResponseWriter, r *http.Request) {
+	req := agent.ExecRequest{Name: r.PathValue("name")}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.Name = r.PathValue("name")
+	events, err := s.Client.Exec(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) handleDeleteHotVM(w http.ResponseWriter, r *http.Request) {
+	if err := s.Client.RemoveVM(r.Context(), agent.RemoveVMRequest{Name: r.PathValue("name")}); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": r.PathValue("name")})
 }
 
 func shardResultCount(results []fleet.AttemptResult) int {

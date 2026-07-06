@@ -98,6 +98,64 @@ func TestCoordinatorAPIExecutesGenericRun(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAPIProxiesHotVM(t *testing.T) {
+	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
+	agentServer := newTestAgentServer(t, spore, 1)
+	handler, err := coordinatorHandler(coordinatorConfig{
+		ResultStoreRoot: t.TempDir(),
+		Timeout:         time.Minute,
+		AgentURLs:       agentURLsFlag{agentServer.URL},
+		HTTPClient:      agentServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("coordinatorHandler: %v", err)
+	}
+
+	createPayload, err := json.Marshal(agent.CreateVMRequest{
+		Name:    "sporevm-hot-node",
+		Image:   "docker.io/library/node:22-bookworm-slim",
+		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
+	})
+	if err != nil {
+		t.Fatalf("marshal create request: %v", err)
+	}
+	createReq := httptest.NewRequest(http.MethodPost, "/hot-vms", bytes.NewReader(createPayload))
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	execPayload, err := json.Marshal(agent.ExecRequest{Command: []string{"/bin/sh", "-lc", "node -v"}})
+	if err != nil {
+		t.Fatalf("marshal exec request: %v", err)
+	}
+	execReq := httptest.NewRequest(http.MethodPost, "/hot-vms/sporevm-hot-node/exec", bytes.NewReader(execPayload))
+	execRec := httptest.NewRecorder()
+	handler.ServeHTTP(execRec, execReq)
+	if execRec.Code != http.StatusOK {
+		t.Fatalf("exec status = %d, body=%s", execRec.Code, execRec.Body.String())
+	}
+	var events []agent.RunEvent
+	if err := json.Unmarshal(execRec.Body.Bytes(), &events); err != nil {
+		t.Fatalf("decode exec events: %v", err)
+	}
+	terminal, err := agent.TerminalEvent(events)
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if terminal.ExitCode == nil || *terminal.ExitCode != 0 {
+		t.Fatalf("terminal = %+v", terminal)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/hot-vms/sporevm-hot-node", nil)
+	deleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
 func TestRunCoordinatorGenericRunExecutesSingleAgentSequentially(t *testing.T) {
 	generic := testGenericRun()
 	generic.Fork.Count = 2
@@ -220,6 +278,33 @@ func TestSelectGenericPrepareEndpointAllowsSequentialCapacity(t *testing.T) {
 	}
 	if selected.Status.AgentID != endpoint.Status.AgentID {
 		t.Fatalf("selected agent = %q, want %q", selected.Status.AgentID, endpoint.Status.AgentID)
+	}
+}
+
+func TestSelectHotEndpointRequiresSingleCompatibleAgent(t *testing.T) {
+	first := agentEndpoint{Status: testAgentStatus()}
+	first.Status.AgentID = "spore-agent-test-0001"
+	second := agentEndpoint{Status: testAgentStatus()}
+	second.Status.AgentID = "spore-agent-test-0002"
+
+	first.Status.Pressure.Disk = fleet.PressureCritical
+	selected, err := selectHotEndpoint([]agentEndpoint{first, second})
+	if err != nil {
+		t.Fatalf("selectHotEndpoint: %v", err)
+	}
+	if selected.Status.AgentID != second.Status.AgentID {
+		t.Fatalf("selected pressured agent %q, want %q", selected.Status.AgentID, second.Status.AgentID)
+	}
+
+	first.Status.Pressure.Disk = fleet.PressureNormal
+	if _, err := selectHotEndpoint([]agentEndpoint{first, second}); err == nil {
+		t.Fatal("selectHotEndpoint with two compatible agents succeeded")
+	}
+
+	first.Status.Healthy = false
+	second.Status.Healthy = false
+	if _, err := selectHotEndpoint([]agentEndpoint{first, second}); !errors.Is(err, fleet.ErrNoCompatibleAgents) {
+		t.Fatalf("selectHotEndpoint error = %v, want ErrNoCompatibleAgents", err)
 	}
 }
 
@@ -369,6 +454,10 @@ func (c *fakeSporeClient) RunCapture(_ context.Context, req agent.RunCaptureRequ
 		Captured:      true,
 		CapturePath:   &path,
 	}}, nil
+}
+
+func (c *fakeSporeClient) CreateVM(context.Context, agent.CreateVMRequest) error {
+	return nil
 }
 
 func (c *fakeSporeClient) Fork(context.Context, agent.ForkRequest) error {

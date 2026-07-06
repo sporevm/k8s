@@ -17,6 +17,13 @@ provider or SDK shim before the measurements are useful.
 Use the resident API path for TTI measurements. The `sporectl submit` fallback
 is only a smoke path because it creates a Kubernetes Job per iteration.
 
+The `--hot-vm` mode is a lower-level diagnostic. It creates one named VM before
+the measured loop, runs `node -v` in that VM for each iteration, and deletes the
+VM at the end. Use it to separate resident API plus `spore exec` overhead from
+prepare, fork, pull, resume, and result-reporting costs. It is not a
+per-request isolation benchmark. The coordinator only enables this path when it
+sees exactly one compatible agent, because named VM state is local to one agent.
+
 The shortest development loop does not need a runtime image release. Run the
 coordinator API locally and port-forward to the in-cluster agent:
 
@@ -32,6 +39,16 @@ go run ./cmd/spore-coordinator \
 ```bash
 python3 scripts/computesdk_sporevm_benchmark.py \
   --api-url http://127.0.0.1:18080 \
+  --iterations 10 \
+  --out-dir results/sequential_tti
+```
+
+To measure the hot-VM exec floor:
+
+```bash
+python3 scripts/computesdk_sporevm_benchmark.py \
+  --api-url http://127.0.0.1:18080 \
+  --hot-vm \
   --iterations 10 \
   --out-dir results/sequential_tti
 ```

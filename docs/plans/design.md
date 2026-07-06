@@ -448,6 +448,15 @@ Done when:
 - a ComputeSDK-shaped sequential TTI benchmark can run against the live cell.
 - the same benchmark can target the resident API path without creating a
   Kubernetes Job per iteration.
+- a hot-VM diagnostic path can measure resident API plus `spore exec` overhead
+  separately from prepare, fork, pull, resume, and result-reporting costs.
+
+Current live finding: the resident API removes Kubernetes Job startup from the
+hot path, but one isolated Node child is still dominated by SporeVM
+prepare/fork/resume work. A reusable named VM shows the API plus exec floor can
+be sub-second, but it is not per-request isolation. The next isolated TTI step
+is either disk-backed named live fork support in SporeVM or an explicit child
+pool that preserves the public contract.
 
 ### Slice 7: Optional Kubernetes UX
 

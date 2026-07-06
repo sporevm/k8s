@@ -118,6 +118,9 @@ func coordinatorHandler(cfg coordinatorConfig) (http.Handler, error) {
 	mux.HandleFunc("GET /healthz", api.handleHealthz)
 	mux.HandleFunc("GET /readyz", api.handleReadyz)
 	mux.HandleFunc("POST /generic-runs", api.handleGenericRun)
+	mux.HandleFunc("POST /hot-vms", api.handleCreateHotVM)
+	mux.HandleFunc("POST /hot-vms/{name}/exec", api.handleExecHotVM)
+	mux.HandleFunc("DELETE /hot-vms/{name}", api.handleDeleteHotVM)
 	return mux, nil
 }
 
@@ -169,6 +172,87 @@ func (a coordinatorAPI) handleGenericRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeResponseJSON(w, http.StatusOK, report)
+}
+
+func (a coordinatorAPI) handleCreateHotVM(w http.ResponseWriter, r *http.Request) {
+	var create agent.CreateVMRequest
+	if !decodeRequestJSON(w, r, &create) {
+		return
+	}
+	endpoint, ok := a.hotEndpoint(w, r, create.Name)
+	if !ok {
+		return
+	}
+	if err := endpoint.Client.CreateVM(r.Context(), create); err != nil {
+		writeHTTPError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeResponseJSON(w, http.StatusOK, map[string]string{"name": create.Name})
+}
+
+func (a coordinatorAPI) handleExecHotVM(w http.ResponseWriter, r *http.Request) {
+	var execReq agent.ExecRequest
+	if !decodeRequestJSON(w, r, &execReq) {
+		return
+	}
+	endpoint, ok := a.hotEndpoint(w, r, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	events, err := endpoint.Client.ExecVM(r.Context(), r.PathValue("name"), execReq.Command)
+	if err != nil {
+		writeHTTPError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeResponseJSON(w, http.StatusOK, events)
+}
+
+func (a coordinatorAPI) handleDeleteHotVM(w http.ResponseWriter, r *http.Request) {
+	endpoint, ok := a.hotEndpoint(w, r, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	if err := endpoint.Client.RemoveVM(r.Context(), r.PathValue("name")); err != nil {
+		writeHTTPError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeResponseJSON(w, http.StatusOK, map[string]string{"name": r.PathValue("name")})
+}
+
+func (a coordinatorAPI) hotEndpoint(w http.ResponseWriter, r *http.Request, name string) (agentEndpoint, bool) {
+	if name == "" {
+		writeHTTPError(w, http.StatusBadRequest, errors.New("hot VM name is required"))
+		return agentEndpoint{}, false
+	}
+	endpoints, err := discoverAgentEndpoints(r.Context(), a.cfg.AgentURLs, a.cfg.HTTPClient)
+	if err != nil {
+		writeHTTPError(w, http.StatusServiceUnavailable, err)
+		return agentEndpoint{}, false
+	}
+	endpoint, err := selectHotEndpoint(endpoints)
+	if err != nil {
+		writeHTTPError(w, http.StatusServiceUnavailable, err)
+		return agentEndpoint{}, false
+	}
+	return endpoint, true
+}
+
+func selectHotEndpoint(endpoints []agentEndpoint) (agentEndpoint, error) {
+	var selected agentEndpoint
+	compatible := 0
+	for _, endpoint := range endpoints {
+		if endpoint.Status.Healthy && !endpoint.Status.Pressure.Critical() {
+			selected = endpoint
+			compatible++
+		}
+	}
+	if compatible == 0 {
+		return agentEndpoint{}, fleet.ErrNoCompatibleAgents
+	}
+	if compatible > 1 {
+		return agentEndpoint{}, errors.New("hot VM API requires exactly one compatible agent")
+	}
+	return selected, nil
 }
 
 func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer) error {

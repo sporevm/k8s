@@ -257,6 +257,35 @@ exit 2
 	}
 }
 
+func TestCommandClientCreateVM(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "create" ]; then
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+	`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	if err := client.CreateVM(context.Background(), CreateVMRequest{
+		Name:    "sporevm-hot-node",
+		Image:   "docker.io/library/node:22-bookworm-slim",
+		Backend: "kvm",
+		Memory:  "512mb",
+		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
+	}); err != nil {
+		t.Fatalf("CreateVM: %v", err)
+	}
+
+	args := strings.TrimSpace(readFile(t, argsFile))
+	want := "create sporevm-hot-node --backend kvm --memory 512mb --image docker.io/library/node:22-bookworm-slim -- /bin/sh -lc node -v >/dev/null"
+	if args != want {
+		t.Fatalf("args = %q, want %q", args, want)
+	}
+}
+
 func TestCommandClientResumeTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
@@ -499,6 +528,9 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	}
 	if _, err := client.Exec(context.Background(), ExecRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Exec error = %v, want ErrInvalidSporeRequest", err)
+	}
+	if err := client.CreateVM(context.Background(), CreateVMRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+		t.Fatalf("CreateVM error = %v, want ErrInvalidSporeRequest", err)
 	}
 	if err := client.RemoveVM(context.Background(), RemoveVMRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("RemoveVM error = %v, want ErrInvalidSporeRequest", err)
