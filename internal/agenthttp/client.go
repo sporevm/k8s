@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sporevm/k8s/internal/agent"
 	"github.com/sporevm/k8s/internal/fleet"
 )
 
@@ -49,6 +50,31 @@ func (c Client) PrepareBundle(ctx context.Context, run fleet.GenericRun) (fleet.
 		return fleet.PreparedBundle{}, err
 	}
 	return prepared, nil
+}
+
+// CreateVM starts one named hot VM on the agent.
+func (c Client) CreateVM(ctx context.Context, req agent.CreateVMRequest) error {
+	var response struct {
+		Name string `json:"name"`
+	}
+	return c.postJSON(ctx, "/hot-vms", req, &response)
+}
+
+// ExecVM runs one command inside a named hot VM.
+func (c Client) ExecVM(ctx context.Context, name string, command []string) ([]agent.RunEvent, error) {
+	var events []agent.RunEvent
+	if err := c.postJSON(ctx, "/hot-vms/"+url.PathEscape(name)+"/exec", agent.ExecRequest{Command: command}, &events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// RemoveVM deletes one named hot VM.
+func (c Client) RemoveVM(ctx context.Context, name string) error {
+	var response struct {
+		Name string `json:"name"`
+	}
+	return c.deleteJSON(ctx, "/hot-vms/"+url.PathEscape(name), &response)
 }
 
 // RunShard executes one shard lease on the agent.
@@ -91,6 +117,18 @@ func (c Client) postJSON(ctx context.Context, path string, in any, out any) erro
 		return err
 	}
 	req.Header.Set("content-type", "application/json")
+	return c.do(req, out)
+}
+
+func (c Client) deleteJSON(ctx context.Context, path string, out any) error {
+	endpoint, err := c.endpoint(path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
 	return c.do(req, out)
 }
 

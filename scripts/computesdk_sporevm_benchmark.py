@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,60 +42,80 @@ def main() -> int:
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     iterations: list[dict[str, Any]] = []
     raw_reports: list[dict[str, Any]] = []
+    hot_vm_name = f"{args.run_prefix}-{run_stamp}-hot" if args.hot_vm else ""
 
-    with tempfile.TemporaryDirectory(prefix="sporevm-computesdk-") as tmp:
-        tmpdir = Path(tmp)
-        for index in range(args.iterations):
-            run_id = f"{args.run_prefix}-{run_stamp}-{index + 1:04d}"
-            run_doc = build_generic_run(args, run_id)
-            run_path = tmpdir / f"{run_id}.json"
-            run_path.write_text(
-                json.dumps(run_doc, indent=2) + "\n",
-                encoding="utf-8",
-            )
+    if hot_vm_name:
+        create_hot_vm(args, hot_vm_name)
 
-            print(f"[{index + 1}/{args.iterations}] {run_id}", file=sys.stderr)
-            started = time.perf_counter()
-            if args.api_url:
-                report, error = run_api(args, run_doc)
+    try:
+        with tempfile.TemporaryDirectory(prefix="sporevm-computesdk-") as tmp:
+            tmpdir = Path(tmp)
+            for index in range(args.iterations):
+                run_id = f"{args.run_prefix}-{run_stamp}-{index + 1:04d}"
+                run_doc = build_generic_run(args, run_id)
+                run_path = tmpdir / f"{run_id}.json"
+                run_path.write_text(
+                    json.dumps(run_doc, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                print(f"[{index + 1}/{args.iterations}] {run_id}", file=sys.stderr)
+                started = time.perf_counter()
+                if args.hot_vm:
+                    error = run_hot_vm_exec(args, hot_vm_name)
+                    tti_ms = (time.perf_counter() - started) * 1000
+                    if error:
+                        iterations.append({"ttiMs": 0, "error": error})
+                        print(f"  failed in {tti_ms / 1000:.2f}s", file=sys.stderr)
+                        continue
+                    iterations.append({"ttiMs": round_ms(tti_ms)})
+                    print(f"  tti={tti_ms / 1000:.2f}s", file=sys.stderr)
+                    continue
+                if args.api_url:
+                    report, error = run_api(args, run_doc)
+                    tti_ms = (time.perf_counter() - started) * 1000
+                    if error:
+                        iterations.append({"ttiMs": 0, "error": error})
+                        print(f"  failed in {tti_ms / 1000:.2f}s", file=sys.stderr)
+                        continue
+                    raw_reports.append(report)
+                    state = report.get("summary", {}).get("state")
+                    if state != "succeeded":
+                        iterations.append({"ttiMs": 0, "error": f"runtime report state={state!r}"})
+                        print(f"  state={state!r} in {tti_ms / 1000:.2f}s", file=sys.stderr)
+                        continue
+                    iterations.append({"ttiMs": round_ms(tti_ms)})
+                    print(f"  tti={tti_ms / 1000:.2f}s", file=sys.stderr)
+                    continue
+
+                completed = run_sporectl(repo, args, run_path)
                 tti_ms = (time.perf_counter() - started) * 1000
-                if error:
-                    iterations.append({"ttiMs": 0, "error": error})
+
+                if completed.returncode != 0:
+                    iterations.append({"ttiMs": 0, "error": trim_error(completed.stdout)})
                     print(f"  failed in {tti_ms / 1000:.2f}s", file=sys.stderr)
                     continue
-                raw_reports.append(report)
-                state = report.get("summary", {}).get("state")
-                if state != "succeeded":
-                    iterations.append({"ttiMs": 0, "error": f"runtime report state={state!r}"})
-                    print(f"  state={state!r} in {tti_ms / 1000:.2f}s", file=sys.stderr)
+
+                try:
+                    report = extract_runtime_report(completed.stdout)
+                    raw_reports.append(report)
+                    state = report.get("summary", {}).get("state")
+                    if state != "succeeded":
+                        iterations.append({"ttiMs": 0, "error": f"runtime report state={state!r}"})
+                        print(f"  state={state!r} in {tti_ms / 1000:.2f}s", file=sys.stderr)
+                        continue
+                except ValueError as err:
+                    iterations.append({"ttiMs": 0, "error": str(err)})
+                    print(f"  no report in {tti_ms / 1000:.2f}s", file=sys.stderr)
                     continue
+
                 iterations.append({"ttiMs": round_ms(tti_ms)})
                 print(f"  tti={tti_ms / 1000:.2f}s", file=sys.stderr)
-                continue
-
-            completed = run_sporectl(repo, args, run_path)
-            tti_ms = (time.perf_counter() - started) * 1000
-
-            if completed.returncode != 0:
-                iterations.append({"ttiMs": 0, "error": trim_error(completed.stdout)})
-                print(f"  failed in {tti_ms / 1000:.2f}s", file=sys.stderr)
-                continue
-
-            try:
-                report = extract_runtime_report(completed.stdout)
-                raw_reports.append(report)
-                state = report.get("summary", {}).get("state")
-                if state != "succeeded":
-                    iterations.append({"ttiMs": 0, "error": f"runtime report state={state!r}"})
-                    print(f"  state={state!r} in {tti_ms / 1000:.2f}s", file=sys.stderr)
-                    continue
-            except ValueError as err:
-                iterations.append({"ttiMs": 0, "error": str(err)})
-                print(f"  no report in {tti_ms / 1000:.2f}s", file=sys.stderr)
-                continue
-
-            iterations.append({"ttiMs": round_ms(tti_ms)})
-            print(f"  tti={tti_ms / 1000:.2f}s", file=sys.stderr)
+    finally:
+        if hot_vm_name:
+            error = delete_hot_vm(args, hot_vm_name)
+            if error:
+                print(f"warning: delete hot VM {hot_vm_name}: {error}", file=sys.stderr)
 
     successful = [item["ttiMs"] for item in iterations if "error" not in item]
     result = {
@@ -115,7 +136,7 @@ def main() -> int:
         "config": {
             "iterations": args.iterations,
             "timeoutMs": timeout_ms,
-            "transport": "api" if args.api_url else "sporectl",
+            "transport": "api-hot-vm" if args.hot_vm else "api" if args.api_url else "sporectl",
             "workloadImage": args.workload_image,
             "workloadCommand": "node -v",
         },
@@ -151,6 +172,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kubectl", default=os.environ.get("KUBECTL", "kubectl"))
     parser.add_argument("--sporectl", default=os.environ.get("SPORECTL", "go run ./cmd/sporectl"))
     parser.add_argument("--api-url", default=os.environ.get("SPORE_API_URL", ""))
+    parser.add_argument("--hot-vm", action="store_true")
     parser.add_argument("--coordinator-image", default=os.environ.get("SPORE_RUNTIME_IMAGE"))
     parser.add_argument("--image-pull-policy", default=os.environ.get("SPORE_IMAGE_PULL_POLICY", "IfNotPresent"))
     parser.add_argument("--timeout", default="30m")
@@ -168,6 +190,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--iterations must be >= 1")
     if args.prepare_sleep_seconds < 1:
         parser.error("--prepare-sleep-seconds must be >= 1")
+    if args.hot_vm and not args.api_url:
+        parser.error("--hot-vm requires --api-url")
     if not args.result_store_prefix.endswith("/"):
         args.result_store_prefix += "/"
     if not args.coordinator_image:
@@ -245,29 +269,75 @@ def run_sporectl(repo: Path, args: argparse.Namespace, run_path: Path) -> subpro
 
 
 def run_api(args: argparse.Namespace, run_doc: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    endpoint = args.api_url.rstrip("/") + "/generic-runs"
-    payload = json.dumps(run_doc).encode("utf-8")
+    report, error = api_json(args, "POST", "/generic-runs", run_doc)
+    if error:
+        return {}, error
+    if not isinstance(report, dict) or "plan" not in report or "summary" not in report:
+        return {}, "API response did not contain a RuntimeReport"
+    return report, ""
+
+
+def create_hot_vm(args: argparse.Namespace, name: str) -> None:
+    _, error = api_json(
+        args,
+        "POST",
+        "/hot-vms",
+        {
+            "name": name,
+            "image": args.workload_image,
+            "memory": args.memory,
+            "command": ["/bin/sh", "-lc", "node -v >/dev/null"],
+        },
+    )
+    if error:
+        raise RuntimeError(error)
+
+
+def run_hot_vm_exec(args: argparse.Namespace, name: str) -> str:
+    events, error = api_json(
+        args,
+        "POST",
+        f"/hot-vms/{urllib.parse.quote(name, safe='')}/exec",
+        {"command": ["/bin/sh", "-lc", "node -v"]},
+    )
+    if error:
+        return error
+    if not isinstance(events, list):
+        return "hot VM exec response was not an event list"
+    terminal = next((event for event in reversed(events) if isinstance(event, dict) and event.get("event") in {"exit", "failure"}), None)
+    if terminal is None:
+        return "hot VM exec response had no terminal event"
+    if terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+        return f"hot VM exec terminal={terminal!r}"
+    return ""
+
+
+def delete_hot_vm(args: argparse.Namespace, name: str) -> str:
+    _, error = api_json(args, "DELETE", f"/hot-vms/{urllib.parse.quote(name, safe='')}", None)
+    return error
+
+
+def api_json(args: argparse.Namespace, method: str, path: str, payload: Any) -> tuple[Any, str]:
+    endpoint = args.api_url.rstrip("/") + path
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
-        data=payload,
-        headers={"content-type": "application/json"},
-        method="POST",
+        data=data,
+        headers={"content-type": "application/json"} if data is not None else {},
+        method=method,
     )
     try:
         with urllib.request.urlopen(request, timeout=duration_ms(args.timeout) / 1000) as response:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as err:
         body = err.read().decode("utf-8", errors="replace")
-        return {}, trim_error(body)
+        return None, trim_error(body)
     except OSError as err:
-        return {}, str(err)
+        return None, str(err)
     try:
-        report = json.loads(body)
+        return json.loads(body), ""
     except json.JSONDecodeError as err:
-        return {}, f"API response was not JSON: {err}"
-    if not isinstance(report, dict) or "plan" not in report or "summary" not in report:
-        return {}, "API response did not contain a RuntimeReport"
-    return report, ""
+        return None, f"API response was not JSON: {err}"
 
 
 def extract_runtime_report(output: str) -> dict[str, Any]:

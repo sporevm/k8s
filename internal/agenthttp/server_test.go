@@ -108,6 +108,32 @@ func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	}
 }
 
+func TestClientServerRoundTripHotVM(t *testing.T) {
+	client := newTestHTTPClient(t, testRun())
+	ctx := context.Background()
+	if err := client.CreateVM(ctx, agent.CreateVMRequest{
+		Name:    "sporevm-hot-node",
+		Image:   "docker.io/library/node:22-bookworm-slim",
+		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
+	}); err != nil {
+		t.Fatalf("CreateVM: %v", err)
+	}
+	events, err := client.ExecVM(ctx, "sporevm-hot-node", []string{"/bin/sh", "-lc", "node -v"})
+	if err != nil {
+		t.Fatalf("ExecVM: %v", err)
+	}
+	terminal, err := agent.TerminalEvent(events)
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if terminal.ExitCode == nil || *terminal.ExitCode != 0 {
+		t.Fatalf("terminal = %+v", terminal)
+	}
+	if err := client.RemoveVM(ctx, "sporevm-hot-node"); err != nil {
+		t.Fatalf("RemoveVM: %v", err)
+	}
+}
+
 func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
 	run := testRun()
 	client := newTestHTTPClient(t, run)
@@ -281,6 +307,10 @@ func (c fakeSporeClient) RunCapture(context.Context, agent.RunCaptureRequest) ([
 		Captured:      true,
 		CapturePath:   &path,
 	}}, nil
+}
+
+func (c fakeSporeClient) CreateVM(context.Context, agent.CreateVMRequest) error {
+	return nil
 }
 
 func (c fakeSporeClient) Fork(context.Context, agent.ForkRequest) error {

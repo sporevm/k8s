@@ -114,6 +114,27 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	return events, nil
 }
 
+// CreateVM runs `spore create` for a named hot VM.
+func (c CommandClient) CreateVM(ctx context.Context, req CreateVMRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	args := []string{"create", req.Name}
+	if req.Backend != "" {
+		args = append(args, "--backend", req.Backend)
+	}
+	if req.Memory != "" {
+		args = append(args, "--memory", req.Memory)
+	}
+	args = append(args, "--image", req.Image, "--")
+	args = append(args, req.Command...)
+	_, stderr, err := c.run(ctx, args...)
+	if err != nil {
+		return commandError(err, stderr)
+	}
+	return nil
+}
+
 // Fork runs `spore fork`.
 func (c CommandClient) Fork(ctx context.Context, req ForkRequest) error {
 	if err := req.validate(); err != nil {

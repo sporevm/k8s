@@ -334,6 +334,33 @@ func (r RunCaptureRequest) validate() error {
 	return nil
 }
 
+// CreateVMRequest is the agent-owned named VM creation request.
+type CreateVMRequest struct {
+	Name    string   `json:"name"`
+	Image   string   `json:"image"`
+	Backend string   `json:"backend,omitempty"`
+	Memory  string   `json:"memory,omitempty"`
+	Command []string `json:"command"`
+}
+
+func (r CreateVMRequest) validate() error {
+	if r.Name == "" {
+		return invalidSporeRequest("create VM name is required")
+	}
+	if r.Image == "" {
+		return invalidSporeRequest("create VM image is required")
+	}
+	if len(r.Command) == 0 {
+		return invalidSporeRequest("create VM command is required")
+	}
+	for i, arg := range r.Command {
+		if arg == "" {
+			return invalidSporeRequest("create VM command[%d] must not be empty", i)
+		}
+	}
+	return nil
+}
+
 // ForkRequest is the agent-owned child fork request.
 type ForkRequest struct {
 	ParentDir string
