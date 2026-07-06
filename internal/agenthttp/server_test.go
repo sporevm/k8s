@@ -12,7 +12,7 @@ import (
 )
 
 func TestClientServerRoundTripRunsShard(t *testing.T) {
-	run := testRun()
+	run := testBundleRun()
 	fake := fakeSporeClient{digest: run.Bundle.Digest}
 	store, err := agent.NewLocalResultStore(t.TempDir())
 	if err != nil {
@@ -87,13 +87,13 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 }
 
 func TestClientServerRoundTripPreparesBundle(t *testing.T) {
-	generic := testGenericRun()
-	client := newTestHTTPClientWithSporeClient(t, testRun(), fakeSporeClient{
+	source := testRun()
+	client := newTestHTTPClientWithSporeClient(t, testBundleRun(), fakeSporeClient{
 		digest:     "sha256:2222222222222222222222222222222222222222222222222222222222222222",
 		childCount: 1,
 	})
 
-	prepared, err := client.PrepareBundle(context.Background(), generic)
+	prepared, err := client.PrepareBundle(context.Background(), source)
 	if err != nil {
 		t.Fatalf("PrepareBundle: %v", err)
 	}
@@ -103,24 +103,24 @@ func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	if prepared.ChildCount != 1 {
 		t.Fatalf("prepared child count = %d", prepared.ChildCount)
 	}
-	if _, err := generic.Compile(prepared); err != nil {
+	if _, err := source.Compile(prepared); err != nil {
 		t.Fatalf("Compile prepared bundle: %v", err)
 	}
 }
 
-func TestClientServerRoundTripHotVM(t *testing.T) {
-	client := newTestHTTPClient(t, testRun())
+func TestClientServerRoundTripSandbox(t *testing.T) {
+	client := newTestHTTPClient(t, testBundleRun())
 	ctx := context.Background()
-	if err := client.CreateVM(ctx, agent.CreateVMRequest{
-		Name:    "sporevm-hot-node",
+	if err := client.CreateSandbox(ctx, agent.CreateVMRequest{
+		Name:    "sporevm-sandbox-node",
 		Image:   "docker.io/library/node:22-bookworm-slim",
 		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
 	}); err != nil {
-		t.Fatalf("CreateVM: %v", err)
+		t.Fatalf("CreateSandbox: %v", err)
 	}
-	events, err := client.ExecVM(ctx, "sporevm-hot-node", []string{"/bin/sh", "-lc", "node -v"})
+	events, err := client.ExecSandbox(ctx, "sporevm-sandbox-node", []string{"/bin/sh", "-lc", "node -v"})
 	if err != nil {
-		t.Fatalf("ExecVM: %v", err)
+		t.Fatalf("ExecSandbox: %v", err)
 	}
 	terminal, err := agent.TerminalEvent(events)
 	if err != nil {
@@ -129,13 +129,13 @@ func TestClientServerRoundTripHotVM(t *testing.T) {
 	if terminal.ExitCode == nil || *terminal.ExitCode != 0 {
 		t.Fatalf("terminal = %+v", terminal)
 	}
-	if err := client.RemoveVM(ctx, "sporevm-hot-node"); err != nil {
-		t.Fatalf("RemoveVM: %v", err)
+	if err := client.RemoveSandbox(ctx, "sporevm-sandbox-node"); err != nil {
+		t.Fatalf("RemoveSandbox: %v", err)
 	}
 }
 
 func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
-	run := testRun()
+	run := testBundleRun()
 	client := newTestHTTPClient(t, run)
 	lease := fleet.ShardLease{
 		RunID:         run.RunID,
@@ -159,7 +159,7 @@ func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
 }
 
 func TestServerReturnsShardResultsWhenRunnerReportsChildError(t *testing.T) {
-	run := testRun()
+	run := testBundleRun()
 	client := newTestHTTPClientWithSporeClient(t, run, fakeSporeClient{
 		digest:    run.Bundle.Digest,
 		resumeErr: errors.New("resume failed"),
@@ -198,8 +198,8 @@ func TestShardResultCountIgnoresEmptySlots(t *testing.T) {
 	}
 }
 
-func testRun() fleet.Run {
-	return fleet.Run{
+func testBundleRun() fleet.BundleRun {
+	return fleet.BundleRun{
 		RunID: "ruby-counter-20260620",
 		Bundle: fleet.Bundle{
 			URI:    "s3://example-sporevm-artifacts/runs/ruby-counter.bundle",
@@ -221,12 +221,12 @@ func testRun() fleet.Run {
 	}
 }
 
-func newTestHTTPClient(t *testing.T, run fleet.Run) Client {
+func newTestHTTPClient(t *testing.T, run fleet.BundleRun) Client {
 	t.Helper()
 	return newTestHTTPClientWithSporeClient(t, run, fakeSporeClient{digest: run.Bundle.Digest})
 }
 
-func newTestHTTPClientWithSporeClient(t *testing.T, run fleet.Run, fake fakeSporeClient) Client {
+func newTestHTTPClientWithSporeClient(t *testing.T, run fleet.BundleRun, fake fakeSporeClient) Client {
 	t.Helper()
 	store, err := agent.NewLocalResultStore(t.TempDir())
 	if err != nil {
@@ -367,10 +367,10 @@ func testDigest(raw string) agent.DigestRef {
 	}
 }
 
-func testGenericRun() fleet.GenericRun {
-	return fleet.GenericRun{
+func testRun() fleet.Run {
+	return fleet.Run{
 		RunID: "rails-rspec-20260624",
-		Source: fleet.GenericSource{
+		Source: fleet.RunSource{
 			Image:    "example.com/sporevm/rails-rspec:sha-1111111",
 			Platform: "linux/arm64",
 		},
@@ -380,7 +380,7 @@ func testGenericRun() fleet.GenericRun {
 			ReadyMarker:   "SPOREVM_RAILS_READY",
 		},
 		Fork: fleet.ForkSpec{Count: 1},
-		Children: fleet.GenericChildren{
+		Children: fleet.RunChildren{
 			Start:   0,
 			Count:   1,
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},

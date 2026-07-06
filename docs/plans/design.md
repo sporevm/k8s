@@ -16,7 +16,7 @@ SporeVM is a general VMM built around fast capture, fork, materialize, and
 resume. The fleet layer should mirror those primitives directly instead of
 turning every child VM into a Kubernetes object or a CI parallel job.
 
-The product shape is a generic SporeVM run:
+The product shape is a SporeVM run:
 
 ```text
 source -> prepare parent -> fork children -> execute child ranges -> publish results
@@ -24,7 +24,7 @@ source -> prepare parent -> fork children -> execute child ranges -> publish res
 
 Kubernetes is an adapter cell for deployment, host placement, access control,
 and coarse admission. CI fan-out is the first useful workload and the
-first proof path, but it should sit on the generic run contract rather than
+first proof path, but it should sit on the run contract rather than
 define it.
 
 ## Problem
@@ -74,9 +74,9 @@ The fleet has to avoid these failure modes:
 
 ## Target Model
 
-### Generic Run Contract
+### Run Contract
 
-The public contract should be generic enough for CI, simulations, fuzzing,
+The public contract should be general enough for CI, simulations, fuzzing,
 browser swarms, and agent workloads:
 
 ```yaml
@@ -132,15 +132,15 @@ work. The higher-level run is the normal user and CI entrypoint; its
 When the prepared bundle is still a local `file://` bundle, the preparing agent
 also executes the run through one sequential lease. That lease may cover the
 full child range, but local execution still reserves only the configured
-in-flight child slots. Multi-agent generic runs require publishing the prepared
+in-flight child slots. Multi-agent runs require publishing the prepared
 bundle first so other agents can materialize the same immutable input.
 
 ### Fleet Components
 
-`sporectl` is the user-facing submitter. CI should use the same generic submit
-path as every other caller: render or provide a generic run document, then call
+`sporectl` is the user-facing submitter. CI should use the same run submit
+path as every other caller: render or provide a run document, then call
 `sporectl submit RUN.json`. The submitter infers whether the document is a
-generic source/prepare/fork run or a lower-level prebuilt bundle run. A
+source/prepare/fork run or a lower-level prebuilt bundle run. A
 separate CI subcommand can wait until the same CI-only defaults are repeated
 enough to justify it.
 
@@ -150,8 +150,8 @@ child ranges, tracks compact aggregate state, and exits with a clear run
 result.
 
 For latency-sensitive callers, the same coordinator binary can run as a
-resident API. The first useful API is deliberately small: `POST /generic-runs`
-accepts the same generic run document as `sporectl submit`, talks directly to
+resident API. The first useful API is deliberately small: `POST /runs`
+accepts the same run document as `sporectl submit`, talks directly to
 the agent service, and returns the same aggregate runtime report. It removes
 Kubernetes Job startup from benchmark and sandbox request paths without adding
 CRDs, an operator, or per-child Kubernetes objects.
@@ -207,11 +207,11 @@ The CI step should:
 - use a deterministic result-store prefix;
 - annotate aggregate failures and link to child logs;
 - exit non-zero when any child has a failed terminal result;
-- leave the generic fleet contract visible for debugging.
+- leave the run contract visible for debugging.
 
 ### Host Compatibility And Slots
 
-Host compatibility is an admission invariant. A generic architecture label is
+Host compatibility is an admission invariant. An architecture label alone is
 not enough. Agents must report SporeVM host facts, and the coordinator should
 only lease work to agents whose host class matches the prepared parent or
 bundle.
@@ -221,7 +221,7 @@ container cgroup memory, CPU policy, and fixed per-child memory budget. Later it
 should use bundle-specific memory once SporeVM exposes it in machine-readable
 inspection output.
 
-For local generic runs, admission compares the preparing agent against in-flight
+For local runs, admission compares the preparing agent against in-flight
 slot demand, not total child count. The prebuilt bundle planner remains stricter
 and still requires enough compatible fleet slots to cover every child
 concurrently.
@@ -283,21 +283,21 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   KVM node using public runtime `v0.1.1`: one sequential local lease, 100
   in-flight slots, 1,000 attempts, 1,000 completed, no failed children, with
   prepare taking 18.6s and shard execution taking 2m45.9s.
-- The generic source/prepare/fork run contract now carries the warm-command
+- The source/prepare/fork run contract now carries the warm-command
   capture trigger needed by the Rails/RSpec example and compiles to the
   existing immutable bundle run once a prepared bundle is available.
 - The agent can now run the local `prepare -> capture -> fork -> pack ->
   inspect` sequence behind the SporeVM CLI boundary and return a digest-addressed
   file bundle.
-- The agent HTTP API exposes preparation, and `spore-coordinator --generic-run`
-  can prepare a generic run on one agent, compile it to a bundle run, and execute
+- The agent HTTP API exposes preparation, and `spore-coordinator --run`
+  can prepare a run on one agent, compile it to a bundle run, and execute
   the shards on that same agent while the bundle remains a local `file://`
   artifact.
 - `sporectl submit RUN.json` can render the Kubernetes ConfigMap and one-shot
-  coordinator Job for either a generic run or a prebuilt bundle run. The
-  submitter infers the run shape and passes generic contracts through to
-  `spore-coordinator --generic-run`.
-- A one-child public busybox generic run now completes in the Kubernetes adapter
+  coordinator Job for either a run or a prebuilt bundle run. The
+  submitter infers the run shape and passes run contracts through to
+  `spore-coordinator --run`.
+- A one-child public busybox run now completes in the Kubernetes adapter
   cell through `sporectl submit`, `spore-coordinator`, private ClusterIP agent
   access, agent-side prepare/fork/pack, local file-bundle handoff, shard
   execution, and create-only terminal result commit.
@@ -309,7 +309,7 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - A Rails/RSpec image from `sporevm-examples` was built as a linux/arm64 OCI
   archive, pushed into the cluster-local registry with `skopeo`, resolved by
   `spore-agent` through the private service DNS name, and run through the
-  generic Kubernetes path.
+  Kubernetes run path.
 - SporeVM now exposes single-child resume identity with
   `spore resume --generation FILE`; the adapter writes one generation JSON per
   child and passes that file when resuming materialized children.
@@ -320,14 +320,14 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   without the unsharded fallback. The run prepared/forked/packed in 23.5s,
   completed its shard in 36.8s, and wrote a succeeded terminal result with
   artifact pull 13.5s, resume 23.3s, and guest-ready 2.5s.
-- The generic path now preserves `children.command` as the lower-level
+- The run path now preserves `children.command` as the lower-level
   `childCommand`, and the agent executes it through a named child resume plus
   `spore exec` when present. A live one-child busybox smoke now verifies this
   path through `sporectl submit`, including child stdout and generation identity.
-- Generic runs can set `prepare.memory`, which is passed to `spore run --memory`
+- Runs can set `prepare.memory`, which is passed to `spore run --memory`
   before capture so small fan-out smokes do not inherit an oversized default
   guest memory budget.
-- A 10-child busybox generic run first proved the `prepare.memory: 512mb`
+- A 10-child busybox run first proved the `prepare.memory: 512mb`
   fix. The follow-up 100-child run used the same memory setting, 100 advertised
   slots, one shard, 100 terminal results, and generation-aware child command
   output for every sampled child.
@@ -341,7 +341,7 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 
 ## Delivery Strategy
 
-### Slice 1: Generic Run Contract
+### Slice 1: Run Contract
 
 Status: implemented locally.
 
@@ -351,7 +351,7 @@ schema.
 Done when:
 
 - examples validate for a CI-shaped Rails/RSpec run;
-- the generic run can compile to the existing bundle run once a bundle exists;
+- the run can compile to the existing bundle run once a bundle exists;
 - invalid source, missing child count, missing result store, and unsafe retry
   settings are rejected.
 
@@ -384,7 +384,7 @@ Published-bundle handoff and a live Kubernetes smoke for child-command execution
 remain pending. Per-child terminal results now capture bounded guest output
 previews and total output byte counts.
 
-Wire `spore-coordinator` so one generic run performs prepare, fork, bundle
+Wire `spore-coordinator` so one run performs prepare, fork, bundle
 publication or local file-bundle handoff, shard execution, and aggregate
 reporting.
 
@@ -396,7 +396,7 @@ Done when:
 
 ### Slice 4: Kubernetes Adapter Cell
 
-Status: implemented for one-child public busybox and Rails/RSpec sharded generic
+Status: implemented for one-child public busybox and Rails/RSpec sharded run
 smokes in a compatible Kubernetes cell. Resident fast API wiring is implemented
 in code and live-smoked through a port-forwarded agent; in-cluster deployment
 requires publishing a runtime image containing the API mode. Multi-agent bundle
@@ -408,11 +408,11 @@ batch run, and an optional resident API for low-latency submit paths.
 Done when:
 
 - `sporectl submit` creates the run ConfigMap and coordinator Job for either a
-  prebuilt bundle run or a generic run from one positional run document;
-- the resident coordinator API can accept a generic run without creating a
+  prebuilt bundle run or a run from one positional run document;
+- the resident coordinator API can accept a run without creating a
   Kubernetes Job;
 - the coordinator talks to agents through private cluster networking;
-- the same generic run completes in a compatible Kubernetes cell;
+- the same run completes in a compatible Kubernetes cell;
 - no per-child Kubernetes objects are created.
 
 ### Slice 5: CI Submit Profile
@@ -421,7 +421,7 @@ Status: not implemented. The current CI pipeline validates and publishes this
 repository; it does not yet submit a SporeVM fan-out run. The intended CLI path
 is `sporectl submit sporevm-run.json`, not a separate `sporectl ci` command.
 
-Add the smallest CI-specific submit behavior on top of the generic run.
+Add the smallest CI-specific submit behavior on top of the run.
 
 Done when:
 
@@ -448,7 +448,7 @@ Done when:
 - a ComputeSDK-shaped sequential TTI benchmark can run against the live cell.
 - the same benchmark can target the resident API path without creating a
   Kubernetes Job per iteration.
-- a hot-VM diagnostic path can measure resident API plus `spore exec` overhead
+- a sandbox diagnostic path can measure resident API plus `spore exec` overhead
   separately from prepare, fork, pull, resume, and result-reporting costs.
 
 Current live finding: the resident API removes Kubernetes Job startup from the
@@ -466,7 +466,7 @@ SporeVM can fork the disk-backed parent directly.
 
 ### Slice 7: Optional Kubernetes UX
 
-Add CRDs, Kueue, or an operator only after the generic and CI paths work.
+Add CRDs, Kueue, or an operator only after the run and CI paths work.
 
 Done when:
 
@@ -477,7 +477,7 @@ Done when:
 
 ## Verification
 
-- Schema tests for generic run and compiled bundle run examples.
+- Schema tests for run and compiled bundle run examples.
 - Unit tests for child id derivation, shard overlap rejection, attempt keys, and
   terminal-result short-circuiting.
 - Agent tests for prepare, fork, pack, cache locking, slot admission,
@@ -494,9 +494,9 @@ Done when:
 - Live cluster-local registry smoke: build the Rails OCI archive with buildx,
   push it into `spore-registry.sporevm-system.svc.cluster.local:5000`, and
   resolve it from `spore-agent` with `spore rootfs resolve`.
-- Live Rails/RSpec generic control smoke through `sporectl submit` against the
+- Live Rails/RSpec run control smoke through `sporectl submit` against the
   cluster-local registry image.
-- Live Rails/RSpec sharded generic smoke through `sporectl submit` against the
+- Live Rails/RSpec sharded run smoke through `sporectl submit` against the
   cluster-local registry image and the pinned SporeVM release runtime.
 - Public repository CI smoke for `mise run fleet:test`, leak scan, chart lint,
   and tag-gated GHCR image/chart publishing is done for `v0.1.1`.
@@ -509,9 +509,9 @@ Done when:
 - Do not create one Kubernetes object per child.
 - Keep per-child results outside Kubernetes.
 - Keep KVM, credentials, caches, and SporeVM execution inside agents.
-- In the first generic coordinator path, the agent that prepares a local
+- In the first coordinator path, the agent that prepares a local
   `file://` bundle also executes a single sequential lease bounded by in-flight
-  slots. Multi-agent generic runs require publishing the prepared bundle first.
+  slots. Multi-agent runs require publishing the prepared bundle first.
 - Public runtime images publish to GHCR; private environments can override the
   image repository from their ops values.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
@@ -530,7 +530,7 @@ Done when:
 - CRI / `RuntimeClass` integration.
 - Custom Kubernetes scheduler plugins.
 - DRA-backed execution slots.
-- Published prepared-bundle handoff for multi-agent generic runs.
+- Published prepared-bundle handoff for multi-agent runs.
 - Interactive terminal support.
 - Public multi-tenant hardening.
 - Non-idempotent side-effect protocols beyond terminal result commits.
@@ -554,7 +554,7 @@ Done when:
 - Guest memory is part of the fleet contract in practice: 10 children inherited
   the default guest memory and OOM-killed the agent until the prepared parent
   used an explicit smaller memory budget.
-- Signal-based parent capture is part of the generic run contract for
+- Signal-based parent capture is part of the run contract for
   long-lived warm commands. The agent owns that host-side trigger; Kubernetes
   should only see the resulting run and aggregate status.
 - Rails/RSpec proves that plain child `spore resume` is not equivalent to

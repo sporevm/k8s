@@ -6,9 +6,10 @@
   "additionalProperties": false,
   "required": [
     "runID",
-    "bundle",
+    "source",
+    "prepare",
+    "fork",
     "children",
-    "hostClass",
     "execution",
     "retryPolicy",
     "sideEffects",
@@ -19,21 +20,39 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
     },
-    "bundle": {
+    "source": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "uri",
-        "digest"
+        "image",
+        "platform"
       ],
       "properties": {
-        "uri": {
+        "image": {
           "type": "string",
           "minLength": 1
         },
-        "digest": {
+        "platform": {
           "type": "string",
-          "pattern": "^sha256:[a-f0-9]{64}$"
+          "enum": [
+            "linux/arm64"
+          ]
+        }
+      }
+    },
+    "prepare": {
+      "$ref": "#/$defs/prepareSpec"
+    },
+    "fork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
@@ -42,7 +61,8 @@
       "additionalProperties": false,
       "required": [
         "start",
-        "count"
+        "count",
+        "command"
       ],
       "properties": {
         "start": {
@@ -52,20 +72,32 @@
         "count": {
           "type": "integer",
           "minimum": 1
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
-    "childCommand": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
+    "execution": {
+      "$ref": "#/$defs/execution"
     },
-    "hostClass": {
-      "$ref": "#/$defs/hostClass"
+    "retryPolicy": {
+      "$ref": "#/$defs/retryPolicy"
     },
+    "sideEffects": {
+      "$ref": "#/$defs/sideEffects"
+    },
+    "resultStore": {
+      "type": "string",
+      "pattern": "^s3://[^/]+/.+/$"
+    }
+  },
+  "$defs": {
     "execution": {
       "type": "object",
       "additionalProperties": false,
@@ -115,53 +147,59 @@
         }
       }
     },
-    "resultStore": {
-      "type": "string",
-      "pattern": "^s3://[^/]+/.+/$"
-    }
-  },
-  "$defs": {
-    "hostClass": {
+    "commandSpec": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "id",
-        "sporePlatformVersion",
-        "architecture",
-        "backend",
-        "cpuProfile",
-        "deviceModel"
+        "command"
       ],
       "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "prepareSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "dependentRequired": {
+        "captureSignal": [
+          "readyMarker"
+        ],
+        "readyMarker": [
+          "captureSignal"
+        ]
+      },
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "sporePlatformVersion": {
+        "captureSignal": {
           "type": "string",
           "enum": [
-            "v0"
+            "USR1"
           ]
         },
-        "architecture": {
-          "type": "string",
-          "enum": [
-            "aarch64"
-          ]
-        },
-        "backend": {
-          "type": "string",
-          "enum": [
-            "kvm"
-          ]
-        },
-        "cpuProfile": {
+        "readyMarker": {
           "type": "string",
           "minLength": 1
         },
-        "deviceModel": {
+        "memory": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[A-Za-z0-9]+$"
         }
       }
     }

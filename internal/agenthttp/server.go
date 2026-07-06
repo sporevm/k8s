@@ -43,9 +43,9 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /inspect-run-bundle", s.handleInspectRunBundle)
 	mux.HandleFunc("POST /prepare-bundle", s.handlePrepareBundle)
 	mux.HandleFunc("POST /run-shard", s.handleRunShard)
-	mux.HandleFunc("POST /hot-vms", s.handleCreateHotVM)
-	mux.HandleFunc("POST /hot-vms/{name}/exec", s.handleExecHotVM)
-	mux.HandleFunc("DELETE /hot-vms/{name}", s.handleDeleteHotVM)
+	mux.HandleFunc("POST /sandboxes", s.handleCreateSandbox)
+	mux.HandleFunc("POST /sandboxes/{name}/exec", s.handleExecSandbox)
+	mux.HandleFunc("DELETE /sandboxes/{name}", s.handleDeleteSandbox)
 	return mux, nil
 }
 
@@ -90,7 +90,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInspectRunBundle(w http.ResponseWriter, r *http.Request) {
-	var run fleet.Run
+	var run fleet.BundleRun
 	if !decodeJSON(w, r, &run) {
 		return
 	}
@@ -103,7 +103,7 @@ func (s *Server) handleInspectRunBundle(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handlePrepareBundle(w http.ResponseWriter, r *http.Request) {
-	var run fleet.GenericRun
+	var run fleet.Run
 	if !decodeJSON(w, r, &run) {
 		return
 	}
@@ -154,7 +154,7 @@ func (s *Server) handleRunShard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-func (s *Server) handleCreateHotVM(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	var req agent.CreateVMRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -169,7 +169,7 @@ func (s *Server) handleCreateHotVM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name})
 }
 
-func (s *Server) handleExecHotVM(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleExecSandbox(w http.ResponseWriter, r *http.Request) {
 	req := agent.ExecRequest{Name: r.PathValue("name")}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -183,7 +183,7 @@ func (s *Server) handleExecHotVM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, events)
 }
 
-func (s *Server) handleDeleteHotVM(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
 	if err := s.Client.RemoveVM(r.Context(), agent.RemoveVMRequest{Name: r.PathValue("name")}); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

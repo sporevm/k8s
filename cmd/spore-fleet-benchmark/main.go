@@ -13,13 +13,13 @@ import (
 )
 
 func main() {
-	var runPath string
+	var bundleRunPath string
 	var agentCount int
 	var slotsPerAgent int
 	var targetConcurrency int
 	var cachePosture string
 	var admissionDelay time.Duration
-	flag.StringVar(&runPath, "run", "examples/fleet/run-1000.json", "fleet run contract JSON")
+	flag.StringVar(&bundleRunPath, "bundle-run", "examples/fleet/bundle-run-1000.json", "fleet bundle run contract JSON")
 	flag.IntVar(&agentCount, "agents", 10, "synthetic agent count")
 	flag.IntVar(&slotsPerAgent, "slots-per-agent", 100, "synthetic child slots per agent")
 	flag.IntVar(&targetConcurrency, "target-concurrency", 0, "target ready child count; defaults to run child count")
@@ -27,7 +27,7 @@ func main() {
 	flag.DurationVar(&admissionDelay, "admission-delay", 50*time.Millisecond, "synthetic admission delay")
 	flag.Parse()
 
-	run, err := readRun(runPath)
+	run, err := readBundleRun(bundleRunPath)
 	if err != nil {
 		fatal(err)
 	}
@@ -49,13 +49,13 @@ func main() {
 	}
 }
 
-func readRun(path string) (fleet.Run, error) {
+func readBundleRun(path string) (fleet.BundleRun, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return fleet.Run{}, err
+		return fleet.BundleRun{}, err
 	}
 	defer file.Close()
-	return fleet.DecodeRun(file)
+	return fleet.DecodeBundleRun(file)
 }
 
 func fatal(err error) {

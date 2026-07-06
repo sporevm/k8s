@@ -53,10 +53,10 @@ func TestBuildSubmitResourcesUsesPerRunObjects(t *testing.T) {
 	}
 }
 
-func TestBuildGenericSubmitResourcesUsesGenericRunArg(t *testing.T) {
-	run := testGenericRun("rails-rspec-20260624")
-	runBytes := []byte(`{"runID":"rails-rspec-20260624"}`)
-	resources, names, err := buildGenericSubmitResources(run, runBytes, submitOptions{
+func TestBuildBundleSubmitResourcesUsesBundleRunArg(t *testing.T) {
+	run := testBundleRun("ruby-counter-20260620")
+	runBytes := []byte(`{"runID":"ruby-counter-20260620"}`)
+	resources, names, err := buildBundleSubmitResources(run, runBytes, submitOptions{
 		Namespace:       "sporevm-system",
 		Image:           "example.com/sporevm-k8s-runtime:dev",
 		ImagePullPolicy: "Always",
@@ -65,14 +65,14 @@ func TestBuildGenericSubmitResourcesUsesGenericRunArg(t *testing.T) {
 		Timeout:         30 * time.Minute,
 	})
 	if err != nil {
-		t.Fatalf("build generic resources: %v", err)
+		t.Fatalf("build bundle resources: %v", err)
 	}
 	if names.ConfigMap == "spore-run" || names.Job == "spore-coordinator" {
 		t.Fatalf("expected per-run names, got configmap=%s job=%s", names.ConfigMap, names.Job)
 	}
 	configMap := resources.Items[0].(configMap)
-	if got := configMap.Data["generic-run.json"]; got != string(runBytes) {
-		t.Fatalf("generic run configmap data = %q", got)
+	if got := configMap.Data["bundle-run.json"]; got != string(runBytes) {
+		t.Fatalf("bundle run configmap data = %q", got)
 	}
 	payload, err := json.Marshal(resources)
 	if err != nil {
@@ -84,21 +84,62 @@ func TestBuildGenericSubmitResourcesUsesGenericRunArg(t *testing.T) {
 		`"kind":"Job"`,
 		`"name":"` + names.ConfigMap + `"`,
 		`"name":"` + names.Job + `"`,
-		`"generic-run.json":"{\"runID\":\"rails-rspec-20260624\"}"`,
-		`"--generic-run=/etc/sporevm/run/generic-run.json"`,
+		`"bundle-run.json":"{\"runID\":\"ruby-counter-20260620\"}"`,
+		`"--bundle-run=/etc/sporevm/run/bundle-run.json"`,
 		`"--agent-url=http://spore-agent.sporevm-system.svc.cluster.local:8080"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resource JSON missing %s:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
-		t.Fatalf("generic resource JSON included bundle run arg:\n%s", body)
+}
+
+func TestBuildSubmitResourcesUsesRunArg(t *testing.T) {
+	run := testRun("rails-rspec-20260624")
+	runBytes := []byte(`{"runID":"rails-rspec-20260624"}`)
+	resources, names, err := buildSubmitResources(run, runBytes, submitOptions{
+		Namespace:       "sporevm-system",
+		Image:           "example.com/sporevm-k8s-runtime:dev",
+		ImagePullPolicy: "Always",
+		AgentURLs:       stringsFlag{"http://spore-agent.sporevm-system.svc.cluster.local:8080"},
+		ResultStoreRoot: "/var/lib/sporevm/coordinator-results",
+		Timeout:         30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("build source resources: %v", err)
+	}
+	if names.ConfigMap == "spore-run" || names.Job == "spore-coordinator" {
+		t.Fatalf("expected per-run names, got configmap=%s job=%s", names.ConfigMap, names.Job)
+	}
+	configMap := resources.Items[0].(configMap)
+	if got := configMap.Data["run.json"]; got != string(runBytes) {
+		t.Fatalf("run configmap data = %q", got)
+	}
+	payload, err := json.Marshal(resources)
+	if err != nil {
+		t.Fatalf("marshal resources: %v", err)
+	}
+	body := string(payload)
+	for _, want := range []string{
+		`"kind":"ConfigMap"`,
+		`"kind":"Job"`,
+		`"name":"` + names.ConfigMap + `"`,
+		`"name":"` + names.Job + `"`,
+		`"run.json":"{\"runID\":\"rails-rspec-20260624\"}"`,
+		`"--run=/etc/sporevm/run/run.json"`,
+		`"--agent-url=http://spore-agent.sporevm-system.svc.cluster.local:8080"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("resource JSON missing %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `--bundle-run=/etc/sporevm/run/bundle-run.json`) {
+		t.Fatalf("run resource JSON included bundle run arg:\n%s", body)
 	}
 }
 
 func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
-	runBytes := mustJSON(t, testRun("ruby-counter-20260620"))
+	runBytes := mustJSON(t, testBundleRun("ruby-counter-20260620"))
 	resources, _, runID, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
 	if err != nil {
 		t.Fatalf("build submit resources: %v", err)
@@ -108,7 +149,7 @@ func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 	}
 
 	configMap := resources.Items[0].(configMap)
-	if got := configMap.Data["run.json"]; got != string(runBytes) {
+	if got := configMap.Data["bundle-run.json"]; got != string(runBytes) {
 		t.Fatalf("bundle run configmap data = %q", got)
 	}
 	payload, err := json.Marshal(resources)
@@ -116,13 +157,13 @@ func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 		t.Fatalf("marshal resources: %v", err)
 	}
 	body := string(payload)
-	if !strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
-		t.Fatalf("bundle resource JSON missing coordinator run arg:\n%s", body)
+	if !strings.Contains(body, `--bundle-run=/etc/sporevm/run/bundle-run.json`) {
+		t.Fatalf("bundle resource JSON missing coordinator bundle-run arg:\n%s", body)
 	}
 }
 
-func TestBuildSubmitResourcesFromOptionsInfersGenericRun(t *testing.T) {
-	runBytes := mustJSON(t, testGenericRun("rails-rspec-20260624"))
+func TestBuildSubmitResourcesFromOptionsInfersRun(t *testing.T) {
+	runBytes := mustJSON(t, testRun("rails-rspec-20260624"))
 	resources, _, runID, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
 	if err != nil {
 		t.Fatalf("build submit resources: %v", err)
@@ -132,19 +173,19 @@ func TestBuildSubmitResourcesFromOptionsInfersGenericRun(t *testing.T) {
 	}
 
 	configMap := resources.Items[0].(configMap)
-	if got := configMap.Data["generic-run.json"]; got != string(runBytes) {
-		t.Fatalf("generic run configmap data = %q", got)
+	if got := configMap.Data["run.json"]; got != string(runBytes) {
+		t.Fatalf("run configmap data = %q", got)
 	}
 	payload, err := json.Marshal(resources)
 	if err != nil {
 		t.Fatalf("marshal resources: %v", err)
 	}
 	body := string(payload)
-	if !strings.Contains(body, `--generic-run=/etc/sporevm/run/generic-run.json`) {
-		t.Fatalf("generic resource JSON missing coordinator generic-run arg:\n%s", body)
+	if !strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
+		t.Fatalf("run resource JSON missing coordinator run arg:\n%s", body)
 	}
-	if strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
-		t.Fatalf("generic resource JSON included bundle run arg:\n%s", body)
+	if strings.Contains(body, `--bundle-run=/etc/sporevm/run/bundle-run.json`) {
+		t.Fatalf("run resource JSON included bundle run arg:\n%s", body)
 	}
 }
 
@@ -157,12 +198,12 @@ func TestDetectSubmitRunKindRejectsAmbiguousOrUnknownRunShape(t *testing.T) {
 		{
 			name: "mixed",
 			body: `{"runID":"mixed","bundle":{},"source":{}}`,
-			want: "mixes bundle run fields with generic run fields",
+			want: "mixes bundle run fields with run fields",
 		},
 		{
 			name: "unknown",
 			body: `{"runID":"unknown"}`,
-			want: "must include either generic run fields",
+			want: "must include either run fields",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,7 +216,7 @@ func TestDetectSubmitRunKindRejectsAmbiguousOrUnknownRunShape(t *testing.T) {
 }
 
 func TestSubmitDryRunReadsPositionalRunFile(t *testing.T) {
-	path := writeRunFile(t, mustJSON(t, testGenericRun("rails-rspec-20260624")))
+	path := writeRunFile(t, mustJSON(t, testRun("rails-rspec-20260624")))
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{"submit", "--dry-run", path}, &stdout, &stderr); err != nil {
 		t.Fatalf("dry-run submit: %v\nstderr=%s", err, stderr.String())
@@ -184,8 +225,8 @@ func TestSubmitDryRunReadsPositionalRunFile(t *testing.T) {
 	body := stdout.String()
 	for _, want := range []string{
 		`"kind": "List"`,
-		`"generic-run.json"`,
-		`"--generic-run=/etc/sporevm/run/generic-run.json"`,
+		`"run.json"`,
+		`"--run=/etc/sporevm/run/run.json"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dry-run output missing %s:\n%s", want, body)
@@ -308,8 +349,8 @@ func writeRunFile(t *testing.T, runBytes []byte) string {
 	return path
 }
 
-func testRun(id string) fleet.Run {
-	return fleet.Run{
+func testBundleRun(id string) fleet.BundleRun {
+	return fleet.BundleRun{
 		RunID: id,
 		Bundle: fleet.Bundle{
 			URI:    "s3://example-sporevm-artifacts/runs/ruby-counter.bundle",
@@ -337,10 +378,10 @@ func testRun(id string) fleet.Run {
 	}
 }
 
-func testGenericRun(id string) fleet.GenericRun {
-	return fleet.GenericRun{
+func testRun(id string) fleet.Run {
+	return fleet.Run{
 		RunID: id,
-		Source: fleet.GenericSource{
+		Source: fleet.RunSource{
 			Image:    "example.com/sporevm/rails-rspec:sha-1111111",
 			Platform: "linux/arm64",
 		},
@@ -350,7 +391,7 @@ func testGenericRun(id string) fleet.GenericRun {
 			ReadyMarker:   "SPOREVM_RAILS_READY",
 		},
 		Fork: fleet.ForkSpec{Count: 1000},
-		Children: fleet.GenericChildren{
+		Children: fleet.RunChildren{
 			Start:   0,
 			Count:   1000,
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},

@@ -8,27 +8,27 @@ import (
 	"testing"
 )
 
-func TestDecodeGenericRunRejectsUnknownFields(t *testing.T) {
+func TestDecodeRunRejectsUnknownFields(t *testing.T) {
 	var raw map[string]any
-	decodeExample(t, "generic-run-rails-rspec.json", &raw)
+	decodeExample(t, "run-rails-rspec.json", &raw)
 	raw["unexpected"] = true
 
 	payload, err := json.Marshal(raw)
 	if err != nil {
-		t.Fatalf("marshal generic run: %v", err)
+		t.Fatalf("marshal source run: %v", err)
 	}
 
-	_, err = DecodeGenericRun(bytes.NewReader(payload))
+	_, err = DecodeRun(bytes.NewReader(payload))
 	if err == nil {
-		t.Fatal("DecodeGenericRun succeeded with unknown field")
+		t.Fatal("DecodeRun succeeded with unknown field")
 	}
 	if !errors.Is(err, ErrInvalidContract) {
-		t.Fatalf("DecodeGenericRun error = %v, want ErrInvalidContract", err)
+		t.Fatalf("DecodeRun error = %v, want ErrInvalidContract", err)
 	}
 }
 
-func TestGenericRunCompilesToBundleRun(t *testing.T) {
-	generic := loadGenericRunExample(t)
+func TestRunCompilesToBundleRun(t *testing.T) {
+	source := loadRunExample(t)
 	prepared := PreparedBundle{
 		Bundle: Bundle{
 			URI:    "s3://example-sporevm-artifacts/runs/rails-rspec-20260624.bundle",
@@ -38,13 +38,13 @@ func TestGenericRunCompilesToBundleRun(t *testing.T) {
 		HostClass:  loadExampleRun(t).HostClass,
 	}
 
-	run, err := generic.Compile(prepared)
+	run, err := source.Compile(prepared)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
 
-	if run.RunID != generic.RunID {
-		t.Fatalf("runID = %q, want %q", run.RunID, generic.RunID)
+	if run.RunID != source.RunID {
+		t.Fatalf("runID = %q, want %q", run.RunID, source.RunID)
 	}
 	if run.Bundle != prepared.Bundle {
 		t.Fatalf("bundle = %#v, want %#v", run.Bundle, prepared.Bundle)
@@ -52,16 +52,16 @@ func TestGenericRunCompilesToBundleRun(t *testing.T) {
 	if run.Children != (ChildRange{Start: 0, Count: 1000}) {
 		t.Fatalf("children = %#v, want 0/1000", run.Children)
 	}
-	if !slices.Equal(run.ChildCommand, generic.Children.Command) {
-		t.Fatalf("childCommand = %#v, want %#v", run.ChildCommand, generic.Children.Command)
+	if !slices.Equal(run.ChildCommand, source.Children.Command) {
+		t.Fatalf("childCommand = %#v, want %#v", run.ChildCommand, source.Children.Command)
 	}
-	if run.ResultStore != generic.ResultStore {
-		t.Fatalf("resultStore = %q, want %q", run.ResultStore, generic.ResultStore)
+	if run.ResultStore != source.ResultStore {
+		t.Fatalf("resultStore = %q, want %q", run.ResultStore, source.ResultStore)
 	}
 }
 
-func TestGenericRunRejectsMissingSourceImage(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsMissingSourceImage(t *testing.T) {
+	run := loadRunExample(t)
 	run.Source.Image = ""
 
 	err := run.Validate()
@@ -73,8 +73,8 @@ func TestGenericRunRejectsMissingSourceImage(t *testing.T) {
 	}
 }
 
-func TestGenericRunRejectsMissingChildCount(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsMissingChildCount(t *testing.T) {
+	run := loadRunExample(t)
 	run.Children.Count = 0
 
 	err := run.Validate()
@@ -86,8 +86,8 @@ func TestGenericRunRejectsMissingChildCount(t *testing.T) {
 	}
 }
 
-func TestGenericRunRejectsIncompleteCaptureTrigger(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsIncompleteCaptureTrigger(t *testing.T) {
+	run := loadRunExample(t)
 	run.Prepare.ReadyMarker = ""
 
 	err := run.Validate()
@@ -99,8 +99,8 @@ func TestGenericRunRejectsIncompleteCaptureTrigger(t *testing.T) {
 	}
 }
 
-func TestGenericRunRejectsUnsupportedCaptureSignal(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsUnsupportedCaptureSignal(t *testing.T) {
+	run := loadRunExample(t)
 	run.Prepare.CaptureSignal = "TERM"
 
 	err := run.Validate()
@@ -112,8 +112,8 @@ func TestGenericRunRejectsUnsupportedCaptureSignal(t *testing.T) {
 	}
 }
 
-func TestGenericRunRejectsInvalidPrepareMemory(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsInvalidPrepareMemory(t *testing.T) {
+	run := loadRunExample(t)
 	run.Prepare.Memory = "512 mb"
 
 	err := run.Validate()
@@ -125,8 +125,8 @@ func TestGenericRunRejectsInvalidPrepareMemory(t *testing.T) {
 	}
 }
 
-func TestGenericRunRejectsMissingResultStore(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsMissingResultStore(t *testing.T) {
+	run := loadRunExample(t)
 	run.ResultStore = ""
 
 	err := run.Validate()
@@ -138,8 +138,8 @@ func TestGenericRunRejectsMissingResultStore(t *testing.T) {
 	}
 }
 
-func TestGenericRunRejectsUnsafeRetrySettings(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunRejectsUnsafeRetrySettings(t *testing.T) {
+	run := loadRunExample(t)
 	run.RetryPolicy.RerunCommittedChildren = true
 
 	err := run.Validate()
@@ -151,8 +151,8 @@ func TestGenericRunRejectsUnsafeRetrySettings(t *testing.T) {
 	}
 }
 
-func TestGenericRunChildrenMustFitForkCount(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunChildrenMustFitForkCount(t *testing.T) {
+	run := loadRunExample(t)
 	run.Children.Start = 1
 
 	err := run.Validate()
@@ -164,8 +164,8 @@ func TestGenericRunChildrenMustFitForkCount(t *testing.T) {
 	}
 }
 
-func TestGenericRunCompileRequiresPreparedBundleCoverage(t *testing.T) {
-	run := loadGenericRunExample(t)
+func TestRunCompileRequiresPreparedBundleCoverage(t *testing.T) {
+	run := loadRunExample(t)
 	_, err := run.Compile(PreparedBundle{
 		Bundle: Bundle{
 			URI:    "s3://example-sporevm-artifacts/runs/rails-rspec-20260624.bundle",
@@ -183,13 +183,13 @@ func TestGenericRunCompileRequiresPreparedBundleCoverage(t *testing.T) {
 	}
 }
 
-func loadGenericRunExample(t *testing.T) GenericRun {
+func loadRunExample(t *testing.T) Run {
 	t.Helper()
 
-	var run GenericRun
-	decodeExample(t, "generic-run-rails-rspec.json", &run)
+	var run Run
+	decodeExample(t, "run-rails-rspec.json", &run)
 	if err := run.Validate(); err != nil {
-		t.Fatalf("generic run Validate: %v", err)
+		t.Fatalf("source run Validate: %v", err)
 	}
 	return run
 }

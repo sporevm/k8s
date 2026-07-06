@@ -1,15 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sporevm.dev/schemas/fleet/generic-run.schema.json",
-  "title": "SporeVM generic fleet run",
+  "$id": "https://sporevm.dev/schemas/fleet/bundle-run.schema.json",
+  "title": "SporeVM fleet bundle run",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "runID",
-    "source",
-    "prepare",
-    "fork",
+    "bundle",
     "children",
+    "hostClass",
     "execution",
     "retryPolicy",
     "sideEffects",
@@ -20,39 +19,21 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
     },
-    "source": {
+    "bundle": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "image",
-        "platform"
+        "uri",
+        "digest"
       ],
       "properties": {
-        "image": {
+        "uri": {
           "type": "string",
           "minLength": 1
         },
-        "platform": {
+        "digest": {
           "type": "string",
-          "enum": [
-            "linux/arm64"
-          ]
-        }
-      }
-    },
-    "prepare": {
-      "$ref": "#/$defs/prepareSpec"
-    },
-    "fork": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "count"
-      ],
-      "properties": {
-        "count": {
-          "type": "integer",
-          "minimum": 1
+          "pattern": "^sha256:[a-f0-9]{64}$"
         }
       }
     },
@@ -61,8 +42,7 @@
       "additionalProperties": false,
       "required": [
         "start",
-        "count",
-        "command"
+        "count"
       ],
       "properties": {
         "start": {
@@ -72,32 +52,20 @@
         "count": {
           "type": "integer",
           "minimum": 1
-        },
-        "command": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
         }
       }
     },
-    "execution": {
-      "$ref": "#/$defs/execution"
+    "childCommand": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
-    "retryPolicy": {
-      "$ref": "#/$defs/retryPolicy"
+    "hostClass": {
+      "$ref": "#/$defs/hostClass"
     },
-    "sideEffects": {
-      "$ref": "#/$defs/sideEffects"
-    },
-    "resultStore": {
-      "type": "string",
-      "pattern": "^s3://[^/]+/.+/$"
-    }
-  },
-  "$defs": {
     "execution": {
       "type": "object",
       "additionalProperties": false,
@@ -147,59 +115,53 @@
         }
       }
     },
-    "commandSpec": {
+    "resultStore": {
+      "type": "string",
+      "pattern": "^s3://[^/]+/.+/$"
+    }
+  },
+  "$defs": {
+    "hostClass": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "command"
+        "id",
+        "sporePlatformVersion",
+        "architecture",
+        "backend",
+        "cpuProfile",
+        "deviceModel"
       ],
       "properties": {
-        "command": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      }
-    },
-    "prepareSpec": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "command"
-      ],
-      "dependentRequired": {
-        "captureSignal": [
-          "readyMarker"
-        ],
-        "readyMarker": [
-          "captureSignal"
-        ]
-      },
-      "properties": {
-        "command": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
         },
-        "captureSignal": {
+        "sporePlatformVersion": {
           "type": "string",
           "enum": [
-            "USR1"
+            "v0"
           ]
         },
-        "readyMarker": {
+        "architecture": {
+          "type": "string",
+          "enum": [
+            "aarch64"
+          ]
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "kvm"
+          ]
+        },
+        "cpuProfile": {
           "type": "string",
           "minLength": 1
         },
-        "memory": {
+        "deviceModel": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9]+$"
+          "minLength": 1
         }
       }
     }

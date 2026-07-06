@@ -32,7 +32,7 @@ func (c Client) Status(ctx context.Context) (fleet.AgentStatus, error) {
 }
 
 // InspectRunBundle validates immutable bundle metadata through an agent.
-func (c Client) InspectRunBundle(ctx context.Context, run fleet.Run) (fleet.BundleInspection, error) {
+func (c Client) InspectRunBundle(ctx context.Context, run fleet.BundleRun) (fleet.BundleInspection, error) {
 	var inspection fleet.BundleInspection
 	if err := c.postJSON(ctx, "/inspect-run-bundle", run, &inspection); err != nil {
 		return fleet.BundleInspection{}, err
@@ -40,8 +40,8 @@ func (c Client) InspectRunBundle(ctx context.Context, run fleet.Run) (fleet.Bund
 	return inspection, nil
 }
 
-// PrepareBundle prepares, forks, packs, and inspects a generic run on the agent.
-func (c Client) PrepareBundle(ctx context.Context, run fleet.GenericRun) (fleet.PreparedBundle, error) {
+// PrepareBundle prepares, forks, packs, and inspects a source run on the agent.
+func (c Client) PrepareBundle(ctx context.Context, run fleet.Run) (fleet.PreparedBundle, error) {
 	var prepared fleet.PreparedBundle
 	if err := c.postJSON(ctx, "/prepare-bundle", run, &prepared); err != nil {
 		return fleet.PreparedBundle{}, err
@@ -52,29 +52,29 @@ func (c Client) PrepareBundle(ctx context.Context, run fleet.GenericRun) (fleet.
 	return prepared, nil
 }
 
-// CreateVM starts one named hot VM on the agent.
-func (c Client) CreateVM(ctx context.Context, req agent.CreateVMRequest) error {
+// CreateSandbox starts one named sandbox on the agent.
+func (c Client) CreateSandbox(ctx context.Context, req agent.CreateVMRequest) error {
 	var response struct {
 		Name string `json:"name"`
 	}
-	return c.postJSON(ctx, "/hot-vms", req, &response)
+	return c.postJSON(ctx, "/sandboxes", req, &response)
 }
 
-// ExecVM runs one command inside a named hot VM.
-func (c Client) ExecVM(ctx context.Context, name string, command []string) ([]agent.RunEvent, error) {
+// ExecSandbox runs one command inside a named sandbox.
+func (c Client) ExecSandbox(ctx context.Context, name string, command []string) ([]agent.RunEvent, error) {
 	var events []agent.RunEvent
-	if err := c.postJSON(ctx, "/hot-vms/"+url.PathEscape(name)+"/exec", agent.ExecRequest{Command: command}, &events); err != nil {
+	if err := c.postJSON(ctx, "/sandboxes/"+url.PathEscape(name)+"/exec", agent.ExecRequest{Command: command}, &events); err != nil {
 		return nil, err
 	}
 	return events, nil
 }
 
-// RemoveVM deletes one named hot VM.
-func (c Client) RemoveVM(ctx context.Context, name string) error {
+// RemoveSandbox deletes one named sandbox.
+func (c Client) RemoveSandbox(ctx context.Context, name string) error {
 	var response struct {
 		Name string `json:"name"`
 	}
-	return c.deleteJSON(ctx, "/hot-vms/"+url.PathEscape(name), &response)
+	return c.deleteJSON(ctx, "/sandboxes/"+url.PathEscape(name), &response)
 }
 
 // RunShard executes one shard lease on the agent.

@@ -24,18 +24,18 @@ var (
 
 // ResultStore persists per-child attempt documents and terminal commits.
 type ResultStore interface {
-	TerminalResult(context.Context, fleet.Run, int) (fleet.AttemptResult, bool, error)
-	WriteAttemptResult(context.Context, fleet.Run, fleet.AttemptResult) error
-	CommitTerminalResult(context.Context, fleet.Run, fleet.AttemptResult) (bool, error)
+	TerminalResult(context.Context, fleet.BundleRun, int) (fleet.AttemptResult, bool, error)
+	WriteAttemptResult(context.Context, fleet.BundleRun, fleet.AttemptResult) error
+	CommitTerminalResult(context.Context, fleet.BundleRun, fleet.AttemptResult) (bool, error)
 }
 
 // TerminalResultURI returns the create-if-absent terminal object URI for a child.
-func TerminalResultURI(run fleet.Run, childID int) string {
+func TerminalResultURI(run fleet.BundleRun, childID int) string {
 	return run.ResultStore + "children/" + strconv.Itoa(childID) + "/terminal.json"
 }
 
 // AttemptResultURI returns the append-only attempt object URI for a child attempt.
-func AttemptResultURI(run fleet.Run, childID int, attemptID string) string {
+func AttemptResultURI(run fleet.BundleRun, childID int, attemptID string) string {
 	return run.ResultStore + "children/" + strconv.Itoa(childID) + "/attempts/" + attemptID + ".json"
 }
 
@@ -56,7 +56,7 @@ func NewLocalResultStore(root string) (*LocalResultStore, error) {
 }
 
 // TerminalResult reads a previously committed terminal result if present.
-func (s *LocalResultStore) TerminalResult(ctx context.Context, run fleet.Run, childID int) (fleet.AttemptResult, bool, error) {
+func (s *LocalResultStore) TerminalResult(ctx context.Context, run fleet.BundleRun, childID int) (fleet.AttemptResult, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return fleet.AttemptResult{}, false, err
 	}
@@ -102,7 +102,7 @@ func (s *LocalResultStore) TerminalResult(ctx context.Context, run fleet.Run, ch
 }
 
 // WriteAttemptResult writes an append-only attempt result document.
-func (s *LocalResultStore) WriteAttemptResult(ctx context.Context, run fleet.Run, result fleet.AttemptResult) error {
+func (s *LocalResultStore) WriteAttemptResult(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func (s *LocalResultStore) WriteAttemptResult(ctx context.Context, run fleet.Run
 }
 
 // CommitTerminalResult writes the terminal result only when no terminal object exists.
-func (s *LocalResultStore) CommitTerminalResult(ctx context.Context, run fleet.Run, result fleet.AttemptResult) (bool, error) {
+func (s *LocalResultStore) CommitTerminalResult(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}

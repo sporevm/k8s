@@ -19,7 +19,10 @@ import (
 	"github.com/sporevm/k8s/internal/fleet"
 )
 
-const defaultRunPath = "/etc/sporevm/run/run.json"
+const (
+	defaultRunPath       = "/etc/sporevm/run/run.json"
+	defaultBundleRunPath = "/etc/sporevm/run/bundle-run.json"
+)
 
 type agentURLsFlag []string
 
@@ -39,7 +42,7 @@ func (f *agentURLsFlag) Set(value string) error {
 
 type coordinatorConfig struct {
 	RunPath         string
-	GenericRunPath  string
+	BundleRunPath   string
 	Listen          string
 	ResultStoreRoot string
 	Timeout         time.Duration
@@ -57,7 +60,7 @@ func main() {
 	cfg := coordinatorConfig{}
 
 	flag.StringVar(&cfg.RunPath, "run", envString("SPORE_RUN_PATH", ""), "fleet run JSON path")
-	flag.StringVar(&cfg.GenericRunPath, "generic-run", envString("SPORE_GENERIC_RUN_PATH", ""), "generic fleet run JSON path")
+	flag.StringVar(&cfg.BundleRunPath, "bundle-run", envString("SPORE_BUNDLE_RUN_PATH", ""), "prebuilt bundle run JSON path")
 	flag.StringVar(&cfg.Listen, "listen", envString("SPORE_COORDINATOR_LISTEN", ""), "HTTP listen address for the resident coordinator API")
 	flag.Var(&cfg.AgentURLs, "agent-url", "agent base URL; may be repeated or comma-separated")
 	flag.StringVar(&cfg.ResultStoreRoot, "result-store-root", envString("SPORE_COORDINATOR_RESULT_STORE_ROOT", "/var/lib/sporevm/coordinator-results"), "local root for coordinator terminal prechecks")
@@ -73,7 +76,7 @@ func main() {
 		}
 		return
 	}
-	if cfg.RunPath == "" && cfg.GenericRunPath == "" {
+	if cfg.RunPath == "" && cfg.BundleRunPath == "" {
 		cfg.RunPath = defaultRunPath
 	}
 	if err := runCoordinator(context.Background(), cfg, os.Stdout); err != nil {
@@ -117,10 +120,10 @@ func coordinatorHandler(cfg coordinatorConfig) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.handleHealthz)
 	mux.HandleFunc("GET /readyz", api.handleReadyz)
-	mux.HandleFunc("POST /generic-runs", api.handleGenericRun)
-	mux.HandleFunc("POST /hot-vms", api.handleCreateHotVM)
-	mux.HandleFunc("POST /hot-vms/{name}/exec", api.handleExecHotVM)
-	mux.HandleFunc("DELETE /hot-vms/{name}", api.handleDeleteHotVM)
+	mux.HandleFunc("POST /runs", api.handleRun)
+	mux.HandleFunc("POST /sandboxes", api.handleCreateSandbox)
+	mux.HandleFunc("POST /sandboxes/{name}/exec", api.handleExecSandbox)
+	mux.HandleFunc("DELETE /sandboxes/{name}", api.handleDeleteSandbox)
 	return mux, nil
 }
 
@@ -144,9 +147,9 @@ func (a coordinatorAPI) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ready\n"))
 }
 
-func (a coordinatorAPI) handleGenericRun(w http.ResponseWriter, r *http.Request) {
-	var generic fleet.GenericRun
-	if !decodeRequestJSON(w, r, &generic) {
+func (a coordinatorAPI) handleRun(w http.ResponseWriter, r *http.Request) {
+	var source fleet.Run
+	if !decodeRequestJSON(w, r, &source) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), a.cfg.Timeout)
@@ -162,7 +165,7 @@ func (a coordinatorAPI) handleGenericRun(w http.ResponseWriter, r *http.Request)
 		writeHTTPError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	report, runErr := runGeneric(ctx, generic, store, endpoints)
+	report, runErr := runSource(ctx, source, store, endpoints)
 	if !hasRuntimeReport(report) {
 		if runErr != nil {
 			writeHTTPError(w, http.StatusBadRequest, runErr)
@@ -174,32 +177,32 @@ func (a coordinatorAPI) handleGenericRun(w http.ResponseWriter, r *http.Request)
 	writeResponseJSON(w, http.StatusOK, report)
 }
 
-func (a coordinatorAPI) handleCreateHotVM(w http.ResponseWriter, r *http.Request) {
+func (a coordinatorAPI) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	var create agent.CreateVMRequest
 	if !decodeRequestJSON(w, r, &create) {
 		return
 	}
-	endpoint, ok := a.hotEndpoint(w, r, create.Name)
+	endpoint, ok := a.sandboxEndpoint(w, r, create.Name)
 	if !ok {
 		return
 	}
-	if err := endpoint.Client.CreateVM(r.Context(), create); err != nil {
+	if err := endpoint.Client.CreateSandbox(r.Context(), create); err != nil {
 		writeHTTPError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeResponseJSON(w, http.StatusOK, map[string]string{"name": create.Name})
 }
 
-func (a coordinatorAPI) handleExecHotVM(w http.ResponseWriter, r *http.Request) {
+func (a coordinatorAPI) handleExecSandbox(w http.ResponseWriter, r *http.Request) {
 	var execReq agent.ExecRequest
 	if !decodeRequestJSON(w, r, &execReq) {
 		return
 	}
-	endpoint, ok := a.hotEndpoint(w, r, r.PathValue("name"))
+	endpoint, ok := a.sandboxEndpoint(w, r, r.PathValue("name"))
 	if !ok {
 		return
 	}
-	events, err := endpoint.Client.ExecVM(r.Context(), r.PathValue("name"), execReq.Command)
+	events, err := endpoint.Client.ExecSandbox(r.Context(), r.PathValue("name"), execReq.Command)
 	if err != nil {
 		writeHTTPError(w, http.StatusBadRequest, err)
 		return
@@ -207,21 +210,21 @@ func (a coordinatorAPI) handleExecHotVM(w http.ResponseWriter, r *http.Request) 
 	writeResponseJSON(w, http.StatusOK, events)
 }
 
-func (a coordinatorAPI) handleDeleteHotVM(w http.ResponseWriter, r *http.Request) {
-	endpoint, ok := a.hotEndpoint(w, r, r.PathValue("name"))
+func (a coordinatorAPI) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
+	endpoint, ok := a.sandboxEndpoint(w, r, r.PathValue("name"))
 	if !ok {
 		return
 	}
-	if err := endpoint.Client.RemoveVM(r.Context(), r.PathValue("name")); err != nil {
+	if err := endpoint.Client.RemoveSandbox(r.Context(), r.PathValue("name")); err != nil {
 		writeHTTPError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeResponseJSON(w, http.StatusOK, map[string]string{"name": r.PathValue("name")})
 }
 
-func (a coordinatorAPI) hotEndpoint(w http.ResponseWriter, r *http.Request, name string) (agentEndpoint, bool) {
+func (a coordinatorAPI) sandboxEndpoint(w http.ResponseWriter, r *http.Request, name string) (agentEndpoint, bool) {
 	if name == "" {
-		writeHTTPError(w, http.StatusBadRequest, errors.New("hot VM name is required"))
+		writeHTTPError(w, http.StatusBadRequest, errors.New("sandbox name is required"))
 		return agentEndpoint{}, false
 	}
 	endpoints, err := discoverAgentEndpoints(r.Context(), a.cfg.AgentURLs, a.cfg.HTTPClient)
@@ -229,7 +232,7 @@ func (a coordinatorAPI) hotEndpoint(w http.ResponseWriter, r *http.Request, name
 		writeHTTPError(w, http.StatusServiceUnavailable, err)
 		return agentEndpoint{}, false
 	}
-	endpoint, err := selectHotEndpoint(endpoints)
+	endpoint, err := selectSandboxEndpoint(endpoints)
 	if err != nil {
 		writeHTTPError(w, http.StatusServiceUnavailable, err)
 		return agentEndpoint{}, false
@@ -237,7 +240,7 @@ func (a coordinatorAPI) hotEndpoint(w http.ResponseWriter, r *http.Request, name
 	return endpoint, true
 }
 
-func selectHotEndpoint(endpoints []agentEndpoint) (agentEndpoint, error) {
+func selectSandboxEndpoint(endpoints []agentEndpoint) (agentEndpoint, error) {
 	var selected agentEndpoint
 	compatible := 0
 	for _, endpoint := range endpoints {
@@ -250,7 +253,7 @@ func selectHotEndpoint(endpoints []agentEndpoint) (agentEndpoint, error) {
 		return agentEndpoint{}, fleet.ErrNoCompatibleAgents
 	}
 	if compatible > 1 {
-		return agentEndpoint{}, errors.New("hot VM API requires exactly one compatible agent")
+		return agentEndpoint{}, errors.New("sandbox API requires exactly one compatible agent")
 	}
 	return selected, nil
 }
@@ -259,10 +262,10 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 	if len(cfg.AgentURLs) == 0 {
 		return errors.New("at least one --agent-url or SPORE_AGENT_URLS entry is required")
 	}
-	if cfg.RunPath != "" && cfg.GenericRunPath != "" {
-		return errors.New("only one of --run or --generic-run may be set")
+	if cfg.RunPath != "" && cfg.BundleRunPath != "" {
+		return errors.New("only one of --run or --bundle-run may be set")
 	}
-	if cfg.RunPath == "" && cfg.GenericRunPath == "" {
+	if cfg.RunPath == "" && cfg.BundleRunPath == "" {
 		cfg.RunPath = defaultRunPath
 	}
 	if cfg.Timeout <= 0 {
@@ -272,13 +275,13 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	var run fleet.Run
-	var genericRun fleet.GenericRun
+	var run fleet.BundleRun
+	var sourceRun fleet.Run
 	var err error
-	if cfg.GenericRunPath != "" {
-		genericRun, err = readGenericRun(cfg.GenericRunPath)
+	if cfg.RunPath != "" {
+		sourceRun, err = readRun(cfg.RunPath)
 	} else {
-		run, err = readRun(cfg.RunPath)
+		run, err = readBundleRun(cfg.BundleRunPath)
 	}
 	if err != nil {
 		return err
@@ -295,8 +298,8 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 
 	var report fleet.RuntimeReport
 	var runErr error
-	if cfg.GenericRunPath != "" {
-		report, runErr = runGeneric(runCtx, genericRun, store, endpoints)
+	if cfg.RunPath != "" {
+		report, runErr = runSource(runCtx, sourceRun, store, endpoints)
 	} else {
 		report, runErr = runBundle(runCtx, run, store, endpoints)
 	}
@@ -370,6 +373,19 @@ func writeHTTPError(w http.ResponseWriter, status int, err error) {
 	writeResponseJSON(w, status, map[string]string{"error": err.Error()})
 }
 
+func readBundleRun(path string) (fleet.BundleRun, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return fleet.BundleRun{}, fmt.Errorf("open bundle run: %w", err)
+	}
+	defer file.Close()
+	run, err := fleet.DecodeBundleRun(file)
+	if err != nil {
+		return fleet.BundleRun{}, err
+	}
+	return run, nil
+}
+
 func readRun(path string) (fleet.Run, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -379,19 +395,6 @@ func readRun(path string) (fleet.Run, error) {
 	run, err := fleet.DecodeRun(file)
 	if err != nil {
 		return fleet.Run{}, err
-	}
-	return run, nil
-}
-
-func readGenericRun(path string) (fleet.GenericRun, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return fleet.GenericRun{}, fmt.Errorf("open generic run: %w", err)
-	}
-	defer file.Close()
-	run, err := fleet.DecodeGenericRun(file)
-	if err != nil {
-		return fleet.GenericRun{}, err
 	}
 	return run, nil
 }
@@ -418,11 +421,11 @@ func discoverAgentEndpoints(ctx context.Context, urls []string, httpClient *http
 	return endpoints, nil
 }
 
-func runBundle(ctx context.Context, run fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
+func runBundle(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
 	return runBundleWithOptions(ctx, run, store, endpoints, fleet.CoordinatorOptions{})
 }
 
-func runBundleWithOptions(ctx context.Context, run fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions) (fleet.RuntimeReport, error) {
+func runBundleWithOptions(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions) (fleet.RuntimeReport, error) {
 	if len(endpoints) == 0 {
 		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
 	}
@@ -445,17 +448,17 @@ func runBundleWithOptions(ctx context.Context, run fleet.Run, store fleet.Termin
 	return coordinator.Run(ctx, run)
 }
 
-func runGeneric(ctx context.Context, generic fleet.GenericRun, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
-	endpoint, err := selectGenericPrepareEndpoint(generic, endpoints)
+func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
+	endpoint, err := selectPrepareEndpoint(source, endpoints)
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
-	log.Printf("generic-run prepare selected run_id=%s agent_id=%s url=%s", generic.RunID, endpoint.Status.AgentID, endpoint.URL)
-	prepared, err := endpoint.Client.PrepareBundle(ctx, generic)
+	log.Printf("run prepare selected run_id=%s agent_id=%s url=%s", source.RunID, endpoint.Status.AgentID, endpoint.URL)
+	prepared, err := endpoint.Client.PrepareBundle(ctx, source)
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
-	run, err := generic.Compile(prepared)
+	run, err := source.Compile(prepared)
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
@@ -465,11 +468,11 @@ func runGeneric(ctx context.Context, generic fleet.GenericRun, store fleet.Termi
 	})
 }
 
-func selectGenericPrepareEndpoint(generic fleet.GenericRun, endpoints []agentEndpoint) (agentEndpoint, error) {
-	if err := generic.Validate(); err != nil {
+func selectPrepareEndpoint(source fleet.Run, endpoints []agentEndpoint) (agentEndpoint, error) {
+	if err := source.Validate(); err != nil {
 		return agentEndpoint{}, err
 	}
-	requiredCapacity := fleet.RequiredInFlightSlots(generic.Children.Count, generic.Execution)
+	requiredCapacity := fleet.RequiredInFlightSlots(source.Children.Count, source.Execution)
 	bestCapacity := 0
 	healthy := false
 	for _, endpoint := range endpoints {
@@ -478,7 +481,7 @@ func selectGenericPrepareEndpoint(generic fleet.GenericRun, endpoints []agentEnd
 			continue
 		}
 		healthy = true
-		capacity := min(status.ExecutionSlots.Available, generic.Execution.MaxInFlightPerAgent)
+		capacity := min(status.ExecutionSlots.Available, source.Execution.MaxInFlightPerAgent)
 		if capacity > bestCapacity {
 			bestCapacity = capacity
 		}
@@ -489,7 +492,7 @@ func selectGenericPrepareEndpoint(generic fleet.GenericRun, endpoints []agentEnd
 	if !healthy {
 		return agentEndpoint{}, fleet.ErrNoCompatibleAgents
 	}
-	return agentEndpoint{}, fmt.Errorf("%w: generic run needs %d in-flight slots on one preparing agent while bundle URI is local, have %d", fleet.ErrInsufficientCapacity, requiredCapacity, bestCapacity)
+	return agentEndpoint{}, fmt.Errorf("%w: run needs %d in-flight slots on one preparing agent while bundle URI is local, have %d", fleet.ErrInsufficientCapacity, requiredCapacity, bestCapacity)
 }
 
 func envString(name, fallback string) string {

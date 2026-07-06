@@ -19,13 +19,13 @@ import (
 )
 
 const (
-	defaultNamespace           = "sporevm-system"
-	defaultImage               = "sporevm-k8s-runtime:sporevm-0.5.2"
-	defaultResultRoot          = "/var/lib/sporevm/coordinator-results"
-	defaultRunMountPath        = "/etc/sporevm/run/run.json"
-	defaultGenericRunMountPath = "/etc/sporevm/run/generic-run.json"
-	defaultRuntimePolicy       = "Always"
-	submitUsage                = "usage: sporectl submit [flags] RUN.json"
+	defaultNamespace          = "sporevm-system"
+	defaultImage              = "sporevm-k8s-runtime:sporevm-0.5.2"
+	defaultResultRoot         = "/var/lib/sporevm/coordinator-results"
+	defaultRunMountPath       = "/etc/sporevm/run/run.json"
+	defaultBundleRunMountPath = "/etc/sporevm/run/bundle-run.json"
+	defaultRuntimePolicy      = "Always"
+	submitUsage               = "usage: sporectl submit [flags] RUN.json"
 )
 
 type submitOptions struct {
@@ -189,18 +189,18 @@ func buildSubmitResourcesFromOptions(opts submitOptions) (resourceList, resource
 
 	switch kind {
 	case submitRunKindBundle:
+		run, err := fleet.DecodeBundleRun(bytes.NewReader(runBytes))
+		if err != nil {
+			return resourceList{}, resourceNames{}, "", err
+		}
+		resources, names, err := buildBundleSubmitResources(run, runBytes, opts)
+		return resources, names, run.RunID, err
+	case submitRunKindRun:
 		run, err := fleet.DecodeRun(bytes.NewReader(runBytes))
 		if err != nil {
 			return resourceList{}, resourceNames{}, "", err
 		}
 		resources, names, err := buildSubmitResources(run, runBytes, opts)
-		return resources, names, run.RunID, err
-	case submitRunKindGeneric:
-		run, err := fleet.DecodeGenericRun(bytes.NewReader(runBytes))
-		if err != nil {
-			return resourceList{}, resourceNames{}, "", err
-		}
-		resources, names, err := buildGenericSubmitResources(run, runBytes, opts)
 		return resources, names, run.RunID, err
 	default:
 		return resourceList{}, resourceNames{}, "", fmt.Errorf("unsupported run document kind %q", kind)
@@ -210,8 +210,8 @@ func buildSubmitResourcesFromOptions(opts submitOptions) (resourceList, resource
 type submitRunKind string
 
 const (
-	submitRunKindBundle  submitRunKind = "bundle"
-	submitRunKindGeneric submitRunKind = "generic"
+	submitRunKindBundle submitRunKind = "bundle"
+	submitRunKindRun    submitRunKind = "run"
 )
 
 func detectSubmitRunKind(data []byte) (submitRunKind, error) {
@@ -235,17 +235,17 @@ func detectSubmitRunKind(data []byte) (submitRunKind, error) {
 	_, hasFork := fields["fork"]
 
 	hasBundleRunFields := hasBundle || hasHostClass
-	hasGenericRunFields := hasSource || hasPrepare || hasFork
-	if hasBundleRunFields && hasGenericRunFields {
-		return "", fmt.Errorf("%w: run input mixes bundle run fields with generic run fields", fleet.ErrInvalidContract)
+	hasRunFields := hasSource || hasPrepare || hasFork
+	if hasBundleRunFields && hasRunFields {
+		return "", fmt.Errorf("%w: run input mixes bundle run fields with run fields", fleet.ErrInvalidContract)
 	}
-	if hasGenericRunFields {
-		return submitRunKindGeneric, nil
+	if hasRunFields {
+		return submitRunKindRun, nil
 	}
 	if hasBundleRunFields {
 		return submitRunKindBundle, nil
 	}
-	return "", fmt.Errorf("%w: run input must include either generic run fields (source, prepare, fork) or bundle run fields (bundle, hostClass)", fleet.ErrInvalidContract)
+	return "", fmt.Errorf("%w: run input must include either run fields (source, prepare, fork) or bundle run fields (bundle, hostClass)", fleet.ErrInvalidContract)
 }
 
 type resourceNames struct {
@@ -261,6 +261,19 @@ type submitPayload struct {
 	Bytes           []byte
 }
 
+func buildBundleSubmitResources(run fleet.BundleRun, runBytes []byte, opts submitOptions) (resourceList, resourceNames, error) {
+	if err := run.Validate(); err != nil {
+		return resourceList{}, resourceNames{}, err
+	}
+	return buildSubmitResourcesForPayload(submitPayload{
+		RunID:           run.RunID,
+		ConfigMapKey:    "bundle-run.json",
+		CoordinatorFlag: "bundle-run",
+		MountPath:       defaultBundleRunMountPath,
+		Bytes:           runBytes,
+	}, opts)
+}
+
 func buildSubmitResources(run fleet.Run, runBytes []byte, opts submitOptions) (resourceList, resourceNames, error) {
 	if err := run.Validate(); err != nil {
 		return resourceList{}, resourceNames{}, err
@@ -270,19 +283,6 @@ func buildSubmitResources(run fleet.Run, runBytes []byte, opts submitOptions) (r
 		ConfigMapKey:    "run.json",
 		CoordinatorFlag: "run",
 		MountPath:       defaultRunMountPath,
-		Bytes:           runBytes,
-	}, opts)
-}
-
-func buildGenericSubmitResources(run fleet.GenericRun, runBytes []byte, opts submitOptions) (resourceList, resourceNames, error) {
-	if err := run.Validate(); err != nil {
-		return resourceList{}, resourceNames{}, err
-	}
-	return buildSubmitResourcesForPayload(submitPayload{
-		RunID:           run.RunID,
-		ConfigMapKey:    "generic-run.json",
-		CoordinatorFlag: "generic-run",
-		MountPath:       defaultGenericRunMountPath,
 		Bytes:           runBytes,
 	}, opts)
 }

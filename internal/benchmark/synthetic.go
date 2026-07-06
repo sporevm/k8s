@@ -32,7 +32,7 @@ type SyntheticResult struct {
 }
 
 // RunSynthetic runs the single-cell coordinator path with deterministic executors.
-func RunSynthetic(ctx context.Context, run fleet.Run, opts SyntheticOptions) (SyntheticResult, error) {
+func RunSynthetic(ctx context.Context, run fleet.BundleRun, opts SyntheticOptions) (SyntheticResult, error) {
 	if err := run.Validate(); err != nil {
 		return SyntheticResult{}, err
 	}
@@ -86,7 +86,7 @@ func RunSynthetic(ctx context.Context, run fleet.Run, opts SyntheticOptions) (Sy
 	}, nil
 }
 
-func defaultSyntheticOptions(run fleet.Run, opts SyntheticOptions) SyntheticOptions {
+func defaultSyntheticOptions(run fleet.BundleRun, opts SyntheticOptions) SyntheticOptions {
 	if opts.AgentCount == 0 {
 		opts.AgentCount = defaultAgentCount
 	}
@@ -108,7 +108,7 @@ func defaultSyntheticOptions(run fleet.Run, opts SyntheticOptions) SyntheticOpti
 	return opts
 }
 
-func validateSyntheticOptions(run fleet.Run, opts SyntheticOptions) error {
+func validateSyntheticOptions(run fleet.BundleRun, opts SyntheticOptions) error {
 	if opts.AgentCount < 1 {
 		return fmt.Errorf("%w: synthetic agent count must be >= 1", ErrInvalidBenchmark)
 	}
@@ -127,7 +127,7 @@ func validateSyntheticOptions(run fleet.Run, opts SyntheticOptions) error {
 	return nil
 }
 
-func syntheticAgents(run fleet.Run, opts SyntheticOptions) []fleet.AgentStatus {
+func syntheticAgents(run fleet.BundleRun, opts SyntheticOptions) []fleet.AgentStatus {
 	agents := make([]fleet.AgentStatus, 0, opts.AgentCount)
 	for i := 0; i < opts.AgentCount; i++ {
 		agents = append(agents, fleet.AgentStatus{
@@ -153,19 +153,19 @@ type syntheticInspector struct {
 	inspection fleet.BundleInspection
 }
 
-func (i syntheticInspector) InspectRunBundle(context.Context, fleet.Run) (fleet.BundleInspection, error) {
+func (i syntheticInspector) InspectRunBundle(context.Context, fleet.BundleRun) (fleet.BundleInspection, error) {
 	return i.inspection, nil
 }
 
 type syntheticState struct {
 	mu           sync.Mutex
-	run          fleet.Run
+	run          fleet.BundleRun
 	opts         SyntheticOptions
 	terminal     map[int]fleet.AttemptResult
 	observations []Observation
 }
 
-func newSyntheticState(run fleet.Run, opts SyntheticOptions) *syntheticState {
+func newSyntheticState(run fleet.BundleRun, opts SyntheticOptions) *syntheticState {
 	return &syntheticState{
 		run:      run,
 		opts:     opts,
@@ -173,7 +173,7 @@ func newSyntheticState(run fleet.Run, opts SyntheticOptions) *syntheticState {
 	}
 }
 
-func (s *syntheticState) TerminalResult(_ context.Context, _ fleet.Run, childID int) (fleet.AttemptResult, bool, error) {
+func (s *syntheticState) TerminalResult(_ context.Context, _ fleet.BundleRun, childID int) (fleet.AttemptResult, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result, ok := s.terminal[childID]
@@ -211,7 +211,7 @@ func (e syntheticExecutor) RunShard(ctx context.Context, req fleet.ShardExecutio
 	return results, nil
 }
 
-func syntheticObservation(run fleet.Run, opts SyntheticOptions, lease fleet.ShardLease, childID int) Observation {
+func syntheticObservation(run fleet.BundleRun, opts SyntheticOptions, lease fleet.ShardLease, childID int) Observation {
 	localIndex := childID - lease.ChildStart
 	startOffsetMS := float64(localIndex % max(1, run.Execution.MaxInFlightPerAgent))
 	timings := syntheticTimings(childID)
@@ -249,7 +249,7 @@ func syntheticCacheMetrics(posture CachePosture, childID int) (int64, int, int) 
 	}
 }
 
-func syntheticAttemptResult(run fleet.Run, lease fleet.ShardLease, childID int, attempt int, observation Observation) fleet.AttemptResult {
+func syntheticAttemptResult(run fleet.BundleRun, lease fleet.ShardLease, childID int, attempt int, observation Observation) fleet.AttemptResult {
 	finishedAt := observation.ReadyAt().Add(durationMS(observation.TimingsMS.ResultCommit))
 	return fleet.AttemptResult{
 		RunID:        run.RunID,

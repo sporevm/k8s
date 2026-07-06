@@ -1,5 +1,5 @@
 {
-  "runID": "busybox-generic-smoke-20260624",
+  "runID": "busybox-run-smoke-20260624",
   "source": {
     "image": "docker.io/library/busybox:latest",
     "platform": "linux/arm64"
@@ -37,5 +37,5 @@
   "sideEffects": {
     "idempotencyRequired": true
   },
-  "resultStore": "s3://example-sporevm-results/busybox-generic-smoke-20260624/"
+  "resultStore": "s3://example-sporevm-results/busybox-run-smoke-20260624/"
 }
