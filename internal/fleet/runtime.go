@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -152,6 +153,7 @@ func (c *Coordinator) Run(ctx context.Context, run Run) (RuntimeReport, error) {
 	return RuntimeReport{
 		Plan:    plan,
 		Summary: summary,
+		Timings: state.timingSummary(),
 	}, errors.Join(errs...)
 }
 
@@ -235,7 +237,7 @@ func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run Run, leas
 			return false, err
 		}
 		if ok {
-			state.recordExistingTerminal(childID, result.Status)
+			state.recordExistingTerminal(childID, result)
 			continue
 		}
 		pending = true
@@ -248,7 +250,7 @@ type runtimeState struct {
 	run                 Run
 	plan                Plan
 	startedAt           time.Time
-	terminal            map[int]AttemptStatus
+	terminal            map[int]AttemptResult
 	attemptCount        int
 	platformMismatches  int
 	nonTerminalFailures int
@@ -260,7 +262,7 @@ func newRuntimeState(run Run, plan Plan, startedAt time.Time) *runtimeState {
 		run:       run,
 		plan:      plan,
 		startedAt: startedAt,
-		terminal:  make(map[int]AttemptStatus, run.Children.Count),
+		terminal:  make(map[int]AttemptResult, run.Children.Count),
 	}
 }
 
@@ -271,16 +273,16 @@ func (s *runtimeState) terminalKnown(childID int) bool {
 	return ok
 }
 
-func (s *runtimeState) recordExistingTerminal(childID int, status AttemptStatus) {
+func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.terminal[childID]; ok {
 		return
 	}
-	if status == "" {
-		status = AttemptSkippedTerminalExists
+	if result.Status == "" {
+		result.Status = AttemptSkippedTerminalExists
 	}
-	s.terminal[childID] = status
+	s.terminal[childID] = result
 }
 
 func (s *runtimeState) recordResults(results []AttemptResult) {
@@ -303,7 +305,7 @@ func (s *runtimeState) recordResults(results []AttemptResult) {
 		if _, exists := s.terminal[result.ChildID]; exists && result.Status == AttemptSkippedTerminalExists {
 			continue
 		}
-		s.terminal[result.ChildID] = result.Status
+		s.terminal[result.ChildID] = result
 	}
 }
 
@@ -332,8 +334,8 @@ func (s *runtimeState) summary(finishedAt time.Time, runErr error) RuntimeSummar
 		StartedAt:           s.startedAt,
 		FinishedAt:          finishedAt,
 	}
-	for _, status := range s.terminal {
-		switch status {
+	for _, result := range s.terminal {
+		switch result.Status {
 		case AttemptSucceeded:
 			summary.SucceededChildren++
 		case AttemptFailed:
@@ -346,4 +348,84 @@ func (s *runtimeState) summary(finishedAt time.Time, runErr error) RuntimeSummar
 		summary.State = "failed"
 	}
 	return summary
+}
+
+func (s *runtimeState) timingSummary() *RuntimeTimingSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var childReady []float64
+	var artifactPull []float64
+	var materialization []float64
+	var resume []float64
+	var guestReady []float64
+	var resultCommit []float64
+	for _, result := range s.terminal {
+		if result.Status != AttemptSucceeded || result.StartedAt.IsZero() {
+			continue
+		}
+		readyAt := result.StartedAt.Add(runtimeDurationMS(
+			result.TimingsMS.ArtifactPull +
+				result.TimingsMS.Materialization +
+				result.TimingsMS.Resume +
+				result.TimingsMS.GuestReady,
+		))
+		childReady = append(childReady, runtimeElapsedMS(s.startedAt, readyAt))
+		artifactPull = append(artifactPull, result.TimingsMS.ArtifactPull)
+		materialization = append(materialization, result.TimingsMS.Materialization)
+		resume = append(resume, result.TimingsMS.Resume)
+		guestReady = append(guestReady, result.TimingsMS.GuestReady)
+		resultCommit = append(resultCommit, result.TimingsMS.ResultCommit)
+	}
+	if len(childReady) == 0 {
+		return nil
+	}
+	return &RuntimeTimingSummary{
+		ChildReadyMS: runtimePercentiles(childReady),
+		StagePercentilesMS: RuntimeStagePercentiles{
+			ArtifactPull:    runtimePercentiles(artifactPull),
+			Materialization: runtimePercentiles(materialization),
+			Resume:          runtimePercentiles(resume),
+			GuestReady:      runtimePercentiles(guestReady),
+			ResultCommit:    runtimePercentiles(resultCommit),
+		},
+	}
+}
+
+func runtimePercentiles(values []float64) RuntimePercentiles {
+	if len(values) == 0 {
+		return RuntimePercentiles{}
+	}
+	sorted := append([]float64(nil), values...)
+	slices.Sort(sorted)
+	return RuntimePercentiles{
+		P50: runtimePercentile(sorted, 0.50),
+		P95: runtimePercentile(sorted, 0.95),
+		P99: runtimePercentile(sorted, 0.99),
+	}
+}
+
+func runtimePercentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+	index := int(p*float64(len(sorted))+0.999999999) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+	return sorted[index]
+}
+
+func runtimeDurationMS(ms float64) time.Duration {
+	return time.Duration(ms * float64(time.Millisecond))
+}
+
+func runtimeElapsedMS(start, end time.Time) float64 {
+	if end.Before(start) {
+		return 0
+	}
+	return float64(end.Sub(start).Microseconds()) / 1000
 }

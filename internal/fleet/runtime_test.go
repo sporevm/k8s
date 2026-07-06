@@ -45,6 +45,12 @@ func TestCoordinatorRunExecutesSingleCellPlan(t *testing.T) {
 	if report.Summary.AttemptCount != 1000 {
 		t.Fatalf("attempt count = %d", report.Summary.AttemptCount)
 	}
+	if report.Timings == nil {
+		t.Fatal("timings are nil")
+	}
+	if report.Timings.StagePercentilesMS.Resume.P50 != 30 {
+		t.Fatalf("resume p50 = %v, want 30", report.Timings.StagePercentilesMS.Resume.P50)
+	}
 	if err := ValidateCompleteCoverage(run, report.Plan.Leases); err != nil {
 		t.Fatalf("ValidateCompleteCoverage: %v", err)
 	}
@@ -389,8 +395,15 @@ func runtimeAttemptResult(run Run, lease ShardLease, childID int, attempt int, s
 		ShardID:      lease.ShardID,
 		Status:       status,
 		StartedAt:    now,
-		FinishedAt:   now.Add(time.Second),
-		Terminal:     terminal,
+		FinishedAt:   now.Add(105 * time.Millisecond),
+		TimingsMS: AttemptTimings{
+			ArtifactPull:    10,
+			Materialization: 20,
+			Resume:          30,
+			GuestReady:      40,
+			ResultCommit:    5,
+		},
+		Terminal: terminal,
 	}
 	if terminal {
 		result.ResultURI = fmt.Sprintf("%schildren/%d/terminal.json", run.ResultStore, childID)

@@ -14,6 +14,10 @@ run = "go test ./..."
 description = "Run the synthetic 1,000-child coordinator benchmark harness"
 run = "go run ./cmd/spore-fleet-benchmark --run examples/fleet/run-1000.json --agents 10 --slots-per-agent 100 --target-concurrency 1000"
 
+[tasks."fleet:benchmark:computesdk"]
+description = "Run the live ComputeSDK-shaped sequential TTI benchmark against the current Kubernetes context"
+run = "python3 scripts/computesdk_sporevm_benchmark.py"
+
 [tasks."runtime:image:build"]
 description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.5.2"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:0.1.1 ."

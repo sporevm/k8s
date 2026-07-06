@@ -50,6 +50,35 @@ agent:
     enabled: false
     secretName: spore-registry-ca
 
+api:
+  enabled: false
+  image:
+    repository: ghcr.io/sporevm/k8s-runtime
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8081
+  agentURL: http://spore-agent:8080
+  resultStoreRoot: /var/lib/sporevm/coordinator-results
+  timeout: 30m
+  nodeSelector:
+    kubernetes.io/arch: arm64
+    sporevm.io/agent: "true"
+    sporevm.io/arch: aarch64
+    sporevm.io/backend: kvm
+  tolerations:
+    - key: sporevm.io/agent
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 registry:
   enabled: false
   image:

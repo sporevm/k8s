@@ -9,3 +9,4 @@ crash.*.log
 *.tfvars.json
 __pycache__/
 dist/
+results/

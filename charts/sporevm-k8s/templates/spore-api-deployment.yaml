@@ -1,0 +1,55 @@
+{{- if .Values.api.enabled }}
+{{- $imageTag := default .Chart.AppVersion .Values.api.image.tag }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spore-api
+  labels:
+    app.kubernetes.io/name: spore-api
+    {{- include "sporevm-k8s.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spore-api
+      app.kubernetes.io/part-of: sporevm-k8s
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spore-api
+        app.kubernetes.io/part-of: sporevm-k8s
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.api.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.api.tolerations | nindent 8 }}
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.service.port }}
+          command:
+            - /usr/local/bin/spore-coordinator
+          args:
+            - --listen=:{{ .Values.api.service.port }}
+            - --agent-url={{ .Values.api.agentURL }}
+            - --result-store-root={{ .Values.api.resultStoreRoot }}
+            - --timeout={{ .Values.api.timeout }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+{{- end }}
