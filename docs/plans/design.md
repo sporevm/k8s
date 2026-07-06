@@ -464,6 +464,14 @@ unique named VMs. Each request can consume one already-warmed VM and return
 after `spore exec`; pool refill remains outside the measured request path until
 SporeVM can fork the disk-backed parent directly.
 
+Latest live baseline: with a port-forwarded agent and local resident
+coordinator API, 10/10 isolated Node runs through `POST /runs` completed with
+15.80s median TTI and 15.92s p95. A warmed-pool diagnostic against the deployed
+pre-rename hot-VM API completed 10/10 unique already-created VMs with 154ms
+median and 160ms p95. The next proof step is publishing a runtime image with
+the `/sandboxes` API rename and rerunning the same warmed-pool diagnostic
+through the public API names.
+
 ### Slice 7: Optional Kubernetes UX
 
 Add CRDs, Kueue, or an operator only after the run and CI paths work.

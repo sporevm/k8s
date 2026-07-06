@@ -102,3 +102,30 @@ coordinator API. It includes parent preparation, child resume, and result
 reporting, but not Kubernetes Job creation. SporeVM warm-fork capacity should
 be reported separately: one prepare, many children, aggregate success, and
 runtime timing percentiles from the coordinator report.
+
+## Current Live Baseline
+
+On 2026-07-06 UTC, a compatible Kubernetes cell with a port-forwarded agent and
+a local `spore-coordinator` API completed 10/10 isolated Node runs through
+`POST /runs`:
+
+```text
+transport=api median=15.80s p95=15.92s p99=15.92s success=100%
+```
+
+That is the cached-rootfs, per-request isolation path. It avoids Kubernetes Job
+startup, but still pays SporeVM prepare, fork, resume, guest command, and result
+reporting for every request.
+
+The same cell's deployed runtime image still used the pre-rename hot-VM
+endpoints. As a warmed-pool diagnostic, 10 unique already-created named VMs
+executed `node -v` through the resident API with:
+
+```text
+transport=api-hot-vms-legacy median=154ms p95=160ms p99=160ms success=100%
+```
+
+Rerun `--sandbox-pool` after publishing a runtime image that contains the
+`/sandboxes` API rename. Until SporeVM can fork this disk-backed Node rootfs
+directly, the fast ComputeSDK-shaped path is a pool of unique warmed VMs with
+pool refill outside measured request TTI.
