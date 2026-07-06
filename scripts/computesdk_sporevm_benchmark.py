@@ -357,7 +357,7 @@ def default_runtime_image(repo: Path) -> str:
 def trim_error(output: str) -> str:
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if not lines:
-        return "sporectl submit failed without output"
+        return "submit failed without output"
     joined = " | ".join(lines[-8:])
     if len(joined) > 1000:
         return joined[-1000:]

@@ -54,7 +54,7 @@ api:
   enabled: false
   image:
     repository: ghcr.io/sporevm/k8s-runtime
-    tag: "0.1.1"
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     port: 8081

@@ -1,4 +1,5 @@
 {{- if .Values.api.enabled }}
+{{- $imageTag := default .Chart.AppVersion .Values.api.image.tag }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +26,7 @@ spec:
         {{- toYaml .Values.api.tolerations | nindent 8 }}
       containers:
         - name: api
-          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          image: "{{ .Values.api.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ .Values.api.image.pullPolicy }}
           ports:
             - name: http
