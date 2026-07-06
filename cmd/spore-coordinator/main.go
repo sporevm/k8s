@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -39,6 +40,7 @@ func (f *agentURLsFlag) Set(value string) error {
 type coordinatorConfig struct {
 	RunPath         string
 	GenericRunPath  string
+	Listen          string
 	ResultStoreRoot string
 	Timeout         time.Duration
 	AgentURLs       agentURLsFlag
@@ -56,6 +58,7 @@ func main() {
 
 	flag.StringVar(&cfg.RunPath, "run", envString("SPORE_RUN_PATH", ""), "fleet run JSON path")
 	flag.StringVar(&cfg.GenericRunPath, "generic-run", envString("SPORE_GENERIC_RUN_PATH", ""), "generic fleet run JSON path")
+	flag.StringVar(&cfg.Listen, "listen", envString("SPORE_COORDINATOR_LISTEN", ""), "HTTP listen address for the resident coordinator API")
 	flag.Var(&cfg.AgentURLs, "agent-url", "agent base URL; may be repeated or comma-separated")
 	flag.StringVar(&cfg.ResultStoreRoot, "result-store-root", envString("SPORE_COORDINATOR_RESULT_STORE_ROOT", "/var/lib/sporevm/coordinator-results"), "local root for coordinator terminal prechecks")
 	flag.DurationVar(&cfg.Timeout, "timeout", envDuration("SPORE_COORDINATOR_TIMEOUT", 30*time.Minute), "coordinator run timeout")
@@ -63,6 +66,12 @@ func main() {
 
 	if envURLs := os.Getenv("SPORE_AGENT_URLS"); envURLs != "" {
 		_ = cfg.AgentURLs.Set(envURLs)
+	}
+	if cfg.Listen != "" {
+		if err := serveCoordinator(context.Background(), cfg); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if cfg.RunPath == "" && cfg.GenericRunPath == "" {
 		cfg.RunPath = defaultRunPath
@@ -74,6 +83,92 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "coordinator failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func serveCoordinator(ctx context.Context, cfg coordinatorConfig) error {
+	if cfg.Listen == "" {
+		return errors.New("listen address is required")
+	}
+	handler, err := coordinatorHandler(cfg)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
+	log.Printf("spore-coordinator API listening on %s", cfg.Listen)
+	return server.ListenAndServe()
+}
+
+func coordinatorHandler(cfg coordinatorConfig) (http.Handler, error) {
+	if len(cfg.AgentURLs) == 0 {
+		return nil, errors.New("at least one --agent-url or SPORE_AGENT_URLS entry is required")
+	}
+	if cfg.ResultStoreRoot == "" {
+		return nil, errors.New("result store root is required")
+	}
+	if cfg.Timeout <= 0 {
+		return nil, errors.New("timeout must be positive")
+	}
+	api := coordinatorAPI{cfg: cfg}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", api.handleHealthz)
+	mux.HandleFunc("GET /readyz", api.handleReadyz)
+	mux.HandleFunc("POST /generic-runs", api.handleGenericRun)
+	return mux, nil
+}
+
+type coordinatorAPI struct {
+	cfg coordinatorConfig
+}
+
+func (a coordinatorAPI) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("content-type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+func (a coordinatorAPI) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := discoverAgentEndpoints(ctx, a.cfg.AgentURLs, a.cfg.HTTPClient); err != nil {
+		writeHTTPError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	w.Header().Set("content-type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ready\n"))
+}
+
+func (a coordinatorAPI) handleGenericRun(w http.ResponseWriter, r *http.Request) {
+	var generic fleet.GenericRun
+	if !decodeRequestJSON(w, r, &generic) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), a.cfg.Timeout)
+	defer cancel()
+
+	store, err := agent.NewLocalResultStore(a.cfg.ResultStoreRoot)
+	if err != nil {
+		writeHTTPError(w, http.StatusInternalServerError, fmt.Errorf("create coordinator result store: %w", err))
+		return
+	}
+	endpoints, err := discoverAgentEndpoints(ctx, a.cfg.AgentURLs, a.cfg.HTTPClient)
+	if err != nil {
+		writeHTTPError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	report, runErr := runGeneric(ctx, generic, store, endpoints)
+	if !hasRuntimeReport(report) {
+		if runErr != nil {
+			writeHTTPError(w, http.StatusBadRequest, runErr)
+			return
+		}
+		writeHTTPError(w, http.StatusInternalServerError, errors.New("coordinator produced no runtime report"))
+		return
+	}
+	writeResponseJSON(w, http.StatusOK, report)
 }
 
 func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer) error {
@@ -155,6 +250,40 @@ func runtimeReportError(report fleet.RuntimeReport) error {
 		report.Summary.PlatformMismatches,
 		report.Summary.LeaseErrors,
 	)
+}
+
+func decodeRequestJSON(w http.ResponseWriter, r *http.Request, out any) bool {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		writeHTTPError(w, http.StatusBadRequest, err)
+		return false
+	}
+	var extra struct{}
+	if err := decoder.Decode(&extra); err == nil {
+		writeHTTPError(w, http.StatusBadRequest, errors.New("request must contain exactly one JSON document"))
+		return false
+	} else if !errors.Is(err, io.EOF) {
+		writeHTTPError(w, http.StatusBadRequest, err)
+		return false
+	}
+	return true
+}
+
+func writeResponseJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(status)
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(value)
+}
+
+func writeHTTPError(w http.ResponseWriter, status int, err error) {
+	if status < 400 {
+		status = http.StatusInternalServerError
+	}
+	writeResponseJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func readRun(path string) (fleet.Run, error) {

@@ -38,6 +38,24 @@ created by `sporectl submit`.
 
 Publishing notes live in [docs/publishing.md](docs/publishing.md).
 
+## Benchmarks
+
+The live ComputeSDK-shaped TTI harness can call the resident coordinator API
+and measure wall-clock time until `node -v` succeeds through the coordinator
+report:
+
+```bash
+kubectl -n sporevm-system port-forward svc/spore-agent 18081:8080
+go run ./cmd/spore-coordinator --listen=127.0.0.1:18080 --agent-url=http://127.0.0.1:18081 --result-store-root="$(mktemp -d)"
+python3 scripts/computesdk_sporevm_benchmark.py \
+  --api-url http://127.0.0.1:18080 \
+  --iterations 10
+```
+
+It writes ComputeSDK-style JSON under `results/sequential_tti/`. See
+[docs/benchmarks.md](docs/benchmarks.md) for the live cluster command shape and
+scope.
+
 ## Development
 
 ```bash

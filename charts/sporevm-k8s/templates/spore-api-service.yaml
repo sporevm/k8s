@@ -1,0 +1,17 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: spore-api
+  labels:
+    app.kubernetes.io/name: spore-api
+    {{- include "sporevm-k8s.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: spore-api
+    app.kubernetes.io/part-of: sporevm-k8s
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http
+{{- end }}

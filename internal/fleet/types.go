@@ -299,8 +299,31 @@ type RuntimeSummary struct {
 	FinishedAt              time.Time `json:"finishedAt"`
 }
 
+// RuntimeTimingSummary reports compact timing distributions for terminal child attempts.
+type RuntimeTimingSummary struct {
+	ChildReadyMS       RuntimePercentiles      `json:"childReadyMs"`
+	StagePercentilesMS RuntimeStagePercentiles `json:"stagePercentilesMs"`
+}
+
+// RuntimeStagePercentiles groups runtime phase percentiles.
+type RuntimeStagePercentiles struct {
+	ArtifactPull    RuntimePercentiles `json:"artifactPull"`
+	Materialization RuntimePercentiles `json:"materialization"`
+	Resume          RuntimePercentiles `json:"resume"`
+	GuestReady      RuntimePercentiles `json:"guestReady"`
+	ResultCommit    RuntimePercentiles `json:"resultCommit"`
+}
+
+// RuntimePercentiles reports p50/p95/p99 latency in milliseconds.
+type RuntimePercentiles struct {
+	P50 float64 `json:"p50"`
+	P95 float64 `json:"p95"`
+	P99 float64 `json:"p99"`
+}
+
 // RuntimeReport is the coordinator result for one admitted run.
 type RuntimeReport struct {
-	Plan    Plan           `json:"plan"`
-	Summary RuntimeSummary `json:"summary"`
+	Plan    Plan                  `json:"plan"`
+	Summary RuntimeSummary        `json:"summary"`
+	Timings *RuntimeTimingSummary `json:"timings,omitempty"`
 }

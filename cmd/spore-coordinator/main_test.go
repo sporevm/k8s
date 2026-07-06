@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -57,6 +58,43 @@ func TestRunCoordinatorGenericRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	}
 	if !strings.HasPrefix(pulls[0].Source, "file://") {
 		t.Fatalf("pull source = %q, want local prepared file bundle", pulls[0].Source)
+	}
+}
+
+func TestCoordinatorAPIExecutesGenericRun(t *testing.T) {
+	generic := testGenericRun()
+	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
+	agentServer := newTestAgentServer(t, spore, 1)
+	handler, err := coordinatorHandler(coordinatorConfig{
+		ResultStoreRoot: t.TempDir(),
+		Timeout:         time.Minute,
+		AgentURLs:       agentURLsFlag{agentServer.URL},
+		HTTPClient:      agentServer.Client(),
+	})
+	if err != nil {
+		t.Fatalf("coordinatorHandler: %v", err)
+	}
+
+	payload, err := json.Marshal(generic)
+	if err != nil {
+		t.Fatalf("marshal generic run: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/generic-runs", bytes.NewReader(payload))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var report fleet.RuntimeReport
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v\n%s", err, rec.Body.String())
+	}
+	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 1 {
+		t.Fatalf("summary = %+v", report.Summary)
+	}
+	if got := spore.runCaptureCount(); got != 1 {
+		t.Fatalf("run capture count = %d, want 1", got)
 	}
 }
 

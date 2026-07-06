@@ -52,7 +52,8 @@ The fleet has to avoid these failure modes:
   child, shard, agent, and result.
 - Run CI test fan-out for CI as the first concrete workload.
 - Keep Kubernetes useful as an adapter for compatible hosts, DaemonSets,
-  one-shot coordinator Jobs, private access, and later coarse admission.
+  one-shot coordinator Jobs for batch submissions, resident fast APIs, private
+  access, and later coarse admission.
 - Avoid one Kubernetes object, custom resource, or CI job per child.
 - Assign global child ids explicitly across runs, shards, agents, and cells.
 - Store detailed per-child results outside Kubernetes; keep control-plane status
@@ -143,9 +144,17 @@ generic source/prepare/fork run or a lower-level prebuilt bundle run. A
 separate CI subcommand can wait until the same CI-only defaults are repeated
 enough to justify it.
 
-`spore-coordinator` owns one run. It validates the run, chooses compatible
-agents, prepares or references the bundle, leases child ranges, tracks compact
-aggregate state, and exits with a clear run result.
+`spore-coordinator` owns one run when invoked as a batch command. It validates
+the run, chooses compatible agents, prepares or references the bundle, leases
+child ranges, tracks compact aggregate state, and exits with a clear run
+result.
+
+For latency-sensitive callers, the same coordinator binary can run as a
+resident API. The first useful API is deliberately small: `POST /generic-runs`
+accepts the same generic run document as `sporectl submit`, talks directly to
+the agent service, and returns the same aggregate runtime report. It removes
+Kubernetes Job startup from benchmark and sandbox request paths without adding
+CRDs, an operator, or per-child Kubernetes objects.
 
 `spore-agent` runs on compatible hosts. It owns `/dev/kvm`, SporeVM caches,
 object-store credentials, local work directories, slot admission, cache GC, and
@@ -157,7 +166,7 @@ Kubernetes owns deployment and coarse lifecycle for a cell:
 | --- | --- |
 | compatible host | `Node` in a labeled or tainted node group |
 | node-local executor | `spore-agent` DaemonSet |
-| run coordinator | one `Job` per submitted run |
+| run coordinator | one `Job` per batch submission or resident API process |
 | run spec | `ConfigMap` today, optional `SporeRun` later |
 | child VM | no Kubernetes object |
 | child range lease | coordinator-to-agent lease |
@@ -388,15 +397,20 @@ Done when:
 ### Slice 4: Kubernetes Adapter Cell
 
 Status: implemented for one-child public busybox and Rails/RSpec sharded generic
-smokes in a compatible Kubernetes cell; multi-agent bundle handoff pending.
+smokes in a compatible Kubernetes cell. Resident fast API wiring is implemented
+in code and live-smoked through a port-forwarded agent; in-cluster deployment
+requires publishing a runtime image containing the API mode. Multi-agent bundle
+handoff remains pending.
 
-Keep the existing adapter shape: DaemonSet agents plus one coordinator Job per
-run.
+Keep the existing adapter shape: DaemonSet agents, one coordinator Job per
+batch run, and an optional resident API for low-latency submit paths.
 
 Done when:
 
 - `sporectl submit` creates the run ConfigMap and coordinator Job for either a
   prebuilt bundle run or a generic run from one positional run document;
+- the resident coordinator API can accept a generic run without creating a
+  Kubernetes Job;
 - the coordinator talks to agents through private cluster networking;
 - the same generic run completes in a compatible Kubernetes cell;
 - no per-child Kubernetes objects are created.
@@ -418,9 +432,10 @@ Done when:
 
 ### Slice 6: Honest 1,000-Child Scale
 
-Status: partially implemented. Synthetic planning covers 1,000 children, and a
-live single-agent run has proved 100 children. Live 1,000-child capacity is
-still unproved.
+Status: implemented for one compatible single-agent cell. Synthetic planning
+covers 1,000 children, and a live 1,000-child busybox run has completed with
+100 in-flight child slots. The next benchmark work is to turn this into
+repeatable cluster measurements instead of one-off smoke evidence.
 
 Scale by adding real capacity or reducing verified per-child requirements, not
 by overstating slots.
@@ -430,6 +445,9 @@ Done when:
 - dry-run planning proves unique coverage for 1,000 children;
 - live capacity can honestly advertise enough slots across one or more agents;
 - a 1,000-child run reports success rate and timing percentiles.
+- a ComputeSDK-shaped sequential TTI benchmark can run against the live cell.
+- the same benchmark can target the resident API path without creating a
+  Kubernetes Job per iteration.
 
 ### Slice 7: Optional Kubernetes UX
 
