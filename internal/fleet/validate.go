@@ -20,7 +20,19 @@ var (
 	ErrInvalidContract = errors.New("invalid fleet contract")
 )
 
-// DecodeRun decodes a run document and rejects unknown fields.
+// DecodeBundleRun decodes a bundle run document and rejects unknown fields.
+func DecodeBundleRun(r io.Reader) (BundleRun, error) {
+	var run BundleRun
+	if err := decodeOne(r, "bundle run", &run); err != nil {
+		return BundleRun{}, err
+	}
+	if err := run.Validate(); err != nil {
+		return BundleRun{}, err
+	}
+	return run, nil
+}
+
+// DecodeRun decodes a source/prepare/fork run document.
 func DecodeRun(r io.Reader) (Run, error) {
 	var run Run
 	if err := decodeOne(r, "run", &run); err != nil {
@@ -28,18 +40,6 @@ func DecodeRun(r io.Reader) (Run, error) {
 	}
 	if err := run.Validate(); err != nil {
 		return Run{}, err
-	}
-	return run, nil
-}
-
-// DecodeGenericRun decodes a generic source/prepare/fork run document.
-func DecodeGenericRun(r io.Reader) (GenericRun, error) {
-	var run GenericRun
-	if err := decodeOne(r, "generic run", &run); err != nil {
-		return GenericRun{}, err
-	}
-	if err := run.Validate(); err != nil {
-		return GenericRun{}, err
 	}
 	return run, nil
 }
@@ -61,8 +61,8 @@ func decodeOne(r io.Reader, name string, out any) error {
 	return nil
 }
 
-// Validate checks the generic run-level contract before parent preparation.
-func (r GenericRun) Validate() error {
+// Validate checks the source run-level contract before parent preparation.
+func (r Run) Validate() error {
 	if err := validateID(r.RunID, "runID"); err != nil {
 		return err
 	}
@@ -147,24 +147,24 @@ func (p PrepareSpec) Validate(path string) error {
 	return nil
 }
 
-// Compile turns a prepared generic run into the existing immutable bundle run.
-func (r GenericRun) Compile(prepared PreparedBundle) (Run, error) {
+// Compile turns a prepared source run into the existing immutable bundle run.
+func (r Run) Compile(prepared PreparedBundle) (BundleRun, error) {
 	if err := r.Validate(); err != nil {
-		return Run{}, err
+		return BundleRun{}, err
 	}
 	if prepared.Bundle.URI == "" {
-		return Run{}, contractError("prepared.bundle.uri must not be empty")
+		return BundleRun{}, contractError("prepared.bundle.uri must not be empty")
 	}
 	if err := validateDigest(prepared.Bundle.Digest, "prepared.bundle.digest"); err != nil {
-		return Run{}, err
+		return BundleRun{}, err
 	}
 	if prepared.ChildCount < r.Children.ChildRange().End() {
-		return Run{}, contractError("prepared.childCount must cover children range")
+		return BundleRun{}, contractError("prepared.childCount must cover children range")
 	}
 	if err := prepared.HostClass.Validate("prepared.hostClass"); err != nil {
-		return Run{}, err
+		return BundleRun{}, err
 	}
-	run := Run{
+	run := BundleRun{
 		RunID:        r.RunID,
 		Bundle:       prepared.Bundle,
 		Children:     r.Children.ChildRange(),
@@ -176,13 +176,13 @@ func (r GenericRun) Compile(prepared PreparedBundle) (Run, error) {
 		ResultStore:  r.ResultStore,
 	}
 	if err := run.Validate(); err != nil {
-		return Run{}, err
+		return BundleRun{}, err
 	}
 	return run, nil
 }
 
 // Validate checks the run-level contract invariants needed for admission.
-func (r Run) Validate() error {
+func (r BundleRun) Validate() error {
 	if err := validateID(r.RunID, "runID"); err != nil {
 		return err
 	}
@@ -309,7 +309,7 @@ func (p Pressure) Validate(path string) error {
 }
 
 // Validate checks a shard lease against a run.
-func (l ShardLease) Validate(run Run) error {
+func (l ShardLease) Validate(run BundleRun) error {
 	if err := run.Validate(); err != nil {
 		return err
 	}
@@ -352,7 +352,7 @@ func FormatAttemptID(runID string, childID int, attempt int) string {
 }
 
 // Validate checks an attempt result against the admitted run contract.
-func (r AttemptResult) Validate(run Run) error {
+func (r AttemptResult) Validate(run BundleRun) error {
 	if err := run.Validate(); err != nil {
 		return err
 	}

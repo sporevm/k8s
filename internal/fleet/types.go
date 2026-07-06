@@ -52,8 +52,8 @@ type SideEffects struct {
 	IdempotencyRequired bool `json:"idempotencyRequired"`
 }
 
-// GenericSource identifies the source used to prepare a parent VM.
-type GenericSource struct {
+// RunSource identifies the source used to prepare a parent VM.
+type RunSource struct {
 	Image    string `json:"image"`
 	Platform string `json:"platform"`
 }
@@ -76,40 +76,40 @@ type ForkSpec struct {
 	Count int `json:"count"`
 }
 
-// GenericChildren describes the child range and command for a generic run.
-type GenericChildren struct {
+// RunChildren describes the child range and command for a source run.
+type RunChildren struct {
 	Start   int      `json:"start"`
 	Count   int      `json:"count"`
 	Command []string `json:"command"`
 }
 
-// ChildRange returns the generic child range.
-func (c GenericChildren) ChildRange() ChildRange {
+// ChildRange returns the source child range.
+func (c RunChildren) ChildRange() ChildRange {
 	return ChildRange{Start: c.Start, Count: c.Count}
 }
 
-// GenericRun is the source/prepare/fork contract users submit before a bundle exists.
-type GenericRun struct {
-	RunID       string          `json:"runID"`
-	Source      GenericSource   `json:"source"`
-	Prepare     PrepareSpec     `json:"prepare"`
-	Fork        ForkSpec        `json:"fork"`
-	Children    GenericChildren `json:"children"`
-	Execution   Execution       `json:"execution"`
-	RetryPolicy RetryPolicy     `json:"retryPolicy"`
-	SideEffects SideEffects     `json:"sideEffects"`
-	ResultStore string          `json:"resultStore"`
+// Run is the source/prepare/fork contract users submit before a bundle exists.
+type Run struct {
+	RunID       string      `json:"runID"`
+	Source      RunSource   `json:"source"`
+	Prepare     PrepareSpec `json:"prepare"`
+	Fork        ForkSpec    `json:"fork"`
+	Children    RunChildren `json:"children"`
+	Execution   Execution   `json:"execution"`
+	RetryPolicy RetryPolicy `json:"retryPolicy"`
+	SideEffects SideEffects `json:"sideEffects"`
+	ResultStore string      `json:"resultStore"`
 }
 
-// PreparedBundle is the prepared, forked bundle used to compile a GenericRun.
+// PreparedBundle is the prepared, forked bundle used to compile a Run.
 type PreparedBundle struct {
 	Bundle     Bundle    `json:"bundle"`
 	ChildCount int       `json:"childCount"`
 	HostClass  HostClass `json:"hostClass"`
 }
 
-// Run is the admitted fleet run contract.
-type Run struct {
+// BundleRun is the admitted fleet run contract.
+type BundleRun struct {
 	RunID        string      `json:"runID"`
 	Bundle       Bundle      `json:"bundle"`
 	Children     ChildRange  `json:"children"`
@@ -274,7 +274,7 @@ type BundleInspection struct {
 
 // ShardExecutionRequest is the coordinator-to-agent runtime lease request.
 type ShardExecutionRequest struct {
-	Run     Run        `json:"run"`
+	Run     BundleRun  `json:"run"`
 	Lease   ShardLease `json:"lease"`
 	Attempt int        `json:"attempt"`
 }

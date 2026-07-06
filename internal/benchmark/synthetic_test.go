@@ -112,16 +112,16 @@ func TestRunSyntheticWarmNodeLocalCacheReportsNoOriginBytes(t *testing.T) {
 	}
 }
 
-func loadRunExample(t *testing.T) fleet.Run {
+func loadRunExample(t *testing.T) fleet.BundleRun {
 	t.Helper()
-	file, err := os.Open(filepath.Join("..", "..", "examples", "fleet", "run-1000.json"))
+	file, err := os.Open(filepath.Join("..", "..", "examples", "fleet", "bundle-run-1000.json"))
 	if err != nil {
 		t.Fatalf("open run example: %v", err)
 	}
 	defer file.Close()
-	run, err := fleet.DecodeRun(file)
+	run, err := fleet.DecodeBundleRun(file)
 	if err != nil {
-		t.Fatalf("DecodeRun: %v", err)
+		t.Fatalf("DecodeBundleRun: %v", err)
 	}
 	return run
 }

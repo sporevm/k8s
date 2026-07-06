@@ -270,7 +270,7 @@ exit 2
 
 	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
 	if err := client.CreateVM(context.Background(), CreateVMRequest{
-		Name:    "sporevm-hot-node",
+		Name:    "sporevm-sandbox-node",
 		Image:   "docker.io/library/node:22-bookworm-slim",
 		Backend: "kvm",
 		Memory:  "512mb",
@@ -280,7 +280,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "create sporevm-hot-node --backend kvm --memory 512mb --image docker.io/library/node:22-bookworm-slim -- /bin/sh -lc node -v >/dev/null"
+	want := "create sporevm-sandbox-node --backend kvm --memory 512mb --image docker.io/library/node:22-bookworm-slim -- /bin/sh -lc node -v >/dev/null"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}

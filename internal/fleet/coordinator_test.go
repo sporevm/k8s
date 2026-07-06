@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-func TestDecodeRunRejectsUnknownFields(t *testing.T) {
+func TestDecodeBundleRunRejectsUnknownFields(t *testing.T) {
 	var raw map[string]any
-	decodeExample(t, "run-1000.json", &raw)
+	decodeExample(t, "bundle-run-1000.json", &raw)
 	raw["unexpected"] = true
 
 	payload, err := json.Marshal(raw)
@@ -21,28 +21,28 @@ func TestDecodeRunRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("marshal run: %v", err)
 	}
 
-	_, err = DecodeRun(bytes.NewReader(payload))
+	_, err = DecodeBundleRun(bytes.NewReader(payload))
 	if err == nil {
-		t.Fatal("DecodeRun succeeded with unknown field")
+		t.Fatal("DecodeBundleRun succeeded with unknown field")
 	}
 	if !errors.Is(err, ErrInvalidContract) {
-		t.Fatalf("DecodeRun error = %v, want ErrInvalidContract", err)
+		t.Fatalf("DecodeBundleRun error = %v, want ErrInvalidContract", err)
 	}
 }
 
-func TestDecodeRunRejectsTrailingJSON(t *testing.T) {
-	payload, err := os.ReadFile(filepath.Join("..", "..", "examples", "fleet", "run-1000.json"))
+func TestDecodeBundleRunRejectsTrailingJSON(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "examples", "fleet", "bundle-run-1000.json"))
 	if err != nil {
 		t.Fatalf("read run example: %v", err)
 	}
 	payload = append(payload, []byte("\n{}")...)
 
-	_, err = DecodeRun(bytes.NewReader(payload))
+	_, err = DecodeBundleRun(bytes.NewReader(payload))
 	if err == nil {
-		t.Fatal("DecodeRun succeeded with trailing JSON")
+		t.Fatal("DecodeBundleRun succeeded with trailing JSON")
 	}
 	if !errors.Is(err, ErrInvalidContract) {
-		t.Fatalf("DecodeRun error = %v, want ErrInvalidContract", err)
+		t.Fatalf("DecodeBundleRun error = %v, want ErrInvalidContract", err)
 	}
 }
 
@@ -193,19 +193,19 @@ func TestValidateCompleteCoverageRejectsGaps(t *testing.T) {
 	}
 }
 
-func loadExampleRun(t *testing.T) Run {
+func loadExampleRun(t *testing.T) BundleRun {
 	t.Helper()
 
-	path := filepath.Join("..", "..", "examples", "fleet", "run-1000.json")
+	path := filepath.Join("..", "..", "examples", "fleet", "bundle-run-1000.json")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open run example: %v", err)
 	}
 	defer f.Close()
 
-	run, err := DecodeRun(f)
+	run, err := DecodeBundleRun(f)
 	if err != nil {
-		t.Fatalf("DecodeRun: %v", err)
+		t.Fatalf("DecodeBundleRun: %v", err)
 	}
 	return run
 }

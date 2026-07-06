@@ -128,7 +128,7 @@ func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 
 	_, err = coordinator.Run(context.Background(), run)
 	if !errors.Is(err, ErrBundleMetadataMismatch) {
-		t.Fatalf("Run error = %v, want ErrBundleMetadataMismatch", err)
+		t.Fatalf("BundleRun error = %v, want ErrBundleMetadataMismatch", err)
 	}
 	if executor.callCount() != 0 {
 		t.Fatalf("executor calls = %d, want 0", executor.callCount())
@@ -159,7 +159,7 @@ func TestCoordinatorRejectsInspectedHostClassMismatch(t *testing.T) {
 
 	_, err = coordinator.Run(context.Background(), run)
 	if !errors.Is(err, ErrBundleMetadataMismatch) {
-		t.Fatalf("Run error = %v, want ErrBundleMetadataMismatch", err)
+		t.Fatalf("BundleRun error = %v, want ErrBundleMetadataMismatch", err)
 	}
 	if executor.callCount() != 0 {
 		t.Fatalf("executor calls = %d, want 0", executor.callCount())
@@ -240,7 +240,7 @@ func TestCoordinatorDoesNotRetryPlatformMismatch(t *testing.T) {
 
 	report, err := coordinator.Run(context.Background(), run)
 	if !errors.Is(err, ErrPlatformMismatch) {
-		t.Fatalf("Run error = %v, want ErrPlatformMismatch", err)
+		t.Fatalf("BundleRun error = %v, want ErrPlatformMismatch", err)
 	}
 	if executor.callCount() != 1 {
 		t.Fatalf("executor calls = %d, want 1", executor.callCount())
@@ -263,7 +263,7 @@ func TestCoordinatorFailsExpiredLeaseBeforeExecution(t *testing.T) {
 
 	report, err := coordinator.Run(context.Background(), run)
 	if !errors.Is(err, ErrLeaseExpired) {
-		t.Fatalf("Run error = %v, want ErrLeaseExpired", err)
+		t.Fatalf("BundleRun error = %v, want ErrLeaseExpired", err)
 	}
 	if executor.callCount() != 0 {
 		t.Fatalf("executor calls = %d, want 0", executor.callCount())
@@ -285,14 +285,14 @@ func TestCoordinatorReturnsErrorWhenLeaseExhaustsAttemptsIncomplete(t *testing.T
 
 	report, err := coordinator.Run(context.Background(), run)
 	if !errors.Is(err, ErrLeaseIncomplete) {
-		t.Fatalf("Run error = %v, want ErrLeaseIncomplete", err)
+		t.Fatalf("BundleRun error = %v, want ErrLeaseIncomplete", err)
 	}
 	if report.Summary.State != "failed" || report.Summary.CompletedChildren != 0 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
 }
 
-func smallRuntimeRun(t *testing.T, childCount int, attempts int) Run {
+func smallRuntimeRun(t *testing.T, childCount int, attempts int) BundleRun {
 	t.Helper()
 	run := loadExampleRun(t)
 	run.Children = ChildRange{Start: 0, Count: childCount}
@@ -304,7 +304,7 @@ func smallRuntimeRun(t *testing.T, childCount int, attempts int) Run {
 
 func newTestCoordinator(
 	t *testing.T,
-	run Run,
+	run BundleRun,
 	agents []AgentStatus,
 	store *fakeTerminalStore,
 	executors map[string]ShardExecutor,
@@ -333,7 +333,7 @@ type fakeBundleInspector struct {
 	err        error
 }
 
-func (i fakeBundleInspector) InspectRunBundle(context.Context, Run) (BundleInspection, error) {
+func (i fakeBundleInspector) InspectRunBundle(context.Context, BundleRun) (BundleInspection, error) {
 	if i.err != nil {
 		return BundleInspection{}, i.err
 	}
@@ -349,7 +349,7 @@ func newFakeTerminalStore() *fakeTerminalStore {
 	return &fakeTerminalStore{terminal: make(map[int]AttemptResult)}
 }
 
-func (s *fakeTerminalStore) TerminalResult(_ context.Context, _ Run, childID int) (AttemptResult, bool, error) {
+func (s *fakeTerminalStore) TerminalResult(_ context.Context, _ BundleRun, childID int) (AttemptResult, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result, ok := s.terminal[childID]
@@ -384,7 +384,7 @@ func (e *fakeShardExecutor) callCount() int {
 	return len(e.calls)
 }
 
-func runtimeAttemptResult(run Run, lease ShardLease, childID int, attempt int, status AttemptStatus, terminal bool) AttemptResult {
+func runtimeAttemptResult(run BundleRun, lease ShardLease, childID int, attempt int, status AttemptStatus, terminal bool) AttemptResult {
 	now := time.Date(2026, 6, 20, 4, 0, 1, 0, time.UTC)
 	result := AttemptResult{
 		RunID:        run.RunID,

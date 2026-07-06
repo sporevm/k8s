@@ -32,12 +32,12 @@ func RequiredInFlightSlots(childCount int, execution Execution) int {
 }
 
 // ShardSlotDemand returns the execution slots a lease can consume at once.
-func ShardSlotDemand(run Run, lease ShardLease) int {
+func ShardSlotDemand(run BundleRun, lease ShardLease) int {
 	return RequiredInFlightSlots(lease.ChildCount, run.Execution)
 }
 
 // DeriveShardRanges expands a run into non-overlapping global child ranges.
-func DeriveShardRanges(run Run) ([]ChildRange, error) {
+func DeriveShardRanges(run BundleRun) ([]ChildRange, error) {
 	if err := run.Validate(); err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func DeriveShardRanges(run Run) ([]ChildRange, error) {
 // The dry-run is deliberately strict: because the first target is a fully
 // concurrent 1,000-child run, compatible available child slots must cover the
 // full child count before any leases are emitted.
-func BuildDryRunPlan(run Run, agents []AgentStatus, opts DryRunOptions) (Plan, error) {
+func BuildDryRunPlan(run BundleRun, agents []AgentStatus, opts DryRunOptions) (Plan, error) {
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -122,10 +122,10 @@ func BuildDryRunPlan(run Run, agents []AgentStatus, opts DryRunOptions) (Plan, e
 
 // BuildSingleAgentSequentialPlan assigns an entire run to one compatible agent.
 //
-// This is used for local generic runs where the prepared bundle only exists on
+// This is used for local source runs where the prepared bundle only exists on
 // the preparing agent. The lease may cover more children than the agent can run
 // concurrently; execution remains bounded by RequiredInFlightSlots.
-func BuildSingleAgentSequentialPlan(run Run, agents []AgentStatus, opts DryRunOptions) (Plan, error) {
+func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus, opts DryRunOptions) (Plan, error) {
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -171,7 +171,7 @@ func BuildSingleAgentSequentialPlan(run Run, agents []AgentStatus, opts DryRunOp
 }
 
 // ValidateCompleteCoverage checks that shard leases exactly cover the run.
-func ValidateCompleteCoverage(run Run, leases []ShardLease) error {
+func ValidateCompleteCoverage(run BundleRun, leases []ShardLease) error {
 	if err := run.Validate(); err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func ValidateCompleteCoverage(run Run, leases []ShardLease) error {
 	return nil
 }
 
-func candidateAgents(run Run, agents []AgentStatus) ([]candidateAgent, PlanSummary, error) {
+func candidateAgents(run BundleRun, agents []AgentStatus) ([]candidateAgent, PlanSummary, error) {
 	summary := PlanSummary{AgentCount: len(agents)}
 	candidates := make([]candidateAgent, 0, len(agents))
 

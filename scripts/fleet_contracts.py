@@ -104,7 +104,7 @@ def validate_host_class(host_class: Any, path: str = "hostClass") -> None:
             raise ContractError(f"{path}.{key} must not be empty")
 
 
-def validate_run(run: Any) -> None:
+def validate_bundle_run(run: Any) -> None:
     run = require_object(run, "run")
     require_keys(
         run,
@@ -194,8 +194,8 @@ def validate_command_spec(command_spec: Any, path: str, allow_capture: bool = Fa
         raise ContractError(f"{path}.readyMarker must not be empty")
 
 
-def validate_generic_run(run: Any) -> None:
-    run = require_object(run, "genericRun")
+def validate_run(run: Any) -> None:
+    run = require_object(run, "run")
     require_keys(
         run,
         {
@@ -209,58 +209,58 @@ def validate_generic_run(run: Any) -> None:
             "sideEffects",
             "resultStore",
         },
-        "genericRun",
+        "run",
     )
-    validate_id(run["runID"], "genericRun.runID")
+    validate_id(run["runID"], "run.runID")
 
-    source = require_object(run["source"], "genericRun.source")
-    require_keys(source, {"image", "platform"}, "genericRun.source")
+    source = require_object(run["source"], "run.source")
+    require_keys(source, {"image", "platform"}, "run.source")
     if not isinstance(source["image"], str) or not source["image"]:
-        raise ContractError("genericRun.source.image must not be empty")
+        raise ContractError("run.source.image must not be empty")
     if source["platform"] != "linux/arm64":
-        raise ContractError("genericRun.source.platform must be linux/arm64")
+        raise ContractError("run.source.platform must be linux/arm64")
 
-    validate_command_spec(run["prepare"], "genericRun.prepare", allow_capture=True)
+    validate_command_spec(run["prepare"], "run.prepare", allow_capture=True)
 
-    fork = require_object(run["fork"], "genericRun.fork")
-    require_keys(fork, {"count"}, "genericRun.fork")
-    fork_count = require_int(fork["count"], "genericRun.fork.count", 1)
+    fork = require_object(run["fork"], "run.fork")
+    require_keys(fork, {"count"}, "run.fork")
+    fork_count = require_int(fork["count"], "run.fork.count", 1)
 
-    children = require_object(run["children"], "genericRun.children")
-    require_keys(children, {"start", "count", "command"}, "genericRun.children")
-    child_start = require_int(children["start"], "genericRun.children.start", 0)
-    child_count = require_int(children["count"], "genericRun.children.count", 1)
+    children = require_object(run["children"], "run.children")
+    require_keys(children, {"start", "count", "command"}, "run.children")
+    child_start = require_int(children["start"], "run.children.start", 0)
+    child_count = require_int(children["count"], "run.children.count", 1)
     if child_start + child_count > fork_count:
-        raise ContractError("genericRun.children range must fit fork.count")
-    validate_command_spec({"command": children["command"]}, "genericRun.children")
+        raise ContractError("run.children range must fit fork.count")
+    validate_command_spec({"command": children["command"]}, "run.children")
 
-    execution = require_object(run["execution"], "genericRun.execution")
-    require_keys(execution, {"childrenPerShard", "maxInFlightPerAgent"}, "genericRun.execution")
+    execution = require_object(run["execution"], "run.execution")
+    require_keys(execution, {"childrenPerShard", "maxInFlightPerAgent"}, "run.execution")
     children_per_shard = require_int(
-        execution["childrenPerShard"], "genericRun.execution.childrenPerShard", 1
+        execution["childrenPerShard"], "run.execution.childrenPerShard", 1
     )
-    require_int(execution["maxInFlightPerAgent"], "genericRun.execution.maxInFlightPerAgent", 1)
+    require_int(execution["maxInFlightPerAgent"], "run.execution.maxInFlightPerAgent", 1)
     if children_per_shard > child_count:
-        raise ContractError("genericRun.execution.childrenPerShard cannot exceed child count")
+        raise ContractError("run.execution.childrenPerShard cannot exceed child count")
 
-    retry_policy = require_object(run["retryPolicy"], "genericRun.retryPolicy")
+    retry_policy = require_object(run["retryPolicy"], "run.retryPolicy")
     require_keys(
         retry_policy,
         {"maxAttemptsPerChild", "rerunCommittedChildren"},
-        "genericRun.retryPolicy",
+        "run.retryPolicy",
     )
     require_int(
-        retry_policy["maxAttemptsPerChild"], "genericRun.retryPolicy.maxAttemptsPerChild", 1
+        retry_policy["maxAttemptsPerChild"], "run.retryPolicy.maxAttemptsPerChild", 1
     )
     if retry_policy["rerunCommittedChildren"] is not False:
-        raise ContractError("genericRun.retryPolicy.rerunCommittedChildren must be false")
+        raise ContractError("run.retryPolicy.rerunCommittedChildren must be false")
 
-    side_effects = require_object(run["sideEffects"], "genericRun.sideEffects")
-    require_keys(side_effects, {"idempotencyRequired"}, "genericRun.sideEffects")
+    side_effects = require_object(run["sideEffects"], "run.sideEffects")
+    require_keys(side_effects, {"idempotencyRequired"}, "run.sideEffects")
     if side_effects["idempotencyRequired"] is not True:
-        raise ContractError("genericRun.sideEffects.idempotencyRequired must be true")
+        raise ContractError("run.sideEffects.idempotencyRequired must be true")
 
-    validate_s3_prefix_uri(run["resultStore"], "genericRun.resultStore")
+    validate_s3_prefix_uri(run["resultStore"], "run.resultStore")
 
 
 def child_range(document: dict[str, Any], start_key: str, count_key: str) -> tuple[int, int]:
@@ -270,7 +270,7 @@ def child_range(document: dict[str, Any], start_key: str, count_key: str) -> tup
 
 
 def derive_shard_ranges(run: dict[str, Any]) -> list[tuple[int, int]]:
-    validate_run(run)
+    validate_bundle_run(run)
     start = run["children"]["start"]
     count = run["children"]["count"]
     size = run["execution"]["childrenPerShard"]
@@ -337,7 +337,7 @@ def validate_shard_lease(lease: Any, run: dict[str, Any] | None = None) -> None:
     validate_id(lease["agentID"], "shardLease.agentID")
 
     if run is not None:
-        validate_run(run)
+        validate_bundle_run(run)
         if lease["runID"] != run["runID"]:
             raise ContractError("shardLease.runID does not match run.runID")
         if lease["bundleDigest"] != run["bundle"]["digest"]:
@@ -584,7 +584,7 @@ def validate_benchmark_summary(summary: Any, run: dict[str, Any] | None = None) 
             raise ContractError(f"benchmarkSummary.{stage} percentiles must be ordered")
 
     if run is not None:
-        validate_run(run)
+        validate_bundle_run(run)
         if summary["runID"] != run["runID"]:
             raise ContractError("benchmarkSummary.runID does not match run.runID")
         if child_count != run["children"]["count"]:
@@ -602,18 +602,18 @@ def validate_schema_documents(root: Path) -> None:
 
 def validate_examples(root: Path) -> None:
     examples = root / "examples" / "fleet"
-    generic_run = load_json(examples / "generic-run-rails-rspec.json")
-    busybox_generic_run = load_json(examples / "generic-run-busybox-smoke.json")
-    run = load_json(examples / "run-1000.json")
+    run = load_json(examples / "run-rails-rspec.json")
+    busybox_run = load_json(examples / "run-busybox-smoke.json")
+    bundle_run = load_json(examples / "bundle-run-1000.json")
     lease = load_json(examples / "shard-lease.json")
     validate_schema_documents(root)
-    validate_generic_run(generic_run)
-    validate_generic_run(busybox_generic_run)
     validate_run(run)
-    validate_shard_lease(lease, run)
+    validate_run(busybox_run)
+    validate_bundle_run(bundle_run)
+    validate_shard_lease(lease, bundle_run)
     validate_agent_status(load_json(examples / "agent-status.json"))
     validate_attempt_result(load_json(examples / "attempt-result.json"), lease)
-    validate_benchmark_summary(load_json(examples / "benchmark-summary-1000.json"), run)
+    validate_benchmark_summary(load_json(examples / "benchmark-summary-1000.json"), bundle_run)
 
 
 def repo_root_from_script() -> Path:

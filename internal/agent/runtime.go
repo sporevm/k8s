@@ -245,9 +245,9 @@ type StatusRequest struct {
 	ObservedAt time.Time
 }
 
-// PrepareBundleRequest describes one local generic-run preparation.
+// PrepareBundleRequest describes one local run preparation.
 type PrepareBundleRequest struct {
-	Run     fleet.GenericRun
+	Run     fleet.Run
 	Backend string
 }
 
@@ -289,7 +289,7 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (fleet.AgentStat
 	return status, status.Validate()
 }
 
-// PrepareBundle prepares, forks, packs, and inspects a generic run bundle locally.
+// PrepareBundle prepares, forks, packs, and inspects a source run bundle locally.
 func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (fleet.PreparedBundle, error) {
 	if r.client == nil {
 		return fleet.PreparedBundle{}, ErrSporeClientNotConfigured
@@ -389,7 +389,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 
 // RunChildRequest describes one child execution attempt inside a shard lease.
 type RunChildRequest struct {
-	Run                     fleet.Run
+	Run                     fleet.BundleRun
 	Lease                   fleet.ShardLease
 	ChildID                 int
 	Attempt                 int
@@ -401,7 +401,7 @@ type RunChildRequest struct {
 
 // RunShardRequest describes execution of every child assigned by a shard lease.
 type RunShardRequest struct {
-	Run                     fleet.Run
+	Run                     fleet.BundleRun
 	Lease                   fleet.ShardLease
 	Attempt                 int
 	Pressure                fleet.Pressure
@@ -720,7 +720,7 @@ func (r *Runner) validateRunChildRequest(req RunChildRequest) error {
 	return nil
 }
 
-func (r *Runner) failAttemptFromError(ctx context.Context, run fleet.Run, result fleet.AttemptResult, err error, terminal bool) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptFromError(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, err error, terminal bool) (fleet.AttemptResult, error) {
 	attemptErr := attemptError(err)
 	status := fleet.AttemptFailed
 	var machineErr *MachineError
@@ -730,19 +730,19 @@ func (r *Runner) failAttemptFromError(ctx context.Context, run fleet.Run, result
 	return r.failAttemptWithCause(ctx, run, result, status, attemptErr.Code, attemptErr.Message, terminal, PullResult{}, err)
 }
 
-func (r *Runner) failAttempt(ctx context.Context, run fleet.Run, result fleet.AttemptResult, code string, message string, terminal bool) (fleet.AttemptResult, error) {
+func (r *Runner) failAttempt(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, code string, message string, terminal bool) (fleet.AttemptResult, error) {
 	return r.failAttemptWithStatus(ctx, run, result, fleet.AttemptFailed, code, message, terminal, PullResult{})
 }
 
-func (r *Runner) failAttemptWithPull(ctx context.Context, run fleet.Run, result fleet.AttemptResult, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptWithPull(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
 	return r.failAttemptWithStatus(ctx, run, result, fleet.AttemptFailed, code, message, terminal, pull)
 }
 
-func (r *Runner) failAttemptWithStatus(ctx context.Context, run fleet.Run, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptWithStatus(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
 	return r.failAttemptWithCause(ctx, run, result, status, code, message, terminal, pull, errors.New(message))
 }
 
-func (r *Runner) failAttemptWithCause(ctx context.Context, run fleet.Run, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult, cause error) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptWithCause(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult, cause error) (fleet.AttemptResult, error) {
 	result.Status = status
 	result.Terminal = terminal
 	result.FinishedAt = r.now()
@@ -772,7 +772,7 @@ func resultWriteContext(ctx context.Context) (context.Context, context.CancelFun
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
-func (r *Runner) childWorkDir(run fleet.Run, lease fleet.ShardLease, childID int, attemptID string) string {
+func (r *Runner) childWorkDir(run fleet.BundleRun, lease fleet.ShardLease, childID int, attemptID string) string {
 	return filepath.Join(r.workRoot, run.RunID, lease.ShardID, "child-"+strconv.Itoa(childID), attemptID+".spore")
 }
 
@@ -798,7 +798,7 @@ func childVMName(attemptID string) string {
 	return clean
 }
 
-func (r *Runner) prepareWorkDir(run fleet.GenericRun) string {
+func (r *Runner) prepareWorkDir(run fleet.Run) string {
 	return filepath.Join(r.workRoot, run.RunID, "prepare")
 }
 
@@ -810,7 +810,7 @@ func fileURI(path string) (string, error) {
 	return (&url.URL{Scheme: "file", Path: abs}).String(), nil
 }
 
-func bundleSource(run fleet.Run) string {
+func bundleSource(run fleet.BundleRun) string {
 	if strings.HasPrefix(run.Bundle.URI, "file://") {
 		return run.Bundle.URI
 	}
@@ -831,7 +831,7 @@ type generationPayload struct {
 	VMID          string `json:"vm_id"`
 }
 
-func writeGenerationFile(path string, run fleet.Run, childID int) error {
+func writeGenerationFile(path string, run fleet.BundleRun, childID int) error {
 	index := childID - run.Children.Start
 	payload := generationPayload{
 		RunID:         run.RunID,

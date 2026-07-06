@@ -8,7 +8,7 @@ This repo has two benchmark paths:
   shaped like the ComputeSDK sandbox TTI benchmark.
 
 The live ComputeSDK-shaped path is intentionally narrow. Each iteration creates
-one generic SporeVM run, prepares `docker.io/library/node:22-bookworm-slim`,
+one SporeVM run, prepares `docker.io/library/node:22-bookworm-slim`,
 forks one child, runs `node -v`, waits for the coordinator report, and records
 wall-clock TTI. This matches the public benchmark's create-plus-first-command
 shape closely enough for first cluster numbers, without adding a ComputeSDK
@@ -17,14 +17,14 @@ provider or SDK shim before the measurements are useful.
 Use the resident API path for TTI measurements. The `sporectl submit` fallback
 is only a smoke path because it creates a Kubernetes Job per iteration.
 
-The `--hot-vm` mode is a lower-level diagnostic. It creates one named VM before
+The `--sandbox` mode is a lower-level diagnostic. It creates one named sandbox before
 the measured loop, runs `node -v` in that VM for each iteration, and deletes the
 VM at the end. Use it to separate resident API plus `spore exec` overhead from
 prepare, fork, pull, resume, and result-reporting costs. It is not a
 per-request isolation benchmark. The coordinator only enables this path when it
 sees exactly one compatible agent, because named VM state is local to one agent.
 
-The `--hot-vm-pool` mode pre-creates one named VM per iteration, executes each
+The `--sandbox-pool` mode pre-creates one named sandbox per iteration, executes each
 VM exactly once in the measured loop, and deletes the pool at the end. This is
 the warmed-pool shape: it measures request TTI for a unique already-warmed VM,
 not pool refill or parent prepare time.
@@ -48,12 +48,12 @@ python3 scripts/computesdk_sporevm_benchmark.py \
   --out-dir results/sequential_tti
 ```
 
-To measure the hot-VM exec floor:
+To measure the sandbox exec floor:
 
 ```bash
 python3 scripts/computesdk_sporevm_benchmark.py \
   --api-url http://127.0.0.1:18080 \
-  --hot-vm \
+  --sandbox \
   --iterations 10 \
   --out-dir results/sequential_tti
 ```
@@ -63,7 +63,7 @@ To measure warmed-pool request TTI with one VM per iteration:
 ```bash
 python3 scripts/computesdk_sporevm_benchmark.py \
   --api-url http://127.0.0.1:18080 \
-  --hot-vm-pool \
+  --sandbox-pool \
   --iterations 10 \
   --out-dir results/sequential_tti
 ```

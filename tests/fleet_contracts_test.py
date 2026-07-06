@@ -19,9 +19,9 @@ from fleet_contracts import (  # noqa: E402
     validate_agent_status,
     validate_attempt_result,
     validate_benchmark_summary,
+    validate_bundle_run,
     validate_complete_coverage,
     validate_examples,
-    validate_generic_run,
     validate_run,
     validate_shard_lease,
 )
@@ -30,46 +30,46 @@ from fleet_contracts import (  # noqa: E402
 class FleetContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.examples = ROOT / "examples" / "fleet"
-        self.generic_run = load_json(self.examples / "generic-run-rails-rspec.json")
-        self.run = load_json(self.examples / "run-1000.json")
+        self.run = load_json(self.examples / "run-rails-rspec.json")
+        self.bundle_run = load_json(self.examples / "bundle-run-1000.json")
         self.lease = load_json(self.examples / "shard-lease.json")
 
     def test_examples_validate(self) -> None:
         validate_examples(ROOT)
 
-    def test_generic_run_example_validates(self) -> None:
-        validate_generic_run(self.generic_run)
+    def test_run_example_validates(self) -> None:
+        validate_run(self.run)
 
-    def test_generic_run_requires_source_image(self) -> None:
-        run = copy.deepcopy(self.generic_run)
+    def test_run_requires_source_image(self) -> None:
+        run = copy.deepcopy(self.run)
         run["source"]["image"] = ""
 
         with self.assertRaisesRegex(ContractError, "source.image"):
-            validate_generic_run(run)
+            validate_run(run)
 
-    def test_generic_run_children_must_fit_fork_count(self) -> None:
-        run = copy.deepcopy(self.generic_run)
+    def test_run_children_must_fit_fork_count(self) -> None:
+        run = copy.deepcopy(self.run)
         run["children"]["start"] = 1
 
         with self.assertRaisesRegex(ContractError, "fork.count"):
-            validate_generic_run(run)
+            validate_run(run)
 
-    def test_generic_run_requires_complete_capture_trigger(self) -> None:
-        run = copy.deepcopy(self.generic_run)
+    def test_run_requires_complete_capture_trigger(self) -> None:
+        run = copy.deepcopy(self.run)
         del run["prepare"]["readyMarker"]
 
         with self.assertRaisesRegex(ContractError, "readyMarker"):
-            validate_generic_run(run)
+            validate_run(run)
 
-    def test_generic_run_rejects_unsupported_capture_signal(self) -> None:
-        run = copy.deepcopy(self.generic_run)
+    def test_run_rejects_unsupported_capture_signal(self) -> None:
+        run = copy.deepcopy(self.run)
         run["prepare"]["captureSignal"] = "TERM"
 
         with self.assertRaisesRegex(ContractError, "captureSignal"):
-            validate_generic_run(run)
+            validate_run(run)
 
     def test_1000_child_run_derives_non_overlapping_shards(self) -> None:
-        ranges = derive_shard_ranges(self.run)
+        ranges = derive_shard_ranges(self.bundle_run)
 
         self.assertEqual(10, len(ranges))
         self.assertEqual((0, 100), ranges[0])
@@ -82,8 +82,8 @@ class FleetContractTests(unittest.TestCase):
 
     def test_attempt_and_terminal_keys_include_global_child_identity(self) -> None:
         key = attempt_key(
-            self.run["runID"],
-            self.run["bundle"]["digest"],
+            self.bundle_run["runID"],
+            self.bundle_run["bundle"]["digest"],
             742,
             2,
         )
@@ -96,43 +96,43 @@ class FleetContractTests(unittest.TestCase):
         )
         self.assertEqual(
             "ruby-counter-20260620/children/742/terminal.json",
-            terminal_result_key(self.run["runID"], 742),
+            terminal_result_key(self.bundle_run["runID"], 742),
         )
 
     def test_missing_bundle_digest_is_rejected(self) -> None:
-        run = copy.deepcopy(self.run)
+        run = copy.deepcopy(self.bundle_run)
         del run["bundle"]["digest"]
 
         with self.assertRaisesRegex(ContractError, "bundle.*digest"):
-            validate_run(run)
+            validate_bundle_run(run)
 
     def test_missing_child_range_is_rejected(self) -> None:
-        run = copy.deepcopy(self.run)
+        run = copy.deepcopy(self.bundle_run)
         del run["children"]["count"]
 
         with self.assertRaisesRegex(ContractError, "children.*count"):
-            validate_run(run)
+            validate_bundle_run(run)
 
     def test_ambiguous_host_class_is_rejected(self) -> None:
-        run = copy.deepcopy(self.run)
+        run = copy.deepcopy(self.bundle_run)
         del run["hostClass"]["cpuProfile"]
 
         with self.assertRaisesRegex(ContractError, "hostClass.*cpuProfile"):
-            validate_run(run)
+            validate_bundle_run(run)
 
     def test_unsafe_retry_settings_are_rejected(self) -> None:
-        run = copy.deepcopy(self.run)
+        run = copy.deepcopy(self.bundle_run)
         run["retryPolicy"]["rerunCommittedChildren"] = True
 
         with self.assertRaisesRegex(ContractError, "rerunCommittedChildren"):
-            validate_run(run)
+            validate_bundle_run(run)
 
     def test_result_store_requires_bucket_and_prefix(self) -> None:
-        run = copy.deepcopy(self.run)
+        run = copy.deepcopy(self.bundle_run)
         run["resultStore"] = "s3:///missing-bucket/"
 
         with self.assertRaisesRegex(ContractError, "resultStore"):
-            validate_run(run)
+            validate_bundle_run(run)
 
     def test_shard_lease_must_fit_run_range(self) -> None:
         lease = copy.deepcopy(self.lease)
@@ -140,14 +140,14 @@ class FleetContractTests(unittest.TestCase):
         lease["childCount"] = 100
 
         with self.assertRaisesRegex(ContractError, "outside the run"):
-            validate_shard_lease(lease, self.run)
+            validate_shard_lease(lease, self.bundle_run)
 
     def test_shard_lease_attempt_budget_cannot_exceed_run_policy(self) -> None:
         lease = copy.deepcopy(self.lease)
         lease["attemptBudget"] = 3
 
         with self.assertRaisesRegex(ContractError, "retry budget"):
-            validate_shard_lease(lease, self.run)
+            validate_shard_lease(lease, self.bundle_run)
 
     def test_attempt_result_child_must_fit_shard_range(self) -> None:
         result = load_json(self.examples / "attempt-result.json")
@@ -191,14 +191,14 @@ class FleetContractTests(unittest.TestCase):
         summary["childCount"] = 999
 
         with self.assertRaisesRegex(ContractError, "childCount"):
-            validate_benchmark_summary(summary, self.run)
+            validate_benchmark_summary(summary, self.bundle_run)
 
     def test_benchmark_percentiles_must_be_ordered(self) -> None:
         summary = load_json(self.examples / "benchmark-summary-1000.json")
         summary["stagePercentilesMs"]["resume"]["p95"] = 1
 
         with self.assertRaisesRegex(ContractError, "percentiles"):
-            validate_benchmark_summary(summary, self.run)
+            validate_benchmark_summary(summary, self.bundle_run)
 
 
 if __name__ == "__main__":

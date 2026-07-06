@@ -20,15 +20,15 @@ import (
 
 const testBundleDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 
-func TestRunCoordinatorGenericRunPreparesAndExecutesOnSameAgent(t *testing.T) {
-	generic := testGenericRun()
-	runPath := writeJSONFile(t, generic)
+func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
+	source := testRun()
+	runPath := writeJSONFile(t, source)
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
 	server := newTestAgentServer(t, spore, 1)
 
 	var stdout bytes.Buffer
 	err := runCoordinator(context.Background(), coordinatorConfig{
-		GenericRunPath:  runPath,
+		RunPath:         runPath,
 		ResultStoreRoot: t.TempDir(),
 		Timeout:         time.Minute,
 		AgentURLs:       agentURLsFlag{server.URL},
@@ -61,8 +61,8 @@ func TestRunCoordinatorGenericRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	}
 }
 
-func TestCoordinatorAPIExecutesGenericRun(t *testing.T) {
-	generic := testGenericRun()
+func TestCoordinatorAPIExecutesRun(t *testing.T) {
+	source := testRun()
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
 	agentServer := newTestAgentServer(t, spore, 1)
 	handler, err := coordinatorHandler(coordinatorConfig{
@@ -75,11 +75,11 @@ func TestCoordinatorAPIExecutesGenericRun(t *testing.T) {
 		t.Fatalf("coordinatorHandler: %v", err)
 	}
 
-	payload, err := json.Marshal(generic)
+	payload, err := json.Marshal(source)
 	if err != nil {
-		t.Fatalf("marshal generic run: %v", err)
+		t.Fatalf("marshal source run: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/generic-runs", bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewReader(payload))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -98,7 +98,7 @@ func TestCoordinatorAPIExecutesGenericRun(t *testing.T) {
 	}
 }
 
-func TestCoordinatorAPIProxiesHotVM(t *testing.T) {
+func TestCoordinatorAPIProxiesSandbox(t *testing.T) {
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
 	agentServer := newTestAgentServer(t, spore, 1)
 	handler, err := coordinatorHandler(coordinatorConfig{
@@ -112,14 +112,14 @@ func TestCoordinatorAPIProxiesHotVM(t *testing.T) {
 	}
 
 	createPayload, err := json.Marshal(agent.CreateVMRequest{
-		Name:    "sporevm-hot-node",
+		Name:    "sporevm-sandbox-node",
 		Image:   "docker.io/library/node:22-bookworm-slim",
 		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
 	})
 	if err != nil {
 		t.Fatalf("marshal create request: %v", err)
 	}
-	createReq := httptest.NewRequest(http.MethodPost, "/hot-vms", bytes.NewReader(createPayload))
+	createReq := httptest.NewRequest(http.MethodPost, "/sandboxes", bytes.NewReader(createPayload))
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
@@ -130,7 +130,7 @@ func TestCoordinatorAPIProxiesHotVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal exec request: %v", err)
 	}
-	execReq := httptest.NewRequest(http.MethodPost, "/hot-vms/sporevm-hot-node/exec", bytes.NewReader(execPayload))
+	execReq := httptest.NewRequest(http.MethodPost, "/sandboxes/sporevm-sandbox-node/exec", bytes.NewReader(execPayload))
 	execRec := httptest.NewRecorder()
 	handler.ServeHTTP(execRec, execReq)
 	if execRec.Code != http.StatusOK {
@@ -148,7 +148,7 @@ func TestCoordinatorAPIProxiesHotVM(t *testing.T) {
 		t.Fatalf("terminal = %+v", terminal)
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/hot-vms/sporevm-hot-node", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/sandboxes/sporevm-sandbox-node", nil)
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
@@ -156,19 +156,19 @@ func TestCoordinatorAPIProxiesHotVM(t *testing.T) {
 	}
 }
 
-func TestRunCoordinatorGenericRunExecutesSingleAgentSequentially(t *testing.T) {
-	generic := testGenericRun()
-	generic.Fork.Count = 2
-	generic.Children.Count = 2
-	generic.Execution.ChildrenPerShard = 1
-	generic.Execution.MaxInFlightPerAgent = 1
-	runPath := writeJSONFile(t, generic)
+func TestRunCoordinatorRunExecutesSingleAgentSequentially(t *testing.T) {
+	source := testRun()
+	source.Fork.Count = 2
+	source.Children.Count = 2
+	source.Execution.ChildrenPerShard = 1
+	source.Execution.MaxInFlightPerAgent = 1
+	runPath := writeJSONFile(t, source)
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 2}
 	server := newTestAgentServer(t, spore, 1)
 
 	var stdout bytes.Buffer
 	err := runCoordinator(context.Background(), coordinatorConfig{
-		GenericRunPath:  runPath,
+		RunPath:         runPath,
 		ResultStoreRoot: t.TempDir(),
 		Timeout:         time.Minute,
 		AgentURLs:       agentURLsFlag{server.URL},
@@ -193,15 +193,15 @@ func TestRunCoordinatorGenericRunExecutesSingleAgentSequentially(t *testing.T) {
 	}
 }
 
-func TestRunCoordinatorGenericRunReturnsErrorForFailedRuntimeReport(t *testing.T) {
-	generic := testGenericRun()
-	runPath := writeJSONFile(t, generic)
+func TestRunCoordinatorRunReturnsErrorForFailedRuntimeReport(t *testing.T) {
+	source := testRun()
+	runPath := writeJSONFile(t, source)
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1, execExitCode: 1}
 	server := newTestAgentServer(t, spore, 1)
 
 	var stdout bytes.Buffer
 	err := runCoordinator(context.Background(), coordinatorConfig{
-		GenericRunPath:  runPath,
+		RunPath:         runPath,
 		ResultStoreRoot: t.TempDir(),
 		Timeout:         time.Minute,
 		AgentURLs:       agentURLsFlag{server.URL},
@@ -223,18 +223,18 @@ func TestRunCoordinatorGenericRunReturnsErrorForFailedRuntimeReport(t *testing.T
 	}
 }
 
-func TestRunCoordinatorGenericRunCapacityErrorDoesNotWriteEmptyReport(t *testing.T) {
-	generic := testGenericRun()
-	generic.Fork.Count = 2
-	generic.Children.Count = 2
-	generic.Execution.ChildrenPerShard = 2
-	generic.Execution.MaxInFlightPerAgent = 2
-	runPath := writeJSONFile(t, generic)
+func TestRunCoordinatorRunCapacityErrorDoesNotWriteEmptyReport(t *testing.T) {
+	source := testRun()
+	source.Fork.Count = 2
+	source.Children.Count = 2
+	source.Execution.ChildrenPerShard = 2
+	source.Execution.MaxInFlightPerAgent = 2
+	runPath := writeJSONFile(t, source)
 	server := newTestAgentServer(t, &fakeSporeClient{digest: testBundleDigest, childCount: 2}, 1)
 
 	var stdout bytes.Buffer
 	err := runCoordinator(context.Background(), coordinatorConfig{
-		GenericRunPath:  runPath,
+		RunPath:         runPath,
 		ResultStoreRoot: t.TempDir(),
 		Timeout:         time.Minute,
 		AgentURLs:       agentURLsFlag{server.URL},
@@ -248,63 +248,63 @@ func TestRunCoordinatorGenericRunCapacityErrorDoesNotWriteEmptyReport(t *testing
 	}
 }
 
-func TestSelectGenericPrepareEndpointRequiresSingleAgentInFlightCapacity(t *testing.T) {
-	generic := testGenericRun()
-	generic.Children.Count = 2
-	generic.Fork.Count = 2
-	generic.Execution.ChildrenPerShard = 2
-	generic.Execution.MaxInFlightPerAgent = 2
+func TestSelectPrepareEndpointRequiresSingleAgentInFlightCapacity(t *testing.T) {
+	source := testRun()
+	source.Children.Count = 2
+	source.Fork.Count = 2
+	source.Execution.ChildrenPerShard = 2
+	source.Execution.MaxInFlightPerAgent = 2
 	endpoint := agentEndpoint{Status: testAgentStatus()}
 	endpoint.Status.ExecutionSlots.Available = 1
 
-	_, err := selectGenericPrepareEndpoint(generic, []agentEndpoint{endpoint})
+	_, err := selectPrepareEndpoint(source, []agentEndpoint{endpoint})
 	if !errors.Is(err, fleet.ErrInsufficientCapacity) {
-		t.Fatalf("selectGenericPrepareEndpoint error = %v, want ErrInsufficientCapacity", err)
+		t.Fatalf("selectPrepareEndpoint error = %v, want ErrInsufficientCapacity", err)
 	}
 }
 
-func TestSelectGenericPrepareEndpointAllowsSequentialCapacity(t *testing.T) {
-	generic := testGenericRun()
-	generic.Children.Count = 2
-	generic.Fork.Count = 2
-	generic.Execution.ChildrenPerShard = 1
-	generic.Execution.MaxInFlightPerAgent = 1
+func TestSelectPrepareEndpointAllowsSequentialCapacity(t *testing.T) {
+	source := testRun()
+	source.Children.Count = 2
+	source.Fork.Count = 2
+	source.Execution.ChildrenPerShard = 1
+	source.Execution.MaxInFlightPerAgent = 1
 	endpoint := agentEndpoint{Status: testAgentStatus()}
 	endpoint.Status.ExecutionSlots.Available = 1
 
-	selected, err := selectGenericPrepareEndpoint(generic, []agentEndpoint{endpoint})
+	selected, err := selectPrepareEndpoint(source, []agentEndpoint{endpoint})
 	if err != nil {
-		t.Fatalf("selectGenericPrepareEndpoint: %v", err)
+		t.Fatalf("selectPrepareEndpoint: %v", err)
 	}
 	if selected.Status.AgentID != endpoint.Status.AgentID {
 		t.Fatalf("selected agent = %q, want %q", selected.Status.AgentID, endpoint.Status.AgentID)
 	}
 }
 
-func TestSelectHotEndpointRequiresSingleCompatibleAgent(t *testing.T) {
+func TestSelectSandboxEndpointRequiresSingleCompatibleAgent(t *testing.T) {
 	first := agentEndpoint{Status: testAgentStatus()}
 	first.Status.AgentID = "spore-agent-test-0001"
 	second := agentEndpoint{Status: testAgentStatus()}
 	second.Status.AgentID = "spore-agent-test-0002"
 
 	first.Status.Pressure.Disk = fleet.PressureCritical
-	selected, err := selectHotEndpoint([]agentEndpoint{first, second})
+	selected, err := selectSandboxEndpoint([]agentEndpoint{first, second})
 	if err != nil {
-		t.Fatalf("selectHotEndpoint: %v", err)
+		t.Fatalf("selectSandboxEndpoint: %v", err)
 	}
 	if selected.Status.AgentID != second.Status.AgentID {
 		t.Fatalf("selected pressured agent %q, want %q", selected.Status.AgentID, second.Status.AgentID)
 	}
 
 	first.Status.Pressure.Disk = fleet.PressureNormal
-	if _, err := selectHotEndpoint([]agentEndpoint{first, second}); err == nil {
-		t.Fatal("selectHotEndpoint with two compatible agents succeeded")
+	if _, err := selectSandboxEndpoint([]agentEndpoint{first, second}); err == nil {
+		t.Fatal("selectSandboxEndpoint with two compatible agents succeeded")
 	}
 
 	first.Status.Healthy = false
 	second.Status.Healthy = false
-	if _, err := selectHotEndpoint([]agentEndpoint{first, second}); !errors.Is(err, fleet.ErrNoCompatibleAgents) {
-		t.Fatalf("selectHotEndpoint error = %v, want ErrNoCompatibleAgents", err)
+	if _, err := selectSandboxEndpoint([]agentEndpoint{first, second}); !errors.Is(err, fleet.ErrNoCompatibleAgents) {
+		t.Fatalf("selectSandboxEndpoint error = %v, want ErrNoCompatibleAgents", err)
 	}
 }
 
@@ -353,10 +353,10 @@ func writeJSONFile(t *testing.T, value any) string {
 	return path
 }
 
-func testGenericRun() fleet.GenericRun {
-	return fleet.GenericRun{
+func testRun() fleet.Run {
+	return fleet.Run{
 		RunID: "rails-rspec-20260624",
-		Source: fleet.GenericSource{
+		Source: fleet.RunSource{
 			Image:    "example.com/sporevm/rails-rspec:sha-1111111",
 			Platform: "linux/arm64",
 		},
@@ -366,7 +366,7 @@ func testGenericRun() fleet.GenericRun {
 			ReadyMarker:   "SPOREVM_RAILS_READY",
 		},
 		Fork: fleet.ForkSpec{Count: 1},
-		Children: fleet.GenericChildren{
+		Children: fleet.RunChildren{
 			Start:   0,
 			Count:   1,
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},

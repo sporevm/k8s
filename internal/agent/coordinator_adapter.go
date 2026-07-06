@@ -12,7 +12,7 @@ type RunBundleInspector struct {
 }
 
 // InspectRunBundle inspects immutable bundle metadata before coordinator admission.
-func (i RunBundleInspector) InspectRunBundle(ctx context.Context, run fleet.Run) (fleet.BundleInspection, error) {
+func (i RunBundleInspector) InspectRunBundle(ctx context.Context, run fleet.BundleRun) (fleet.BundleInspection, error) {
 	if i.Client == nil {
 		return fleet.BundleInspection{}, ErrSporeClientNotConfigured
 	}

@@ -153,8 +153,8 @@ func TestRunnerStatusReportsHostClassAndSlots(t *testing.T) {
 }
 
 func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
-	generic := testGenericRun()
-	generic.Prepare.Memory = "512mb"
+	source := testRun()
+	source.Prepare.Memory = "512mb"
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
 		hostInfo: validHostInfo(),
@@ -162,7 +162,7 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 			if req.ChildRange == nil || req.ChildRange.Start != 0 || req.ChildRange.End != 1000 {
 				t.Fatalf("inspect child range = %+v", req.ChildRange)
 			}
-			wantURI, err := fileURI(filepath.Join(workRoot, generic.RunID, "prepare", "bundle"))
+			wantURI, err := fileURI(filepath.Join(workRoot, source.RunID, "prepare", "bundle"))
 			if err != nil {
 				t.Fatalf("fileURI: %v", err)
 			}
@@ -188,7 +188,7 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	prepared, err := runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: generic})
+	prepared, err := runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
 	if err != nil {
 		t.Fatalf("PrepareBundle: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	if prepared.Bundle.Digest != "sha256:2222222222222222222222222222222222222222222222222222222222222222" {
 		t.Fatalf("bundle digest = %q", prepared.Bundle.Digest)
 	}
-	if _, err := generic.Compile(prepared); err != nil {
+	if _, err := source.Compile(prepared); err != nil {
 		t.Fatalf("Compile prepared bundle: %v", err)
 	}
 
@@ -207,11 +207,11 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 		t.Fatalf("run capture count = %d", len(runCaptures))
 	}
 	capture := runCaptures[0]
-	wantParent := filepath.Join(workRoot, generic.RunID, "prepare", "parent.spore")
-	if capture.Image != generic.Source.Image || capture.CaptureDir != wantParent || capture.CaptureSignal != "USR1" || capture.ReadyMarker != "SPOREVM_RAILS_READY" || capture.Memory != "512mb" {
+	wantParent := filepath.Join(workRoot, source.RunID, "prepare", "parent.spore")
+	if capture.Image != source.Source.Image || capture.CaptureDir != wantParent || capture.CaptureSignal != "USR1" || capture.ReadyMarker != "SPOREVM_RAILS_READY" || capture.Memory != "512mb" {
 		t.Fatalf("run capture request = %+v", capture)
 	}
-	if got, want := capture.Command, generic.Prepare.Command; !equalStrings(got, want) {
+	if got, want := capture.Command, source.Prepare.Command; !equalStrings(got, want) {
 		t.Fatalf("capture command = %v, want %v", got, want)
 	}
 
@@ -220,8 +220,8 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 		t.Fatalf("fork requests = %+v", forks)
 	}
 	packs := client.packRequests()
-	wantChildren := filepath.Join(workRoot, generic.RunID, "prepare", "children")
-	wantBundle := filepath.Join(workRoot, generic.RunID, "prepare", "bundle")
+	wantChildren := filepath.Join(workRoot, source.RunID, "prepare", "children")
+	wantBundle := filepath.Join(workRoot, source.RunID, "prepare", "bundle")
 	if len(packs) != 1 || packs[0].ParentDir != wantParent || packs[0].ChildrenDir != wantChildren || packs[0].OutDir != wantBundle {
 		t.Fatalf("pack requests = %+v", packs)
 	}
@@ -265,7 +265,7 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunnerWithMetrics(t, client, store, metrics)
-	run := testRun()
+	run := testBundleRun()
 	lease := testLease(run)
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
@@ -339,7 +339,7 @@ func TestRunnerRunChildGuestFailureCommitsTerminalResult(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
 		Run:      run,
@@ -377,7 +377,7 @@ func TestRunnerRunChildRecordsGuestOutput(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
 		Run:      run,
@@ -433,7 +433,7 @@ func TestRunnerRunChildExecutesChildCommand(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 	run.ChildCommand = []string{"/usr/local/bin/sporevm-rspec-shard", "--seed", "1"}
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
@@ -482,7 +482,7 @@ func TestRunnerRunChildChildCommandResumeExitFailsBeforeExec(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 	run.ChildCommand = []string{"/usr/local/bin/sporevm-rspec-shard"}
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
@@ -520,7 +520,7 @@ func TestRunnerRunChildWritesAttemptAfterContextCancellation(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 	result, err := runner.RunChild(ctx, RunChildRequest{
 		Run:      run,
 		Lease:    testLease(run),
@@ -563,7 +563,7 @@ func TestRunnerRunChildResumeTimeoutWritesAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	run := testRun()
+	run := testBundleRun()
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
 		Run:      run,
 		Lease:    testLease(run),
@@ -611,7 +611,7 @@ func TestRunnerRunChildPlatformMismatchIsNonTerminalAttempt(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
 		Run:      run,
@@ -639,7 +639,7 @@ func TestRunnerRunChildPullHostErrorIsPlatformMismatch(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
 		Run:      run,
@@ -670,7 +670,7 @@ func TestRunnerRunChildSkipsExistingTerminalResult(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 	lease := testLease(run)
 
 	if _, err := runner.RunChild(context.Background(), RunChildRequest{
@@ -714,7 +714,7 @@ func TestRunnerRunChildCancellationCleansWorkDir(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -752,7 +752,7 @@ func TestRunnerRunShardExecutesEveryChildAndReleasesSlots(t *testing.T) {
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
-	run := testRun()
+	run := testBundleRun()
 	run.Children = fleet.ChildRange{Start: 10, Count: 3}
 	run.Execution.ChildrenPerShard = 3
 	run.Execution.MaxInFlightPerAgent = 3
@@ -807,7 +807,7 @@ func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	run := testRun()
+	run := testBundleRun()
 	run.Children = fleet.ChildRange{Start: 10, Count: 5}
 	run.Execution.ChildrenPerShard = 2
 	run.Execution.MaxInFlightPerAgent = 2
@@ -836,7 +836,7 @@ func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
 }
 
 func TestBundleSourceRequiresExactDigestSuffix(t *testing.T) {
-	run := testRun()
+	run := testBundleRun()
 	run.Bundle.URI = "s3://example-sporevm-artifacts/runs/ruby@base.bundle"
 	if got, want := bundleSource(run), run.Bundle.URI+"@"+run.Bundle.Digest; got != want {
 		t.Fatalf("bundleSource = %q, want %q", got, want)
@@ -849,7 +849,7 @@ func TestBundleSourceRequiresExactDigestSuffix(t *testing.T) {
 }
 
 func TestBundleSourceKeepsLocalFileURIUnpinned(t *testing.T) {
-	run := testRun()
+	run := testBundleRun()
 	run.Bundle.URI = "file:///var/lib/sporevm/k8s-smoke/bundle"
 	if got, want := bundleSource(run), run.Bundle.URI; got != want {
 		t.Fatalf("bundleSource = %q, want %q", got, want)
@@ -857,7 +857,7 @@ func TestBundleSourceKeepsLocalFileURIUnpinned(t *testing.T) {
 }
 
 func TestRunBundleInspectorUsesDigestPinnedSourceAndRange(t *testing.T) {
-	run := testRun()
+	run := testBundleRun()
 	client := &fakeSporeClient{
 		inspectFunc: func(_ context.Context, req InspectBundleRequest) (InspectBundleResult, error) {
 			if req.Source != run.Bundle.URI+"@"+run.Bundle.Digest {
@@ -889,7 +889,7 @@ func TestRunBundleInspectorUsesDigestPinnedSourceAndRange(t *testing.T) {
 
 func TestLocalResultStoreRejectsUnsafeBucketSegment(t *testing.T) {
 	store := newTestResultStore(t)
-	run := testRun()
+	run := testBundleRun()
 	run.ResultStore = "s3://../ruby-counter-20260620/"
 
 	_, _, err := store.TerminalResult(context.Background(), run, 0)
@@ -1089,8 +1089,8 @@ func newTestResultStore(t *testing.T) *LocalResultStore {
 	return store
 }
 
-func testRun() fleet.Run {
-	return fleet.Run{
+func testBundleRun() fleet.BundleRun {
+	return fleet.BundleRun{
 		RunID: "ruby-counter-20260620",
 		Bundle: fleet.Bundle{
 			URI:    "s3://example-sporevm-artifacts/runs/ruby.bundle",
@@ -1120,10 +1120,10 @@ func testRun() fleet.Run {
 	}
 }
 
-func testGenericRun() fleet.GenericRun {
-	return fleet.GenericRun{
+func testRun() fleet.Run {
+	return fleet.Run{
 		RunID: "rails-rspec-20260624",
-		Source: fleet.GenericSource{
+		Source: fleet.RunSource{
 			Image:    "example.com/sporevm/rails-rspec:sha-1111111",
 			Platform: "linux/arm64",
 		},
@@ -1133,7 +1133,7 @@ func testGenericRun() fleet.GenericRun {
 			ReadyMarker:   "SPOREVM_RAILS_READY",
 		},
 		Fork: fleet.ForkSpec{Count: 1000},
-		Children: fleet.GenericChildren{
+		Children: fleet.RunChildren{
 			Start:   0,
 			Count:   1000,
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},
@@ -1153,7 +1153,7 @@ func testGenericRun() fleet.GenericRun {
 	}
 }
 
-func testLease(run fleet.Run) fleet.ShardLease {
+func testLease(run fleet.BundleRun) fleet.ShardLease {
 	return fleet.ShardLease{
 		RunID:         run.RunID,
 		BundleDigest:  run.Bundle.Digest,

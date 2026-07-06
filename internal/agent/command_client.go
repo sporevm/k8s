@@ -114,7 +114,7 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	return events, nil
 }
 
-// CreateVM runs `spore create` for a named hot VM.
+// CreateVM runs `spore create` for a named VM.
 func (c CommandClient) CreateVM(ctx context.Context, req CreateVMRequest) error {
 	if err := req.validate(); err != nil {
 		return err
