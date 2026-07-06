@@ -458,6 +458,12 @@ be sub-second, but it is not per-request isolation. The next isolated TTI step
 is either disk-backed named live fork support in SporeVM or an explicit child
 pool that preserves the public contract.
 
+Follow-up live finding: SporeVM 0.5.2 still rejects `spore fork --vm` for this
+disk-backed Node rootfs, so the Kubernetes-side proof path is a warmed pool of
+unique named VMs. Each request can consume one already-warmed VM and return
+after `spore exec`; pool refill remains outside the measured request path until
+SporeVM can fork the disk-backed parent directly.
+
 ### Slice 7: Optional Kubernetes UX
 
 Add CRDs, Kueue, or an operator only after the generic and CI paths work.

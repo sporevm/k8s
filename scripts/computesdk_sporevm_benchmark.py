@@ -42,12 +42,14 @@ def main() -> int:
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     iterations: list[dict[str, Any]] = []
     raw_reports: list[dict[str, Any]] = []
-    hot_vm_name = f"{args.run_prefix}-{run_stamp}-hot" if args.hot_vm else ""
-
-    if hot_vm_name:
-        create_hot_vm(args, hot_vm_name)
+    hot_vm_names = hot_vm_names_for_run(args, run_stamp)
+    created_hot_vm_names: list[str] = []
 
     try:
+        for name in hot_vm_names:
+            create_hot_vm(args, name)
+            created_hot_vm_names.append(name)
+
         with tempfile.TemporaryDirectory(prefix="sporevm-computesdk-") as tmp:
             tmpdir = Path(tmp)
             for index in range(args.iterations):
@@ -61,7 +63,8 @@ def main() -> int:
 
                 print(f"[{index + 1}/{args.iterations}] {run_id}", file=sys.stderr)
                 started = time.perf_counter()
-                if args.hot_vm:
+                if hot_vm_names:
+                    hot_vm_name = hot_vm_names[index] if args.hot_vm_pool else hot_vm_names[0]
                     error = run_hot_vm_exec(args, hot_vm_name)
                     tti_ms = (time.perf_counter() - started) * 1000
                     if error:
@@ -112,10 +115,10 @@ def main() -> int:
                 iterations.append({"ttiMs": round_ms(tti_ms)})
                 print(f"  tti={tti_ms / 1000:.2f}s", file=sys.stderr)
     finally:
-        if hot_vm_name:
-            error = delete_hot_vm(args, hot_vm_name)
+        for name in reversed(created_hot_vm_names):
+            error = delete_hot_vm(args, name)
             if error:
-                print(f"warning: delete hot VM {hot_vm_name}: {error}", file=sys.stderr)
+                print(f"warning: delete hot VM {name}: {error}", file=sys.stderr)
 
     successful = [item["ttiMs"] for item in iterations if "error" not in item]
     result = {
@@ -125,6 +128,16 @@ def main() -> int:
         "summary": {"ttiMs": compute_stats(successful)},
         "successRate": round(len(successful) / len(iterations), 4) if iterations else 0,
     }
+    config = {
+        "iterations": args.iterations,
+        "timeoutMs": timeout_ms,
+        "transport": transport_label(args),
+        "workloadImage": args.workload_image,
+        "workloadCommand": "node -v",
+    }
+    if hot_vm_names:
+        config["hotPoolSize"] = len(hot_vm_names)
+
     output = {
         "version": "1.1",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -133,13 +146,7 @@ def main() -> int:
             "platform": sys.platform,
             "arch": platform.machine(),
         },
-        "config": {
-            "iterations": args.iterations,
-            "timeoutMs": timeout_ms,
-            "transport": "api-hot-vm" if args.hot_vm else "api" if args.api_url else "sporectl",
-            "workloadImage": args.workload_image,
-            "workloadCommand": "node -v",
-        },
+        "config": config,
         "results": [result],
     }
 
@@ -173,6 +180,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sporectl", default=os.environ.get("SPORECTL", "go run ./cmd/sporectl"))
     parser.add_argument("--api-url", default=os.environ.get("SPORE_API_URL", ""))
     parser.add_argument("--hot-vm", action="store_true")
+    parser.add_argument("--hot-vm-pool", action="store_true")
     parser.add_argument("--coordinator-image", default=os.environ.get("SPORE_RUNTIME_IMAGE"))
     parser.add_argument("--image-pull-policy", default=os.environ.get("SPORE_IMAGE_PULL_POLICY", "IfNotPresent"))
     parser.add_argument("--timeout", default="30m")
@@ -190,13 +198,33 @@ def parse_args() -> argparse.Namespace:
         parser.error("--iterations must be >= 1")
     if args.prepare_sleep_seconds < 1:
         parser.error("--prepare-sleep-seconds must be >= 1")
-    if args.hot_vm and not args.api_url:
-        parser.error("--hot-vm requires --api-url")
+    if args.hot_vm and args.hot_vm_pool:
+        parser.error("--hot-vm and --hot-vm-pool are mutually exclusive")
+    if (args.hot_vm or args.hot_vm_pool) and not args.api_url:
+        parser.error("--hot-vm and --hot-vm-pool require --api-url")
     if not args.result_store_prefix.endswith("/"):
         args.result_store_prefix += "/"
     if not args.coordinator_image:
         args.coordinator_image = default_runtime_image(Path(__file__).resolve().parents[1])
     return args
+
+
+def hot_vm_names_for_run(args: argparse.Namespace, run_stamp: str) -> list[str]:
+    if args.hot_vm:
+        return [f"{args.run_prefix}-{run_stamp}-hot"]
+    if args.hot_vm_pool:
+        return [f"{args.run_prefix}-{run_stamp}-hot-{index + 1:04d}" for index in range(args.iterations)]
+    return []
+
+
+def transport_label(args: argparse.Namespace) -> str:
+    if args.hot_vm_pool:
+        return "api-hot-vm-pool"
+    if args.hot_vm:
+        return "api-hot-vm"
+    if args.api_url:
+        return "api"
+    return "sporectl"
 
 
 def build_generic_run(args: argparse.Namespace, run_id: str) -> dict[str, Any]:

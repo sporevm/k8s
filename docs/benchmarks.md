@@ -24,6 +24,11 @@ prepare, fork, pull, resume, and result-reporting costs. It is not a
 per-request isolation benchmark. The coordinator only enables this path when it
 sees exactly one compatible agent, because named VM state is local to one agent.
 
+The `--hot-vm-pool` mode pre-creates one named VM per iteration, executes each
+VM exactly once in the measured loop, and deletes the pool at the end. This is
+the warmed-pool shape: it measures request TTI for a unique already-warmed VM,
+not pool refill or parent prepare time.
+
 The shortest development loop does not need a runtime image release. Run the
 coordinator API locally and port-forward to the in-cluster agent:
 
@@ -49,6 +54,16 @@ To measure the hot-VM exec floor:
 python3 scripts/computesdk_sporevm_benchmark.py \
   --api-url http://127.0.0.1:18080 \
   --hot-vm \
+  --iterations 10 \
+  --out-dir results/sequential_tti
+```
+
+To measure warmed-pool request TTI with one VM per iteration:
+
+```bash
+python3 scripts/computesdk_sporevm_benchmark.py \
+  --api-url http://127.0.0.1:18080 \
+  --hot-vm-pool \
   --iterations 10 \
   --out-dir results/sequential_tti
 ```
