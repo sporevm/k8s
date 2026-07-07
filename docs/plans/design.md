@@ -362,7 +362,7 @@ Status: implemented locally and live-proved for Rails prepare/fork/pack.
 Teach the agent to prepare a parent, capture it, fork children, and pack a
 bundle using SporeVM commands.
 
-The local implementation supports `spore run --capture`, watches JSONL output
+The local implementation supports `spore run --save`, watches JSONL output
 for a configured `readyMarker`, sends `USR1`, runs `spore fork`, runs
 `spore pack`, and inspects the local file bundle. The real
 Rails/Postgres/RSpec warm command from `sporevm-examples` now prepares,

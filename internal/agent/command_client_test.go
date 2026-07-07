@@ -217,7 +217,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "run --events=jsonl --backend kvm --memory 512mb --image example.com/sporevm/rails-rspec:sha-1111111 --capture /work/parent.spore --capture-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
+	want := "run --events=jsonl --backend kvm --memory 512mb --image example.com/sporevm/rails-rspec:sha-1111111 --save /work/parent.spore --save-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -290,11 +290,11 @@ func TestCommandClientResumeTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "resume" ]; then
+if [ "$1" = "attach" ]; then
   cat <<'JSONL'
-{"schema":"spore.run-events.v1","schema_version":1,"event":"start","command":"resume","requested_backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"ready","command":"resume","backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"resume","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
+{"schema":"spore.run-events.v1","schema_version":1,"event":"start","command":"attach","requested_backend":"kvm"}
+{"schema":"spore.run-events.v1","schema_version":1,"event":"ready","command":"attach","backend":"kvm"}
+{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
 JSONL
   exit 7
 fi
@@ -320,7 +320,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "resume --events=jsonl --backend kvm --generation /work/child-42.generation.json /work/child-42.spore" {
+	if args != "attach --events=jsonl --backend kvm --generation /work/child-42.generation.json /work/child-42.spore" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -329,8 +329,8 @@ func TestCommandClientResumeSupportsName(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "resume" ]; then
-  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"resume","backend":"kvm","exit_code":0}'
+if [ "$1" = "restore" ]; then
+  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"restore","backend":"kvm","exit_code":0}'
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -348,7 +348,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "resume --events=jsonl --backend kvm --generation /work/child-42.generation.json /work/child-42.spore --name sporevm-child-42" {
+	if args != "restore /work/child-42.spore --events=jsonl --name sporevm-child-42 --backend kvm --generation /work/child-42.generation.json" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -441,9 +441,9 @@ exit 2
 
 func TestCommandClientResumeRejectsExitMismatch(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "resume" ]; then
+if [ "$1" = "attach" ]; then
   cat <<'JSONL'
-{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"resume","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
+{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
 JSONL
   exit 0
 fi
@@ -459,7 +459,7 @@ exit 2
 
 func TestCommandClientPreservesContextDeadline(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "resume" ]; then
+if [ "$1" = "attach" ]; then
   sleep 30
 fi
 exit 2

@@ -449,7 +449,7 @@ func (r RemoveVMRequest) validate() error {
 	return nil
 }
 
-// RunEvent is one `spore run|resume --events=jsonl` event.
+// RunEvent is one SporeVM JSONL lifecycle event.
 type RunEvent struct {
 	Schema           string            `json:"schema"`
 	SchemaVersion    int               `json:"schema_version"`
