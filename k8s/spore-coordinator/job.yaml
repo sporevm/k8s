@@ -26,7 +26,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: coordinator
-          image: sporevm-k8s-runtime:sporevm-0.5.2
+          image: sporevm-k8s-runtime:0.1.4
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/spore-coordinator
