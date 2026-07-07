@@ -77,7 +77,7 @@ func (c CommandClient) Pull(ctx context.Context, req PullRequest) (PullResult, e
 	return result, result.Validate()
 }
 
-// RunCapture runs `spore run --capture` to prepare a warm parent.
+// RunCapture runs `spore run --save` to prepare a warm parent.
 func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([]RunEvent, error) {
 	if err := req.validate(); err != nil {
 		return nil, err
@@ -89,9 +89,9 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	if req.Memory != "" {
 		args = append(args, "--memory", req.Memory)
 	}
-	args = append(args, "--image", req.Image, "--capture", req.CaptureDir)
+	args = append(args, "--image", req.Image, "--save", req.CaptureDir)
 	if req.CaptureSignal != "" {
-		args = append(args, "--capture-on", req.CaptureSignal)
+		args = append(args, "--save-on", req.CaptureSignal)
 	}
 	args = append(args, "--")
 	args = append(args, req.Command...)
@@ -159,25 +159,29 @@ func (c CommandClient) Pack(ctx context.Context, req PackRequest) error {
 	return nil
 }
 
-// Resume runs `spore resume --events=jsonl`.
+// Resume attaches or restores a saved spore session.
 func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEvent, error) {
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"resume", "--events=jsonl"}
+	commandName := "spore attach"
+	args := []string{"attach", "--events=jsonl"}
+	if req.Name != "" {
+		commandName = "spore restore"
+		args = []string{"restore", req.SporeDir, "--events=jsonl", "--name", req.Name}
+	}
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
 	if req.GenerationPath != "" {
 		args = append(args, "--generation", req.GenerationPath)
 	}
-	args = append(args, req.SporeDir)
-	if req.Name != "" {
-		args = append(args, "--name", req.Name)
+	if req.Name == "" {
+		args = append(args, req.SporeDir)
 	}
 
 	stdout, stderr, err := c.run(ctx, args...)
-	events, _, decodeErr := decodeRunEventsAfterCommand("spore resume", stdout, stderr, err, false)
+	events, _, decodeErr := decodeRunEventsAfterCommand(commandName, stdout, stderr, err, false)
 	if decodeErr != nil {
 		return events, decodeErr
 	}
