@@ -29,8 +29,36 @@ VM exactly once in the measured loop, and deletes the pool at the end. This is
 the warmed-pool shape: it measures request TTI for a unique already-warmed VM,
 not pool refill or parent prepare time.
 
-The shortest development loop does not need a runtime image release. Run the
-coordinator API locally and port-forward to the in-cluster agent:
+For agent or coordinator runtime changes, the shortest useful live loop does
+not need a runtime image release:
+
+```bash
+mise run dev:runtime-probe
+```
+
+This dev-only probe builds local `linux/arm64` `spore-agent` and
+`spore-coordinator` binaries, creates a temporary privileged pod from the
+currently deployed runtime image, copies the local binaries into that pod,
+starts a private agent/API pair with isolated work and result directories,
+runs the ComputeSDK-shaped benchmark, and asserts that same-agent source runs
+skip artifact pull. It discovers the current `spore-agent` pod, node, and
+runtime image from the active Kubernetes context; do not hard-code private
+cluster details in this repository.
+
+Useful overrides:
+
+```bash
+SPORE_NAMESPACE=sporevm-system \
+SPORE_DEV_ITERATIONS=3 \
+SPORE_DEV_LOCAL_PORT=18081 \
+mise run dev:runtime-probe
+```
+
+Set `SPORE_DEV_KEEP_POD=1` only while debugging; the default cleans up the
+temporary pod and port-forward.
+
+For coordinator-only changes, another short loop is to run the coordinator API
+locally and port-forward to the in-cluster agent:
 
 ```bash
 kubectl -n sporevm-system port-forward svc/spore-agent 18081:8080

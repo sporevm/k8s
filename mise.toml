@@ -18,6 +18,10 @@ run = "go run ./cmd/spore-fleet-benchmark --bundle-run examples/fleet/bundle-run
 description = "Run the live ComputeSDK-shaped sequential TTI benchmark against the current Kubernetes context"
 run = "python3 scripts/computesdk_sporevm_benchmark.py"
 
+[tasks."dev:runtime-probe"]
+description = "Run a dev-only live runtime probe with local arm64 binaries in a temporary privileged pod"
+run = "scripts/dev_runtime_probe.sh"
+
 [tasks."runtime:image:build"]
 description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.9.1"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:0.1.7 ."
