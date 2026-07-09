@@ -550,18 +550,9 @@ func TestRunnerRunChildExecutesChildCommand(t *testing.T) {
 		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
 			return pullResult(req.OutDir, "42"), nil
 		},
-		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
-			if req.Name == "" {
-				t.Fatal("resume name is empty")
-			}
+		runFromFunc: func(_ context.Context, req RunFromRequest) ([]RunEvent, error) {
 			if req.GenerationPath == "" {
-				t.Fatal("resume generation path is empty")
-			}
-			return []RunEvent{exitEvent(0)}, nil
-		},
-		execFunc: func(_ context.Context, req ExecRequest) ([]RunEvent, error) {
-			if req.Name == "" {
-				t.Fatal("exec name is empty")
+				t.Fatal("run-from generation path is empty")
 			}
 			return []RunEvent{
 				outputEvent("stdout", "ok\n"),
@@ -590,32 +581,29 @@ func TestRunnerRunChildExecutesChildCommand(t *testing.T) {
 		t.Fatalf("output = %+v", result.Output)
 	}
 
+	runFroms := client.runFromRequests()
 	resumes := client.resumeRequests()
 	execs := client.execRequests()
 	removes := client.removeRequests()
-	if len(resumes) != 1 || len(execs) != 1 || len(removes) != 1 {
-		t.Fatalf("resumes=%+v execs=%+v removes=%+v", resumes, execs, removes)
+	if len(runFroms) != 1 || len(resumes) != 0 || len(execs) != 0 || len(removes) != 0 {
+		t.Fatalf("runFroms=%+v resumes=%+v execs=%+v removes=%+v", runFroms, resumes, execs, removes)
 	}
-	if resumes[0].Name == "" || execs[0].Name != resumes[0].Name || removes[0].Name != resumes[0].Name {
-		t.Fatalf("names resumes=%+v execs=%+v removes=%+v", resumes, execs, removes)
+	if !equalStrings(runFroms[0].Command, run.ChildCommand) {
+		t.Fatalf("run-from command = %+v, want %+v", runFroms[0].Command, run.ChildCommand)
 	}
-	if !equalStrings(execs[0].Command, run.ChildCommand) {
-		t.Fatalf("exec command = %+v, want %+v", execs[0].Command, run.ChildCommand)
+	if runFroms[0].SporeDir == "" || runFroms[0].GenerationPath == "" {
+		t.Fatalf("run-from request = %+v", runFroms[0])
 	}
 }
 
-func TestRunnerRunChildChildCommandResumeExitFailsBeforeExec(t *testing.T) {
+func TestRunnerRunChildChildCommandRunFromErrorFails(t *testing.T) {
 	store := newTestResultStore(t)
 	client := &fakeSporeClient{
 		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
 			return pullResult(req.OutDir, "42"), nil
 		},
-		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
-			return []RunEvent{exitEvent(7)}, nil
-		},
-		execFunc: func(context.Context, ExecRequest) ([]RunEvent, error) {
-			t.Fatal("exec called after failed named resume")
-			return nil, nil
+		runFromFunc: func(context.Context, RunFromRequest) ([]RunEvent, error) {
+			return nil, errors.New("run-from failed")
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
@@ -635,29 +623,11 @@ func TestRunnerRunChildChildCommandResumeExitFailsBeforeExec(t *testing.T) {
 	if result.Status != fleet.AttemptFailed || result.Terminal {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(client.execRequests()) != 0 || len(client.removeRequests()) != 1 {
-		t.Fatalf("execs=%+v removes=%+v", client.execRequests(), client.removeRequests())
+	if len(client.runFromRequests()) != 1 || len(client.resumeRequests()) != 0 || len(client.execRequests()) != 0 || len(client.removeRequests()) != 0 {
+		t.Fatalf("runFroms=%+v resumes=%+v execs=%+v removes=%+v", client.runFromRequests(), client.resumeRequests(), client.execRequests(), client.removeRequests())
 	}
 	if _, ok, err := store.TerminalResult(context.Background(), run, 42); err != nil || ok {
 		t.Fatalf("terminal ok=%v err=%v", ok, err)
-	}
-}
-
-func TestChildVMNameCapsLongAttemptIDs(t *testing.T) {
-	short := childVMName("node-fastpath-0001-child-0-attempt-01")
-	if short != "sporevm-node-fastpath-0001-child-0-attempt-01" {
-		t.Fatalf("short child VM name = %q", short)
-	}
-
-	long := childVMName("computesdk-node-fastpath-repeat-20260709055313-0001-child-0-attempt-01")
-	if len(long) > childVMNameMaxLength {
-		t.Fatalf("long child VM name length = %d, want <= %d: %q", len(long), childVMNameMaxLength, long)
-	}
-	if !strings.HasPrefix(long, "sporevm-computesdk-node-fastpath") {
-		t.Fatalf("long child VM name prefix = %q", long)
-	}
-	if long == childVMName("computesdk-node-fastpath-repeat-20260709055313-0002-child-0-attempt-01") {
-		t.Fatalf("distinct long attempt IDs produced same VM name %q", long)
 	}
 }
 
@@ -1063,6 +1033,7 @@ type fakeSporeClient struct {
 	packFunc    func(context.Context, PackRequest) error
 	pullFunc    func(context.Context, PullRequest) (PullResult, error)
 	resumeFunc  func(context.Context, ResumeRequest) ([]RunEvent, error)
+	runFromFunc func(context.Context, RunFromRequest) ([]RunEvent, error)
 	execFunc    func(context.Context, ExecRequest) ([]RunEvent, error)
 	removeFunc  func(context.Context, RemoveVMRequest) error
 	runCaptures []RunCaptureRequest
@@ -1071,6 +1042,7 @@ type fakeSporeClient struct {
 	packs       []PackRequest
 	pulls       []PullRequest
 	resumes     []ResumeRequest
+	runFroms    []RunFromRequest
 	execs       []ExecRequest
 	removes     []RemoveVMRequest
 	outDir      string
@@ -1148,6 +1120,19 @@ func (c *fakeSporeClient) Resume(ctx context.Context, req ResumeRequest) ([]RunE
 	return c.resumeFunc(ctx, req)
 }
 
+func (c *fakeSporeClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEvent, error) {
+	c.mu.Lock()
+	c.runFroms = append(c.runFroms, req)
+	c.mu.Unlock()
+	if c.runFromFunc == nil {
+		return []RunEvent{
+			outputEvent("stdout", "ok\n"),
+			exitEvent(0),
+		}, nil
+	}
+	return c.runFromFunc(ctx, req)
+}
+
 func (c *fakeSporeClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, error) {
 	c.mu.Lock()
 	c.execs = append(c.execs, req)
@@ -1196,6 +1181,12 @@ func (c *fakeSporeClient) resumeRequests() []ResumeRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]ResumeRequest(nil), c.resumes...)
+}
+
+func (c *fakeSporeClient) runFromRequests() []RunFromRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]RunFromRequest(nil), c.runFroms...)
 }
 
 func (c *fakeSporeClient) execRequests() []ExecRequest {

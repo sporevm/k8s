@@ -353,6 +353,46 @@ exit 2
 	}
 }
 
+func TestCommandClientRunFromTreatsGuestExitAsResult(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "run" ]; then
+  cat <<'JSONL'
+{"schema":"spore.run-events.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
+{"schema":"spore.run-events.v1","schema_version":1,"event":"ready","command":"run","backend":"kvm"}
+{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"run","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
+JSONL
+  exit 7
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	events, err := client.RunFrom(context.Background(), RunFromRequest{
+		SporeDir:       "/work/child-42.spore",
+		Backend:        "kvm",
+		GenerationPath: "/work/child-42.generation.json",
+		Command:        []string{"/bin/sh", "-c", "exit 7"},
+	})
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	terminal, err := TerminalEvent(events)
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if terminal.ExitCode == nil || *terminal.ExitCode != 7 {
+		t.Fatalf("exit code = %v", terminal.ExitCode)
+	}
+
+	args := strings.TrimSpace(readFile(t, argsFile))
+	if args != "run --events=jsonl --backend kvm --from /work/child-42.spore --generation /work/child-42.generation.json -- /bin/sh -c exit 7" {
+		t.Fatalf("args = %q", args)
+	}
+}
+
 func TestCommandClientExecTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
@@ -525,6 +565,9 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	}
 	if _, err := client.Resume(context.Background(), ResumeRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Resume error = %v, want ErrInvalidSporeRequest", err)
+	}
+	if _, err := client.RunFrom(context.Background(), RunFromRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+		t.Fatalf("RunFrom error = %v, want ErrInvalidSporeRequest", err)
 	}
 	if _, err := client.Exec(context.Background(), ExecRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Exec error = %v, want ErrInvalidSporeRequest", err)

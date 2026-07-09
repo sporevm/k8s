@@ -22,7 +22,6 @@ import (
 
 // ponytail: inline previews keep terminal results useful; move to log object URIs when output size matters.
 const attemptOutputPreviewLimit = 16 * 1024
-const childVMNameMaxLength = 63
 
 var (
 	// ErrOversubscribed means the agent cannot reserve the requested slots.
@@ -54,6 +53,7 @@ type SporeClient interface {
 	Pack(context.Context, PackRequest) error
 	Pull(context.Context, PullRequest) (PullResult, error)
 	Resume(context.Context, ResumeRequest) ([]RunEvent, error)
+	RunFrom(context.Context, RunFromRequest) ([]RunEvent, error)
 	Exec(context.Context, ExecRequest) ([]RunEvent, error)
 	RemoveVM(context.Context, RemoveVMRequest) error
 }
@@ -653,7 +653,7 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	if r.childTimeout > 0 {
 		resumeCtx, cancelResume = context.WithTimeout(ctx, r.childTimeout)
 	}
-	events, resumeErr := r.executeChild(resumeCtx, ctx, req, outDir, backend, generationPath, attemptID)
+	events, resumeErr := r.executeChild(resumeCtx, req, outDir, backend, generationPath)
 	cancelResume()
 	result.TimingsMS.Resume = elapsedMS(resumeStart, r.now())
 
@@ -744,7 +744,7 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	return result, nil
 }
 
-func (r *Runner) executeChild(ctx context.Context, cleanupParent context.Context, req RunChildRequest, sporeDir string, backend string, generationPath string, attemptID string) (events []RunEvent, err error) {
+func (r *Runner) executeChild(ctx context.Context, req RunChildRequest, sporeDir string, backend string, generationPath string) ([]RunEvent, error) {
 	resumeReq := ResumeRequest{
 		SporeDir:       sporeDir,
 		Backend:        backend,
@@ -754,35 +754,12 @@ func (r *Runner) executeChild(ctx context.Context, cleanupParent context.Context
 		return r.client.Resume(ctx, resumeReq)
 	}
 
-	name := childVMName(attemptID)
-	resumeReq.Name = name
-	defer func() {
-		cleanupCtx := cleanupParent
-		cleanupCancel := func() {}
-		if cleanupCtx.Err() != nil {
-			cleanupCtx, cleanupCancel = context.WithTimeout(context.Background(), 5*time.Second)
-		}
-		cleanupErr := r.client.RemoveVM(cleanupCtx, RemoveVMRequest{Name: name})
-		cleanupCancel()
-		if err == nil {
-			err = cleanupErr
-		}
-	}()
-
-	resumeEvents, err := r.client.Resume(ctx, resumeReq)
-	if err != nil {
-		return nil, err
-	}
-	if terminal, err := TerminalEvent(resumeEvents); err != nil {
-		return nil, err
-	} else if terminal.ExitCode != nil && *terminal.ExitCode != 0 {
-		return nil, fmt.Errorf("named child resume exited with code %d before child command", *terminal.ExitCode)
-	}
-	events, err = r.client.Exec(ctx, ExecRequest{
-		Name:    name,
-		Command: req.Run.ChildCommand,
+	return r.client.RunFrom(ctx, RunFromRequest{
+		SporeDir:       sporeDir,
+		Backend:        backend,
+		GenerationPath: generationPath,
+		Command:        req.Run.ChildCommand,
 	})
-	return events, err
 }
 
 func (r *Runner) validateRunChildRequest(req RunChildRequest) error {
@@ -898,46 +875,6 @@ func validatePathWithin(root string, path string) error {
 		return fmt.Errorf("%s is outside work root %s", path, root)
 	}
 	return nil
-}
-
-func childVMName(attemptID string) string {
-	var name strings.Builder
-	name.Grow(len("sporevm-") + len(attemptID))
-	name.WriteString("sporevm-")
-	lastDash := true
-	for _, r := range strings.ToLower(attemptID) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			name.WriteRune(r)
-			lastDash = false
-		case !lastDash:
-			name.WriteByte('-')
-			lastDash = true
-		}
-	}
-	clean := strings.TrimRight(name.String(), "-")
-	if clean == "sporevm" {
-		return "sporevm-child"
-	}
-	if len(clean) > childVMNameMaxLength {
-		clean = shortenChildVMName(clean, attemptID)
-	}
-	return clean
-}
-
-func shortenChildVMName(clean string, attemptID string) string {
-	sum := sha256.Sum256([]byte(attemptID))
-	hash := hex.EncodeToString(sum[:])[:12]
-	suffix := "-" + hash
-	prefixLen := childVMNameMaxLength - len(suffix)
-	if prefixLen < len("sporevm") {
-		return "sporevm" + suffix
-	}
-	prefix := strings.TrimRight(clean[:prefixLen], "-")
-	if prefix == "" {
-		prefix = "sporevm"
-	}
-	return prefix + suffix
 }
 
 func (r *Runner) prepareWorkDir(run fleet.Run) string {

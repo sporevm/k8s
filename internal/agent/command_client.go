@@ -188,6 +188,26 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 	return events, nil
 }
 
+// RunFrom runs one command from a saved spore.
+func (c CommandClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEvent, error) {
+	if err := req.validate(); err != nil {
+		return nil, err
+	}
+	args := []string{"run", "--events=jsonl"}
+	if req.Backend != "" {
+		args = append(args, "--backend", req.Backend)
+	}
+	args = append(args, "--from", req.SporeDir, "--generation", req.GenerationPath, "--")
+	args = append(args, req.Command...)
+
+	stdout, stderr, err := c.run(ctx, args...)
+	events, _, decodeErr := decodeRunEventsAfterCommand("spore run --from", stdout, stderr, err, false)
+	if decodeErr != nil {
+		return events, decodeErr
+	}
+	return events, nil
+}
+
 // Exec runs `spore exec` against a named resumed VM.
 func (c CommandClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, error) {
 	if err := req.validate(); err != nil {

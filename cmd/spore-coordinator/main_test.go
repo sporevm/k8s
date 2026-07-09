@@ -555,6 +555,18 @@ func (c *fakeSporeClient) Resume(context.Context, agent.ResumeRequest) ([]agent.
 	}}, nil
 }
 
+func (c *fakeSporeClient) RunFrom(context.Context, agent.RunFromRequest) ([]agent.RunEvent, error) {
+	exitCode := c.execExitCode
+	return []agent.RunEvent{{
+		Schema:        "spore.run-events.v1",
+		SchemaVersion: 1,
+		Event:         "exit",
+		Command:       "run",
+		ExitCode:      &exitCode,
+		Timings:       &agent.RunEventTimings{ExecResponseMS: 7},
+	}}, nil
+}
+
 func (c *fakeSporeClient) Exec(context.Context, agent.ExecRequest) ([]agent.RunEvent, error) {
 	exitCode := c.execExitCode
 	return []agent.RunEvent{{

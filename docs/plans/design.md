@@ -310,9 +310,12 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   archive, pushed into the cluster-local registry with `skopeo`, resolved by
   `spore-agent` through the private service DNS name, and run through the
   Kubernetes run path.
-- SporeVM now exposes single-child restore identity with
-  `spore restore --generation FILE`; the adapter writes one generation JSON per
-  child and passes that file when restoring materialized children.
+- SporeVM exposes single-child restore identity with
+  `spore restore --generation FILE`, and PR #432 adds the same generation file
+  contract to `spore run --from`. The adapter writes one generation JSON per
+  child and now uses `spore run --from CHILD --generation FILE -- COMMAND` for
+  child-command runs. The runtime image is pinned to SporeVM 0.11.0, which
+  contains that contract.
 - The runtime image can be pinned to a SporeVM release tarball. The latest live
   child-command smoke used SporeVM 0.9.1 with `spore restore --generation`,
   named restore, `spore exec`, and fast `spore rm`.
@@ -320,10 +323,11 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   without the unsharded fallback. The run prepared/forked/packed in 23.5s,
   completed its shard in 36.8s, and wrote a succeeded terminal result with
   artifact pull 13.5s, resume 23.3s, and guest-ready 2.5s.
-- The run path now preserves `children.command` as the lower-level
-  `childCommand`, and the agent executes it through a named child resume plus
-  `spore exec` when present. A live one-child busybox smoke now verifies this
-  path through `sporectl submit`, including child stdout and generation identity.
+- The run path preserves `children.command` as the lower-level `childCommand`.
+  A live one-child busybox smoke verified the earlier named-resume path through
+  `sporectl submit`; the implementation now maps that same contract to one
+  `spore run --from --generation` invocation instead of named resume, exec, and
+  cleanup.
 - Runs can set `prepare.memory`, which is passed to `spore run --memory`
   before capture so small fan-out smokes do not inherit an oversized default
   guest memory budget.
@@ -351,6 +355,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   An unreleased dev-runtime probe of the direct same-agent source-run path
   dropped `/runs` to about 1.27s median by skipping `pack`, `inspect-bundle`,
   `pull`, and materialization for single-attempt local source runs.
+- Public runtime `0.1.10` shipped that direct same-agent path and measured
+  one-child Node `POST /runs` at about 1.30s median. The remaining hot bucket
+  was child resume/command execution at about 860ms, which is why the next
+  adapter change targets `spore run --from --generation`.
 
 ## Delivery Strategy
 
@@ -471,22 +479,21 @@ direct named-VM probe measured create at 68ms, exec at 42ms, and cleanup at
 prepare-bundle was about 5.2s, shard execution was about 3.7s, artifact pull
 was about 3.2s, and the restore/exec/cleanup bucket was about 474ms.
 
-The next isolated TTI work is now resume/exec and source-run setup overhead,
-not restore cleanup or local bundle pull. SporeVM's new block-storage contract
-records image-created rootfs state as chunked rootfs storage and writable
-rootfs state as sealed disk indexes. That should still improve portable
-multi-agent bundles, but the single-agent `POST /runs` adapter now has a local
-prepare path that performs `prepare -> fork -> restore` without
-`pack -> inspect-bundle -> pull` when the same agent prepares and executes a
-single-attempt child. Retry-enabled runs keep the portable bundle path so later
-attempts can materialize a clean child.
+The next isolated TTI work is now resume/command overhead, not restore cleanup
+or local bundle pull. SporeVM's new block-storage contract records
+image-created rootfs state as chunked rootfs storage and writable rootfs state
+as sealed disk indexes. That should still improve portable multi-agent bundles,
+but the single-agent `POST /runs` adapter now has a local prepare path that
+performs `prepare -> fork -> run-from` without `pack -> inspect-bundle -> pull`
+when the same agent prepares and executes a single-attempt child. Retry-enabled
+runs keep the portable bundle path so later attempts can materialize a clean
+child.
 
 The optimization order is:
 
-- cut and deploy the direct same-agent source-run path once the dev-runtime
-  probe stays green;
-- reduce the remaining `resume` bucket, currently about 868ms for the Node
-  smoke after the direct path;
+- release and deploy the `spore run --from --generation` child-command path;
+- remeasure the remaining `resume` bucket, currently about 860ms for the Node
+  smoke after the direct same-agent path;
 - split portable bundle timings for `pack`, `inspectBundle`, `pullVerify`,
   `pullInstallIndexes`, `pullInstallChunks`, and child manifest writes so
   multi-agent pack/pull stops being one opaque bucket;
