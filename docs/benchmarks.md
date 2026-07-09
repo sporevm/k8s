@@ -158,3 +158,29 @@ benchmark work is to separate `pack`, `inspect-bundle`, and `pull` into
 storage-aware buckets, then compare the current portable-bundle path against a
 same-agent fast path and the latest SporeVM chunked rootfs / writable disk
 storage model.
+
+On 2026-07-09 UTC, public runtime `0.1.9` completed the resident API matrix:
+
+```text
+/runs api median=8039.98ms p95=8186.43ms success=100%
+sandbox exec floor median=244.50ms p95=255.41ms success=100%
+warmed sandbox pool median=254.75ms p95=271.60ms success=100%
+```
+
+The gap confirmed that the remaining `/runs` cost was source-run preparation
+and same-agent handoff, not resident API overhead.
+
+An unreleased dev-runtime probe then copied local binaries into the running
+runtime image and exercised the direct same-agent source-run path:
+
+```text
+/runs api median=1271.96ms p95=1320.37ms success=100%
+prepare.runSave=164.608ms prepare.fork=1.405ms
+prepare.pack=0ms prepare.inspectBundle=0ms artifactPull=0ms materialization=0ms
+resume=868.054ms resultCommit=0.288ms
+```
+
+That path prepares and forks on the selected agent, executes the prepared child
+directory directly for single-attempt source runs, and leaves portable bundle
+packing/inspection for retry-enabled runs, bundle runs, or future multi-agent
+handoff.

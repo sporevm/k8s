@@ -52,6 +52,18 @@ func (c Client) PrepareBundle(ctx context.Context, run fleet.Run) (fleet.Prepare
 	return prepared, nil
 }
 
+// PrepareLocal prepares and forks a source run on the agent without creating a portable bundle.
+func (c Client) PrepareLocal(ctx context.Context, run fleet.Run) (fleet.PreparedBundle, error) {
+	var prepared fleet.PreparedBundle
+	if err := c.postJSON(ctx, "/prepare-local", run, &prepared); err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	if _, err := run.Compile(prepared); err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	return prepared, nil
+}
+
 // CreateSandbox starts one named sandbox on the agent.
 func (c Client) CreateSandbox(ctx context.Context, req agent.CreateVMRequest) error {
 	var response struct {

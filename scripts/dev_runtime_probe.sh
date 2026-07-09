@@ -186,7 +186,7 @@ echo "dev_runtime_probe: running ComputeSDK-shaped benchmark" >&2
     --timeout "${timeout}"
 )
 
-python3 - "${repo_root}" "${raw_report_dir}" <<'PY'
+python3 - "${repo_root}" "${raw_report_dir}" "${run_prefix}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -195,10 +195,11 @@ from pathlib import Path
 
 repo = Path(sys.argv[1])
 raw = Path(sys.argv[2])
+run_prefix = sys.argv[3]
 raw_dir = raw if raw.is_absolute() else repo / raw
-reports = sorted(raw_dir.glob("*.runtime-report.json"))
+reports = sorted(raw_dir.glob(f"{run_prefix}-*.runtime-report.json"))
 if not reports:
-    raise SystemExit(f"no runtime reports found in {raw_dir}")
+    raise SystemExit(f"no runtime reports found in {raw_dir} for prefix {run_prefix!r}")
 
 for path in reports:
     report = json.loads(path.read_text(encoding="utf-8"))
@@ -206,9 +207,12 @@ for path in reports:
     if state != "succeeded":
         raise SystemExit(f"{path.name}: state={state!r}, want 'succeeded'")
     prepare = report.get("prepare", {}).get("timingsMs", {})
-    for key in ("runSave", "fork", "pack", "inspectBundle"):
+    for key in ("runSave", "fork"):
         if key not in prepare:
             raise SystemExit(f"{path.name}: missing prepare.timingsMs.{key}")
+    for key in ("pack", "inspectBundle"):
+        if prepare.get(key, 0) != 0:
+            raise SystemExit(f"{path.name}: prepare.timingsMs.{key}={prepare.get(key)}, want zero for direct same-agent runs")
     artifact = report.get("timings", {}).get("stagePercentilesMs", {}).get("artifactPull", {})
     if any(artifact.get(key) != 0 for key in ("p50", "p95", "p99")):
         raise SystemExit(f"{path.name}: artifactPull={artifact}, want all zero")

@@ -433,6 +433,16 @@ func runBundleWithExecutorOverrides(ctx context.Context, run fleet.BundleRun, st
 	if len(endpoints) == 0 {
 		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
 	}
+	return runBundleWithInspectorAndExecutorOverrides(ctx, run, store, endpoints, opts, endpoints[0].Client, overrides)
+}
+
+func runBundleWithInspectorAndExecutorOverrides(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions, inspector fleet.BundleInspector, overrides map[string]fleet.ShardExecutor) (fleet.RuntimeReport, error) {
+	if len(endpoints) == 0 {
+		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
+	}
+	if inspector == nil {
+		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
+	}
 	agents := make([]fleet.AgentStatus, 0, len(endpoints))
 	executors := make(map[string]fleet.ShardExecutor, len(endpoints))
 	for _, endpoint := range endpoints {
@@ -445,7 +455,7 @@ func runBundleWithExecutorOverrides(ctx context.Context, run fleet.BundleRun, st
 	}
 	coordinator, err := fleet.NewCoordinator(
 		agents,
-		endpoints[0].Client,
+		inspector,
 		store,
 		executors,
 		opts,
@@ -461,8 +471,19 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
-	log.Printf("run prepare selected run_id=%s agent_id=%s url=%s", source.RunID, endpoint.Status.AgentID, endpoint.URL)
-	prepared, err := endpoint.Client.PrepareBundle(ctx, source)
+	localPrepare := source.RetryPolicy.MaxAttemptsPerChild == 1
+	prepareMode := "local"
+	if !localPrepare {
+		prepareMode = "bundle"
+	}
+	log.Printf("run prepare selected run_id=%s agent_id=%s url=%s mode=%s", source.RunID, endpoint.Status.AgentID, endpoint.URL, prepareMode)
+
+	var prepared fleet.PreparedBundle
+	if localPrepare {
+		prepared, err = endpoint.Client.PrepareLocal(ctx, source)
+	} else {
+		prepared, err = endpoint.Client.PrepareBundle(ctx, source)
+	}
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
@@ -478,9 +499,13 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 			Local:  *prepared.Local,
 		}
 	}
-	report, err := runBundleWithExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
+	inspector := fleet.BundleInspector(endpoint.Client)
+	if localPrepare {
+		inspector = preparedLocalInspector{Prepared: prepared}
+	}
+	report, err := runBundleWithInspectorAndExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
 		PlanBuilder: fleet.BuildSingleAgentSequentialPlan,
-	}, executors)
+	}, inspector, executors)
 	if report.Summary.RunID != "" {
 		report.Prepare = &fleet.RuntimePrepareSummary{
 			AgentID:      endpoint.Status.AgentID,
@@ -490,6 +515,18 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 		}
 	}
 	return report, err
+}
+
+type preparedLocalInspector struct {
+	Prepared fleet.PreparedBundle
+}
+
+func (i preparedLocalInspector) InspectRunBundle(_ context.Context, run fleet.BundleRun) (fleet.BundleInspection, error) {
+	return fleet.BundleInspection{
+		BundleDigest: i.Prepared.Bundle.Digest,
+		ChildCount:   i.Prepared.ChildCount,
+		HostClass:    i.Prepared.HostClass,
+	}, nil
 }
 
 type preparedLocalShardExecutor struct {

@@ -242,6 +242,67 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	}
 }
 
+func TestRunnerPrepareLocalCapturesAndForksWithoutPacking(t *testing.T) {
+	source := testRun()
+	source.Fork.Count = 3
+	source.Children.Count = 3
+	source.Execution.ChildrenPerShard = 3
+	source.Execution.MaxInFlightPerAgent = 3
+	workRoot := t.TempDir()
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		inspectFunc: func(context.Context, InspectBundleRequest) (InspectBundleResult, error) {
+			t.Fatal("PrepareLocal called InspectBundle")
+			return InspectBundleResult{}, nil
+		},
+		packFunc: func(context.Context, PackRequest) error {
+			t.Fatal("PrepareLocal called Pack")
+			return nil
+		},
+	}
+	runner, err := NewRunner(100,
+		WithSporeClient(client),
+		WithWorkRoot(workRoot),
+	)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	prepared, err := runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+	if err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	if prepared.ChildCount != 3 {
+		t.Fatalf("child count = %d, want 3", prepared.ChildCount)
+	}
+	if prepared.Bundle.URI != "local://prepared/"+source.RunID {
+		t.Fatalf("bundle URI = %q", prepared.Bundle.URI)
+	}
+	if !strings.HasPrefix(prepared.Bundle.Digest, "sha256:") {
+		t.Fatalf("bundle digest = %q", prepared.Bundle.Digest)
+	}
+	if prepared.Local == nil {
+		t.Fatal("prepared local metadata is nil")
+	}
+	if prepared.Local.ParentDir != filepath.Join(workRoot, source.RunID, "prepare", "parent.spore") ||
+		prepared.Local.ChildrenDir != filepath.Join(workRoot, source.RunID, "prepare", "children") ||
+		prepared.Local.BundleDir != "" {
+		t.Fatalf("prepared local metadata = %+v", prepared.Local)
+	}
+	if prepared.TimingsMS.RunSave < 0 ||
+		prepared.TimingsMS.Fork < 0 ||
+		prepared.TimingsMS.Pack != 0 ||
+		prepared.TimingsMS.InspectBundle != 0 {
+		t.Fatalf("prepared timings = %+v", prepared.TimingsMS)
+	}
+	if _, err := source.Compile(prepared); err != nil {
+		t.Fatalf("Compile prepared local run: %v", err)
+	}
+	if got := len(client.packRequests()); got != 0 {
+		t.Fatalf("pack requests = %d, want 0", got)
+	}
+}
+
 func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	store := newTestResultStore(t)
 	metrics := &recordingMetricsSink{}

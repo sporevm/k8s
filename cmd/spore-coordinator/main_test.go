@@ -50,12 +50,22 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].AgentID != "spore-agent-test-0001" {
 		t.Fatalf("leases = %+v", report.Plan.Leases)
 	}
-	if report.Prepare == nil || report.Prepare.TimingsMS.RunSave < 0 || report.Prepare.TimingsMS.Pack < 0 {
+	if report.Prepare == nil ||
+		report.Prepare.TimingsMS.RunSave < 0 ||
+		report.Prepare.TimingsMS.Fork < 0 ||
+		report.Prepare.TimingsMS.Pack != 0 ||
+		report.Prepare.TimingsMS.InspectBundle != 0 {
 		t.Fatalf("prepare summary = %+v", report.Prepare)
 	}
 
 	if got := spore.runCaptureCount(); got != 1 {
 		t.Fatalf("run capture count = %d, want 1", got)
+	}
+	if got := spore.packCount(); got != 0 {
+		t.Fatalf("pack count = %d, want 0", got)
+	}
+	if got := spore.inspectCount(); got != 0 {
+		t.Fatalf("inspect count = %d, want 0", got)
 	}
 	if pulls := spore.pullRequests(); len(pulls) != 0 {
 		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
@@ -191,6 +201,40 @@ func TestRunCoordinatorRunExecutesSingleAgentSequentially(t *testing.T) {
 	}
 	if pulls := spore.pullRequests(); len(pulls) != 0 {
 		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
+	}
+}
+
+func TestRunCoordinatorRunUsesPortableBundleWhenRetriesAreEnabled(t *testing.T) {
+	source := testRun()
+	source.RetryPolicy.MaxAttemptsPerChild = 2
+	runPath := writeJSONFile(t, source)
+	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
+	server := newTestAgentServer(t, spore, 1)
+
+	var stdout bytes.Buffer
+	err := runCoordinator(context.Background(), coordinatorConfig{
+		RunPath:         runPath,
+		ResultStoreRoot: t.TempDir(),
+		Timeout:         time.Minute,
+		AgentURLs:       agentURLsFlag{server.URL},
+		HTTPClient:      server.Client(),
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("runCoordinator: %v\nstdout=%s", err, stdout.String())
+	}
+
+	var report fleet.RuntimeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode report: %v\n%s", err, stdout.String())
+	}
+	if report.Prepare == nil || report.Prepare.BundleDigest != testBundleDigest {
+		t.Fatalf("prepare summary = %+v", report.Prepare)
+	}
+	if got := spore.packCount(); got != 1 {
+		t.Fatalf("pack count = %d, want 1", got)
+	}
+	if got := spore.inspectCount(); got < 1 {
+		t.Fatalf("inspect count = %d, want at least 1", got)
 	}
 }
 
@@ -406,6 +450,8 @@ type fakeSporeClient struct {
 	execExitCode   int
 	runCaptures    []agent.RunCaptureRequest
 	pulls          []agent.PullRequest
+	inspects       int
+	packs          int
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
@@ -428,6 +474,9 @@ func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 }
 
 func (c *fakeSporeClient) InspectBundle(context.Context, agent.InspectBundleRequest) (agent.InspectBundleResult, error) {
+	c.mu.Lock()
+	c.inspects++
+	c.mu.Unlock()
 	childCount := c.childCount
 	if childCount == 0 {
 		childCount = 1
@@ -476,6 +525,9 @@ func (c *fakeSporeClient) Fork(_ context.Context, req agent.ForkRequest) error {
 }
 
 func (c *fakeSporeClient) Pack(context.Context, agent.PackRequest) error {
+	c.mu.Lock()
+	c.packs++
+	c.mu.Unlock()
 	return nil
 }
 
@@ -528,6 +580,18 @@ func (c *fakeSporeClient) pullRequests() []agent.PullRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]agent.PullRequest(nil), c.pulls...)
+}
+
+func (c *fakeSporeClient) inspectCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inspects
+}
+
+func (c *fakeSporeClient) packCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.packs
 }
 
 func testDigest(raw string) agent.DigestRef {

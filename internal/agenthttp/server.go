@@ -42,6 +42,7 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /inspect-run-bundle", s.handleInspectRunBundle)
 	mux.HandleFunc("POST /prepare-bundle", s.handlePrepareBundle)
+	mux.HandleFunc("POST /prepare-local", s.handlePrepareLocal)
 	mux.HandleFunc("POST /run-shard", s.handleRunShard)
 	mux.HandleFunc("POST /sandboxes", s.handleCreateSandbox)
 	mux.HandleFunc("POST /sandboxes/{name}/exec", s.handleExecSandbox)
@@ -119,6 +120,26 @@ func (s *Server) handlePrepareBundle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("prepare-bundle complete run_id=%s digest=%s children=%d duration=%s", run.RunID, prepared.Bundle.Digest, prepared.ChildCount, time.Since(start))
+	writeJSON(w, http.StatusOK, prepared)
+}
+
+func (s *Server) handlePrepareLocal(w http.ResponseWriter, r *http.Request) {
+	var run fleet.Run
+	if !decodeJSON(w, r, &run) {
+		return
+	}
+	start := time.Now()
+	log.Printf("prepare-local start run_id=%s children=%d agent_id=%s", run.RunID, run.Children.Count, s.AgentID)
+	prepared, err := s.Runner.PrepareLocal(r.Context(), agent.PrepareBundleRequest{
+		Run:     run,
+		Backend: s.backend(),
+	})
+	if err != nil {
+		log.Printf("prepare-local failed run_id=%s duration=%s: %v", run.RunID, time.Since(start), err)
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	log.Printf("prepare-local complete run_id=%s digest=%s children=%d duration=%s", run.RunID, prepared.Bundle.Digest, prepared.ChildCount, time.Since(start))
 	writeJSON(w, http.StatusOK, prepared)
 }
 
