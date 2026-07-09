@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -48,16 +50,15 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].AgentID != "spore-agent-test-0001" {
 		t.Fatalf("leases = %+v", report.Plan.Leases)
 	}
+	if report.Prepare == nil || report.Prepare.TimingsMS.RunSave < 0 || report.Prepare.TimingsMS.Pack < 0 {
+		t.Fatalf("prepare summary = %+v", report.Prepare)
+	}
 
 	if got := spore.runCaptureCount(); got != 1 {
 		t.Fatalf("run capture count = %d, want 1", got)
 	}
-	pulls := spore.pullRequests()
-	if len(pulls) != 1 {
-		t.Fatalf("pull count = %d, want 1", len(pulls))
-	}
-	if !strings.HasPrefix(pulls[0].Source, "file://") {
-		t.Fatalf("pull source = %q, want local prepared file bundle", pulls[0].Source)
+	if pulls := spore.pullRequests(); len(pulls) != 0 {
+		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
 	}
 }
 
@@ -188,8 +189,8 @@ func TestRunCoordinatorRunExecutesSingleAgentSequentially(t *testing.T) {
 	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].ChildCount != 2 {
 		t.Fatalf("leases = %+v", report.Plan.Leases)
 	}
-	if got := len(spore.pullRequests()); got != 2 {
-		t.Fatalf("pull count = %d, want 2", got)
+	if pulls := spore.pullRequests(); len(pulls) != 0 {
+		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
 	}
 }
 
@@ -460,7 +461,17 @@ func (c *fakeSporeClient) CreateVM(context.Context, agent.CreateVMRequest) error
 	return nil
 }
 
-func (c *fakeSporeClient) Fork(context.Context, agent.ForkRequest) error {
+func (c *fakeSporeClient) Fork(_ context.Context, req agent.ForkRequest) error {
+	childCount := c.childCount
+	if childCount == 0 {
+		childCount = 1
+	}
+	for i := 0; i < childCount; i++ {
+		childDir := filepath.Join(req.OutDir, fmt.Sprintf("%06d", i))
+		if err := os.MkdirAll(childDir, 0o755); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

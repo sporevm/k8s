@@ -267,6 +267,15 @@ type PullResult struct {
 	RootFS          RootFSMaterializationSummary `json:"rootfs"`
 	Remote          RemoteBundleCache            `json:"remote"`
 	Children        BundleChildrenSummary        `json:"children"`
+	Timings         *PullTimings                 `json:"timings,omitempty"`
+}
+
+// PullTimings carries optional SporeVM pull sub-phase timings when the CLI
+// exposes them.
+type PullTimings struct {
+	Verify         float64 `json:"verify,omitempty"`
+	InstallIndexes float64 `json:"install_indexes,omitempty"`
+	InstallChunks  float64 `json:"install_chunks,omitempty"`
 }
 
 // RemoteBundleCache reports remote bundle source bytes.

@@ -103,9 +103,27 @@ type Run struct {
 
 // PreparedBundle is the prepared, forked bundle used to compile a Run.
 type PreparedBundle struct {
-	Bundle     Bundle    `json:"bundle"`
-	ChildCount int       `json:"childCount"`
-	HostClass  HostClass `json:"hostClass"`
+	Bundle     Bundle               `json:"bundle"`
+	ChildCount int                  `json:"childCount"`
+	HostClass  HostClass            `json:"hostClass"`
+	Local      *PreparedLocalBundle `json:"local,omitempty"`
+	TimingsMS  PrepareTimings       `json:"timingsMs,omitempty"`
+}
+
+// PreparedLocalBundle identifies same-agent prepared files that are safe to
+// reference only inside the preparing agent.
+type PreparedLocalBundle struct {
+	ParentDir   string `json:"parentDir,omitempty"`
+	ChildrenDir string `json:"childrenDir,omitempty"`
+	BundleDir   string `json:"bundleDir,omitempty"`
+}
+
+// PrepareTimings records source-run preparation phase latencies in milliseconds.
+type PrepareTimings struct {
+	RunSave       float64 `json:"runSave,omitempty"`
+	Fork          float64 `json:"fork,omitempty"`
+	Pack          float64 `json:"pack,omitempty"`
+	InspectBundle float64 `json:"inspectBundle,omitempty"`
 }
 
 // BundleRun is the admitted fleet run contract.
@@ -204,11 +222,15 @@ const (
 
 // AttemptTimings records the benchmark-relevant phases for a child attempt.
 type AttemptTimings struct {
-	ArtifactPull    float64 `json:"artifactPull"`
-	Materialization float64 `json:"materialization"`
-	Resume          float64 `json:"resume"`
-	GuestReady      float64 `json:"guestReady"`
-	ResultCommit    float64 `json:"resultCommit"`
+	ArtifactPull       float64 `json:"artifactPull"`
+	Materialization    float64 `json:"materialization"`
+	Resume             float64 `json:"resume"`
+	GuestReady         float64 `json:"guestReady"`
+	ResultCommit       float64 `json:"resultCommit"`
+	LocalChild         float64 `json:"localChild,omitempty"`
+	PullVerify         float64 `json:"pullVerify,omitempty"`
+	PullInstallIndexes float64 `json:"pullInstallIndexes,omitempty"`
+	PullInstallChunks  float64 `json:"pullInstallChunks,omitempty"`
 }
 
 // AttemptError is the compact error body stored with failed attempts.
@@ -274,9 +296,19 @@ type BundleInspection struct {
 
 // ShardExecutionRequest is the coordinator-to-agent runtime lease request.
 type ShardExecutionRequest struct {
-	Run     BundleRun  `json:"run"`
-	Lease   ShardLease `json:"lease"`
-	Attempt int        `json:"attempt"`
+	Run     BundleRun            `json:"run"`
+	Lease   ShardLease           `json:"lease"`
+	Attempt int                  `json:"attempt"`
+	Local   *PreparedLocalBundle `json:"local,omitempty"`
+}
+
+// RuntimePrepareSummary reports the source-run prepare work that happened
+// before a compiled bundle run was admitted.
+type RuntimePrepareSummary struct {
+	AgentID      string         `json:"agentID"`
+	BundleDigest string         `json:"bundleDigest"`
+	ChildCount   int            `json:"childCount"`
+	TimingsMS    PrepareTimings `json:"timingsMs"`
 }
 
 // RuntimeSummary is compact aggregate status for one coordinator run.
@@ -323,7 +355,8 @@ type RuntimePercentiles struct {
 
 // RuntimeReport is the coordinator result for one admitted run.
 type RuntimeReport struct {
-	Plan    Plan                  `json:"plan"`
-	Summary RuntimeSummary        `json:"summary"`
-	Timings *RuntimeTimingSummary `json:"timings,omitempty"`
+	Plan    Plan                   `json:"plan"`
+	Summary RuntimeSummary         `json:"summary"`
+	Timings *RuntimeTimingSummary  `json:"timings,omitempty"`
+	Prepare *RuntimePrepareSummary `json:"prepare,omitempty"`
 }

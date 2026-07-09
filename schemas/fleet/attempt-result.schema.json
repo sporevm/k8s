@@ -89,6 +89,22 @@
         "resultCommit": {
           "type": "number",
           "minimum": 0
+        },
+        "localChild": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pullVerify": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pullInstallIndexes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pullInstallChunks": {
+          "type": "number",
+          "minimum": 0
         }
       }
     },

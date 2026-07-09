@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -198,6 +199,20 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	if prepared.Bundle.Digest != "sha256:2222222222222222222222222222222222222222222222222222222222222222" {
 		t.Fatalf("bundle digest = %q", prepared.Bundle.Digest)
 	}
+	if prepared.Local == nil {
+		t.Fatal("prepared local metadata is nil")
+	}
+	if prepared.Local.ParentDir != filepath.Join(workRoot, source.RunID, "prepare", "parent.spore") ||
+		prepared.Local.ChildrenDir != filepath.Join(workRoot, source.RunID, "prepare", "children") ||
+		prepared.Local.BundleDir != filepath.Join(workRoot, source.RunID, "prepare", "bundle") {
+		t.Fatalf("prepared local metadata = %+v", prepared.Local)
+	}
+	if prepared.TimingsMS.RunSave < 0 ||
+		prepared.TimingsMS.Fork < 0 ||
+		prepared.TimingsMS.Pack < 0 ||
+		prepared.TimingsMS.InspectBundle < 0 {
+		t.Fatalf("prepared timings = %+v", prepared.TimingsMS)
+	}
 	if _, err := source.Compile(prepared); err != nil {
 		t.Fatalf("Compile prepared bundle: %v", err)
 	}
@@ -236,7 +251,13 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 			if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
 				return PullResult{}, err
 			}
-			return pullResult(req.OutDir, "42"), nil
+			pull := pullResult(req.OutDir, "42")
+			pull.Timings = &PullTimings{
+				Verify:         1,
+				InstallIndexes: 2,
+				InstallChunks:  3,
+			}
+			return pull, nil
 		},
 		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
 			if req.GenerationPath == "" {
@@ -287,6 +308,9 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	if result.TimingsMS.ArtifactPull < 0 || result.TimingsMS.Resume < 0 {
 		t.Fatalf("timings = %+v", result.TimingsMS)
 	}
+	if result.TimingsMS.PullVerify != 1 || result.TimingsMS.PullInstallIndexes != 2 || result.TimingsMS.PullInstallChunks != 3 {
+		t.Fatalf("pull timings = %+v", result.TimingsMS)
+	}
 	if runner.AvailableSlots() != 100 {
 		t.Fatalf("available slots = %d, want 100", runner.AvailableSlots())
 	}
@@ -325,6 +349,58 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	}
 	if !observed[0].TerminalCommitAttempted || !observed[0].TerminalCommitSuccessful {
 		t.Fatalf("terminal commit metrics = %+v", observed[0])
+	}
+}
+
+func TestRunnerRunChildUsesPreparedLocalChildWithoutPull(t *testing.T) {
+	store := newTestResultStore(t)
+	workRoot := t.TempDir()
+	childrenDir := filepath.Join(workRoot, "ruby-counter-20260620", "prepare", "children")
+	childDir := filepath.Join(childrenDir, "000042")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("create child dir: %v", err)
+	}
+	client := &fakeSporeClient{
+		pullFunc: func(context.Context, PullRequest) (PullResult, error) {
+			t.Fatal("pull called for prepared local child")
+			return PullResult{}, nil
+		},
+		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
+			if req.SporeDir != childDir {
+				t.Fatalf("resume spore dir = %q, want %q", req.SporeDir, childDir)
+			}
+			return []RunEvent{exitEvent(0)}, nil
+		},
+	}
+	runner, err := NewRunner(100,
+		WithSporeClient(client),
+		WithResultStore(store),
+		WithWorkRoot(workRoot),
+	)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	run := testBundleRun()
+
+	result, err := runner.RunChild(context.Background(), RunChildRequest{
+		Run:              run,
+		Lease:            testLease(run),
+		ChildID:          42,
+		Attempt:          1,
+		Pressure:         normalPressure(),
+		LocalChildrenDir: childrenDir,
+	})
+	if err != nil {
+		t.Fatalf("RunChild: %v", err)
+	}
+	if result.Status != fleet.AttemptSucceeded {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.TimingsMS.ArtifactPull != 0 || result.TimingsMS.LocalChild < 0 {
+		t.Fatalf("timings = %+v", result.TimingsMS)
+	}
+	if len(client.pullRequests()) != 0 {
+		t.Fatalf("pulls = %+v", client.pullRequests())
 	}
 }
 
@@ -503,6 +579,24 @@ func TestRunnerRunChildChildCommandResumeExitFailsBeforeExec(t *testing.T) {
 	}
 	if _, ok, err := store.TerminalResult(context.Background(), run, 42); err != nil || ok {
 		t.Fatalf("terminal ok=%v err=%v", ok, err)
+	}
+}
+
+func TestChildVMNameCapsLongAttemptIDs(t *testing.T) {
+	short := childVMName("node-fastpath-0001-child-0-attempt-01")
+	if short != "sporevm-node-fastpath-0001-child-0-attempt-01" {
+		t.Fatalf("short child VM name = %q", short)
+	}
+
+	long := childVMName("computesdk-node-fastpath-repeat-20260709055313-0001-child-0-attempt-01")
+	if len(long) > childVMNameMaxLength {
+		t.Fatalf("long child VM name length = %d, want <= %d: %q", len(long), childVMNameMaxLength, long)
+	}
+	if !strings.HasPrefix(long, "sporevm-computesdk-node-fastpath") {
+		t.Fatalf("long child VM name prefix = %q", long)
+	}
+	if long == childVMName("computesdk-node-fastpath-repeat-20260709055313-0002-child-0-attempt-01") {
+		t.Fatalf("distinct long attempt IDs produced same VM name %q", long)
 	}
 }
 

@@ -467,6 +467,18 @@ func (t AttemptTimings) Validate(path string) error {
 	if t.ResultCommit < 0 {
 		return contractError("%s.resultCommit must be >= 0", path)
 	}
+	if t.LocalChild < 0 {
+		return contractError("%s.localChild must be >= 0", path)
+	}
+	if t.PullVerify < 0 {
+		return contractError("%s.pullVerify must be >= 0", path)
+	}
+	if t.PullInstallIndexes < 0 {
+		return contractError("%s.pullInstallIndexes must be >= 0", path)
+	}
+	if t.PullInstallChunks < 0 {
+		return contractError("%s.pullInstallChunks must be >= 0", path)
+	}
 	return nil
 }
 

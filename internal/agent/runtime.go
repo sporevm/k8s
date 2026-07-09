@@ -3,7 +3,9 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 
 // ponytail: inline previews keep terminal results useful; move to log object URIs when output size matters.
 const attemptOutputPreviewLimit = 16 * 1024
+const childVMNameMaxLength = 63
 
 var (
 	// ErrOversubscribed means the agent cannot reserve the requested slots.
@@ -325,6 +328,8 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 		return fleet.PreparedBundle{}, err
 	}
 
+	var timings fleet.PrepareTimings
+	runSaveStart := r.now()
 	events, err := r.client.RunCapture(ctx, RunCaptureRequest{
 		Image:         req.Run.Source.Image,
 		CaptureDir:    parentDir,
@@ -334,6 +339,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 		Memory:        req.Run.Prepare.Memory,
 		Command:       req.Run.Prepare.Command,
 	})
+	timings.RunSave = elapsedMS(runSaveStart, r.now())
 	if err != nil {
 		return fleet.PreparedBundle{}, err
 	}
@@ -344,6 +350,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	if !terminal.Captured || terminal.CapturePath == nil {
 		return fleet.PreparedBundle{}, invalidMachineOutput("prepare did not capture parent")
 	}
+	forkStart := r.now()
 	if err := r.client.Fork(ctx, ForkRequest{
 		ParentDir: parentDir,
 		Count:     req.Run.Fork.Count,
@@ -351,6 +358,9 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	}); err != nil {
 		return fleet.PreparedBundle{}, err
 	}
+	timings.Fork = elapsedMS(forkStart, r.now())
+
+	packStart := r.now()
 	if err := r.client.Pack(ctx, PackRequest{
 		ParentDir:   parentDir,
 		ChildrenDir: childrenDir,
@@ -358,11 +368,13 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	}); err != nil {
 		return fleet.PreparedBundle{}, err
 	}
+	timings.Pack = elapsedMS(packStart, r.now())
 
 	bundleURI, err := fileURI(bundleDir)
 	if err != nil {
 		return fleet.PreparedBundle{}, err
 	}
+	inspectStart := r.now()
 	inspection, err := r.client.InspectBundle(ctx, InspectBundleRequest{
 		Source: bundleURI,
 		ChildRange: &ChildRangeSelection{
@@ -370,6 +382,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 			End:   req.Run.Children.ChildRange().End(),
 		},
 	})
+	timings.InspectBundle = elapsedMS(inspectStart, r.now())
 	if err != nil {
 		return fleet.PreparedBundle{}, err
 	}
@@ -380,6 +393,12 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 		},
 		ChildCount: inspection.ChildCount,
 		HostClass:  hostClass,
+		Local: &fleet.PreparedLocalBundle{
+			ParentDir:   parentDir,
+			ChildrenDir: childrenDir,
+			BundleDir:   bundleDir,
+		},
+		TimingsMS: timings,
 	}
 	if _, err := req.Run.Compile(prepared); err != nil {
 		return fleet.PreparedBundle{}, err
@@ -397,6 +416,7 @@ type RunChildRequest struct {
 	Region                  string
 	AllowMetadataOnlyRootFS bool
 	Backend                 string
+	LocalChildrenDir        string
 }
 
 // RunShardRequest describes execution of every child assigned by a shard lease.
@@ -408,6 +428,7 @@ type RunShardRequest struct {
 	Region                  string
 	AllowMetadataOnlyRootFS bool
 	Backend                 string
+	LocalChildrenDir        string
 }
 
 // RunChild runs one child attempt with a single execution slot reservation.
@@ -463,6 +484,7 @@ func (r *Runner) RunShard(ctx context.Context, req RunShardRequest) ([]fleet.Att
 					Region:                  req.Region,
 					AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
 					Backend:                 req.Backend,
+					LocalChildrenDir:        req.LocalChildrenDir,
 				}
 				result, err := r.runChild(ctx, childReq)
 				results[childID-req.Lease.ChildStart] = result
@@ -526,29 +548,46 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 		return result, nil
 	}
 
-	outDir := r.childWorkDir(req.Run, req.Lease, req.ChildID, attemptID)
-	if err := os.RemoveAll(outDir); err != nil {
-		return r.failAttempt(ctx, req.Run, result, "agent.cleanup_failed", err.Error(), false)
-	}
-	defer os.RemoveAll(outDir)
-	if err := os.MkdirAll(filepath.Dir(outDir), 0o755); err != nil {
-		return r.failAttempt(ctx, req.Run, result, "agent.workdir_failed", err.Error(), false)
-	}
+	outDir := ""
+	var pull PullResult
+	if req.LocalChildrenDir != "" && req.Attempt == 1 {
+		localStart := r.now()
+		outDir = preparedChildSporeDir(req.LocalChildrenDir, req.ChildID)
+		if err := validatePreparedChildDir(r.workRoot, outDir); err != nil {
+			return r.failAttempt(ctx, req.Run, result, "agent.local_child_missing", err.Error(), false)
+		}
+		result.TimingsMS.LocalChild = elapsedMS(localStart, r.now())
+	} else {
+		outDir = r.childWorkDir(req.Run, req.Lease, req.ChildID, attemptID)
+		if err := os.RemoveAll(outDir); err != nil {
+			return r.failAttempt(ctx, req.Run, result, "agent.cleanup_failed", err.Error(), false)
+		}
+		defer os.RemoveAll(outDir)
+		if err := os.MkdirAll(filepath.Dir(outDir), 0o755); err != nil {
+			return r.failAttempt(ctx, req.Run, result, "agent.workdir_failed", err.Error(), false)
+		}
 
-	pullStart := r.now()
-	pull, err := r.client.Pull(ctx, PullRequest{
-		Source:                  bundleSource(req.Run),
-		OutDir:                  outDir,
-		ChildID:                 strconv.Itoa(req.ChildID),
-		Region:                  req.Region,
-		AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
-	})
-	result.TimingsMS.ArtifactPull = elapsedMS(pullStart, r.now())
-	if err != nil {
-		return r.failAttemptFromError(ctx, req.Run, result, err, false)
-	}
-	if pull.BundleDigest.String() != req.Run.Bundle.Digest {
-		return r.failAttemptWithPull(ctx, req.Run, result, "object.invalid", "pull result bundle digest did not match run bundle digest", false, pull)
+		pullStart := r.now()
+		var err error
+		pull, err = r.client.Pull(ctx, PullRequest{
+			Source:                  bundleSource(req.Run),
+			OutDir:                  outDir,
+			ChildID:                 strconv.Itoa(req.ChildID),
+			Region:                  req.Region,
+			AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
+		})
+		result.TimingsMS.ArtifactPull = elapsedMS(pullStart, r.now())
+		if pull.Timings != nil {
+			result.TimingsMS.PullVerify = pull.Timings.Verify
+			result.TimingsMS.PullInstallIndexes = pull.Timings.InstallIndexes
+			result.TimingsMS.PullInstallChunks = pull.Timings.InstallChunks
+		}
+		if err != nil {
+			return r.failAttemptFromError(ctx, req.Run, result, err, false)
+		}
+		if pull.BundleDigest.String() != req.Run.Bundle.Digest {
+			return r.failAttemptWithPull(ctx, req.Run, result, "object.invalid", "pull result bundle digest did not match run bundle digest", false, pull)
+		}
 	}
 	generationPath := filepath.Join(filepath.Dir(outDir), attemptID+".generation.json")
 	defer os.Remove(generationPath)
@@ -776,6 +815,43 @@ func (r *Runner) childWorkDir(run fleet.BundleRun, lease fleet.ShardLease, child
 	return filepath.Join(r.workRoot, run.RunID, lease.ShardID, "child-"+strconv.Itoa(childID), attemptID+".spore")
 }
 
+func preparedChildSporeDir(childrenDir string, childID int) string {
+	return filepath.Join(childrenDir, fmt.Sprintf("%06d", childID))
+}
+
+func validatePreparedChildDir(workRoot string, path string) error {
+	if err := validatePathWithin(workRoot, path); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	return nil
+}
+
+func validatePathWithin(root string, path string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return err
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+		return fmt.Errorf("%s is outside work root %s", path, root)
+	}
+	return nil
+}
+
 func childVMName(attemptID string) string {
 	var name strings.Builder
 	name.Grow(len("sporevm-") + len(attemptID))
@@ -795,7 +871,25 @@ func childVMName(attemptID string) string {
 	if clean == "sporevm" {
 		return "sporevm-child"
 	}
+	if len(clean) > childVMNameMaxLength {
+		clean = shortenChildVMName(clean, attemptID)
+	}
 	return clean
+}
+
+func shortenChildVMName(clean string, attemptID string) string {
+	sum := sha256.Sum256([]byte(attemptID))
+	hash := hex.EncodeToString(sum[:])[:12]
+	suffix := "-" + hash
+	prefixLen := childVMNameMaxLength - len(suffix)
+	if prefixLen < len("sporevm") {
+		return "sporevm" + suffix
+	}
+	prefix := strings.TrimRight(clean[:prefixLen], "-")
+	if prefix == "" {
+		prefix = "sporevm"
+	}
+	return prefix + suffix
 }
 
 func (r *Runner) prepareWorkDir(run fleet.Run) string {
