@@ -346,6 +346,11 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   indexes. The Kubernetes adapter should stop treating pack/pull as an opaque
   exact-rootfs byte copy and measure whether bundle work is index installation,
   chunk transfer, or local materialization.
+- Public runtime `0.1.9` measured one-child Node `POST /runs` at about 8.04s
+  median while sandbox exec and warmed-pool request TTI were about 245-255ms.
+  An unreleased dev-runtime probe of the direct same-agent source-run path
+  dropped `/runs` to about 1.27s median by skipping `pack`, `inspect-bundle`,
+  `pull`, and materialization for single-attempt local source runs.
 
 ## Delivery Strategy
 
@@ -466,24 +471,25 @@ direct named-VM probe measured create at 68ms, exec at 42ms, and cleanup at
 prepare-bundle was about 5.2s, shard execution was about 3.7s, artifact pull
 was about 3.2s, and the restore/exec/cleanup bucket was about 474ms.
 
-The next isolated TTI work is now storage-aware pack/pull optimization, not
-restore cleanup. SporeVM's new block-storage contract records image-created
-rootfs state as chunked rootfs storage and writable rootfs state as sealed disk
-indexes. That should make portable bundles less about copying exact ext4 rootfs
-bytes, but the current `POST /runs` adapter still performs a conservative
-`prepare -> fork -> pack -> inspect-bundle -> pull -> restore` round trip even
-when the same agent prepares and executes the child.
+The next isolated TTI work is now resume/exec and source-run setup overhead,
+not restore cleanup or local bundle pull. SporeVM's new block-storage contract
+records image-created rootfs state as chunked rootfs storage and writable
+rootfs state as sealed disk indexes. That should still improve portable
+multi-agent bundles, but the single-agent `POST /runs` adapter now has a local
+prepare path that performs `prepare -> fork -> restore` without
+`pack -> inspect-bundle -> pull` when the same agent prepares and executes a
+single-attempt child. Retry-enabled runs keep the portable bundle path so later
+attempts can materialize a clean child.
 
 The optimization order is:
 
-- publish and benchmark a runtime that includes the latest landed SporeVM
-  storage model before hard-coding assumptions from the 0.9.1 exact timings;
-- split agent timings for `runSave`, `fork`, `pack`, `inspectBundle`,
-  `pullVerify`, `pullInstallIndexes`, `pullInstallChunks`, and child manifest
-  writes so pack/pull stops being one opaque bucket;
-- add a same-agent fast path for explicitly local or single-agent runs that
-  executes the forked child directory directly and skips `pack`,
-  `inspect-bundle`, and `pull`;
+- cut and deploy the direct same-agent source-run path once the dev-runtime
+  probe stays green;
+- reduce the remaining `resume` bucket, currently about 868ms for the Node
+  smoke after the direct path;
+- split portable bundle timings for `pack`, `inspectBundle`, `pullVerify`,
+  `pullInstallIndexes`, `pullInstallChunks`, and child manifest writes so
+  multi-agent pack/pull stops being one opaque bucket;
 - for real multi-agent fan-out, keep the portable bundle contract but push
   SporeVM toward index-aware or lazy `pull` so a selected child can restore
   from verified indexes and node-local chunks without full eager

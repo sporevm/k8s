@@ -254,6 +254,14 @@ type PrepareBundleRequest struct {
 	Backend string
 }
 
+type localPreparation struct {
+	HostClass   fleet.HostClass
+	ParentDir   string
+	ChildrenDir string
+	BundleDir   string
+	TimingsMS   fleet.PrepareTimings
+}
+
 // Status reports the runner's current fleet status using `spore host-info`.
 func (r *Runner) Status(ctx context.Context, req StatusRequest) (fleet.AgentStatus, error) {
 	if r.client == nil {
@@ -292,16 +300,93 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (fleet.AgentStat
 	return status, status.Validate()
 }
 
+// PrepareLocal prepares and forks a source run without building a portable bundle.
+func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (fleet.PreparedBundle, error) {
+	prepared, err := r.prepareChildren(ctx, req)
+	if err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	result := fleet.PreparedBundle{
+		Bundle: fleet.Bundle{
+			URI:    "local://prepared/" + req.Run.RunID,
+			Digest: localPreparedDigest(req.Run, prepared.HostClass),
+		},
+		ChildCount: req.Run.Fork.Count,
+		HostClass:  prepared.HostClass,
+		Local: &fleet.PreparedLocalBundle{
+			ParentDir:   prepared.ParentDir,
+			ChildrenDir: prepared.ChildrenDir,
+		},
+		TimingsMS: prepared.TimingsMS,
+	}
+	if _, err := req.Run.Compile(result); err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	return result, nil
+}
+
 // PrepareBundle prepares, forks, packs, and inspects a source run bundle locally.
 func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (fleet.PreparedBundle, error) {
+	prepared, err := r.prepareChildren(ctx, req)
+	if err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+
+	packStart := r.now()
+	if err := r.client.Pack(ctx, PackRequest{
+		ParentDir:   prepared.ParentDir,
+		ChildrenDir: prepared.ChildrenDir,
+		OutDir:      prepared.BundleDir,
+	}); err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	prepared.TimingsMS.Pack = elapsedMS(packStart, r.now())
+
+	bundleURI, err := fileURI(prepared.BundleDir)
+	if err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	inspectStart := r.now()
+	inspection, err := r.client.InspectBundle(ctx, InspectBundleRequest{
+		Source: bundleURI,
+		ChildRange: &ChildRangeSelection{
+			Start: req.Run.Children.Start,
+			End:   req.Run.Children.ChildRange().End(),
+		},
+	})
+	prepared.TimingsMS.InspectBundle = elapsedMS(inspectStart, r.now())
+	if err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	result := fleet.PreparedBundle{
+		Bundle: fleet.Bundle{
+			URI:    bundleURI,
+			Digest: inspection.BundleDigest.String(),
+		},
+		ChildCount: inspection.ChildCount,
+		HostClass:  prepared.HostClass,
+		Local: &fleet.PreparedLocalBundle{
+			ParentDir:   prepared.ParentDir,
+			ChildrenDir: prepared.ChildrenDir,
+			BundleDir:   prepared.BundleDir,
+		},
+		TimingsMS: prepared.TimingsMS,
+	}
+	if _, err := req.Run.Compile(result); err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	return result, nil
+}
+
+func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) (localPreparation, error) {
 	if r.client == nil {
-		return fleet.PreparedBundle{}, ErrSporeClientNotConfigured
+		return localPreparation{}, ErrSporeClientNotConfigured
 	}
 	if r.workRoot == "" {
-		return fleet.PreparedBundle{}, ErrWorkRootNotConfigured
+		return localPreparation{}, ErrWorkRootNotConfigured
 	}
 	if err := req.Run.Validate(); err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 
 	backend := req.Backend
@@ -310,11 +395,11 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	}
 	info, err := r.client.HostInfo(ctx)
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 	hostClass, err := info.FleetHostClass(backend)
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 
 	root := r.prepareWorkDir(req.Run)
@@ -322,10 +407,10 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	childrenDir := filepath.Join(root, "children")
 	bundleDir := filepath.Join(root, "bundle")
 	if err := os.RemoveAll(root); err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 
 	var timings fleet.PrepareTimings
@@ -341,14 +426,14 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	})
 	timings.RunSave = elapsedMS(runSaveStart, r.now())
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 	terminal, err := TerminalEvent(events)
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 	if !terminal.Captured || terminal.CapturePath == nil {
-		return fleet.PreparedBundle{}, invalidMachineOutput("prepare did not capture parent")
+		return localPreparation{}, invalidMachineOutput("prepare did not capture parent")
 	}
 	forkStart := r.now()
 	if err := r.client.Fork(ctx, ForkRequest{
@@ -356,54 +441,17 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 		Count:     req.Run.Fork.Count,
 		OutDir:    childrenDir,
 	}); err != nil {
-		return fleet.PreparedBundle{}, err
+		return localPreparation{}, err
 	}
 	timings.Fork = elapsedMS(forkStart, r.now())
 
-	packStart := r.now()
-	if err := r.client.Pack(ctx, PackRequest{
+	return localPreparation{
+		HostClass:   hostClass,
 		ParentDir:   parentDir,
 		ChildrenDir: childrenDir,
-		OutDir:      bundleDir,
-	}); err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	timings.Pack = elapsedMS(packStart, r.now())
-
-	bundleURI, err := fileURI(bundleDir)
-	if err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	inspectStart := r.now()
-	inspection, err := r.client.InspectBundle(ctx, InspectBundleRequest{
-		Source: bundleURI,
-		ChildRange: &ChildRangeSelection{
-			Start: req.Run.Children.Start,
-			End:   req.Run.Children.ChildRange().End(),
-		},
-	})
-	timings.InspectBundle = elapsedMS(inspectStart, r.now())
-	if err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	prepared := fleet.PreparedBundle{
-		Bundle: fleet.Bundle{
-			URI:    bundleURI,
-			Digest: inspection.BundleDigest.String(),
-		},
-		ChildCount: inspection.ChildCount,
-		HostClass:  hostClass,
-		Local: &fleet.PreparedLocalBundle{
-			ParentDir:   parentDir,
-			ChildrenDir: childrenDir,
-			BundleDir:   bundleDir,
-		},
-		TimingsMS: timings,
-	}
-	if _, err := req.Run.Compile(prepared); err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	return prepared, nil
+		BundleDir:   bundleDir,
+		TimingsMS:   timings,
+	}, nil
 }
 
 // RunChildRequest describes one child execution attempt inside a shard lease.
@@ -902,6 +950,23 @@ func fileURI(path string) (string, error) {
 		return "", err
 	}
 	return (&url.URL{Scheme: "file", Path: abs}).String(), nil
+}
+
+func localPreparedDigest(run fleet.Run, hostClass fleet.HostClass) string {
+	payload, err := json.Marshal(struct {
+		Schema    string          `json:"schema"`
+		Run       fleet.Run       `json:"run"`
+		HostClass fleet.HostClass `json:"hostClass"`
+	}{
+		Schema:    "sporevm-k8s.local-prepared.v1",
+		Run:       run,
+		HostClass: hostClass,
+	})
+	if err != nil {
+		payload = []byte(run.RunID)
+	}
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func bundleSource(run fleet.BundleRun) string {
