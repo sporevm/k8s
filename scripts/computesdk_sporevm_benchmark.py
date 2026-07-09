@@ -444,7 +444,7 @@ def output_dir(repo: Path, raw: str) -> Path:
 
 def default_runtime_image(repo: Path) -> str:
     chart = repo / "charts" / "sporevm-k8s" / "Chart.yaml"
-    version = "0.1.4"
+    version = "0.1.9"
     for line in chart.read_text(encoding="utf-8").splitlines():
         if line.startswith("appVersion:"):
             version = line.split(":", 1)[1].strip().strip('"')
