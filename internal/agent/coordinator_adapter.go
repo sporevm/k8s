@@ -46,6 +46,10 @@ func (e RunnerShardExecutor) RunShard(ctx context.Context, req fleet.ShardExecut
 	if e.Runner == nil {
 		return nil, ErrSporeClientNotConfigured
 	}
+	localChildrenDir := ""
+	if req.Local != nil {
+		localChildrenDir = req.Local.ChildrenDir
+	}
 	return e.Runner.RunShard(ctx, RunShardRequest{
 		Run:                     req.Run,
 		Lease:                   req.Lease,
@@ -54,5 +58,6 @@ func (e RunnerShardExecutor) RunShard(ctx context.Context, req fleet.ShardExecut
 		Region:                  e.Region,
 		AllowMetadataOnlyRootFS: e.AllowMetadataOnlyRootFS,
 		Backend:                 e.Backend,
+		LocalChildrenDir:        localChildrenDir,
 	})
 }

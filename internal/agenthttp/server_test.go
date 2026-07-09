@@ -103,6 +103,9 @@ func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	if prepared.ChildCount != 1 {
 		t.Fatalf("prepared child count = %d", prepared.ChildCount)
 	}
+	if prepared.Local == nil || prepared.Local.ChildrenDir == "" || prepared.Local.BundleDir == "" {
+		t.Fatalf("prepared local metadata = %+v", prepared.Local)
+	}
 	if _, err := source.Compile(prepared); err != nil {
 		t.Fatalf("Compile prepared bundle: %v", err)
 	}

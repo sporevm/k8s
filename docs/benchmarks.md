@@ -29,8 +29,36 @@ VM exactly once in the measured loop, and deletes the pool at the end. This is
 the warmed-pool shape: it measures request TTI for a unique already-warmed VM,
 not pool refill or parent prepare time.
 
-The shortest development loop does not need a runtime image release. Run the
-coordinator API locally and port-forward to the in-cluster agent:
+For agent or coordinator runtime changes, the shortest useful live loop does
+not need a runtime image release:
+
+```bash
+mise run dev:runtime-probe
+```
+
+This dev-only probe builds local `linux/arm64` `spore-agent` and
+`spore-coordinator` binaries, creates a temporary privileged pod from the
+currently deployed runtime image, copies the local binaries into that pod,
+starts a private agent/API pair with isolated work and result directories,
+runs the ComputeSDK-shaped benchmark, and asserts that same-agent source runs
+skip artifact pull. It discovers the current `spore-agent` pod, node, and
+runtime image from the active Kubernetes context; do not hard-code private
+cluster details in this repository.
+
+Useful overrides:
+
+```bash
+SPORE_NAMESPACE=sporevm-system \
+SPORE_DEV_ITERATIONS=3 \
+SPORE_DEV_LOCAL_PORT=18081 \
+mise run dev:runtime-probe
+```
+
+Set `SPORE_DEV_KEEP_POD=1` only while debugging; the default cleans up the
+temporary pod and port-forward.
+
+For coordinator-only changes, another short loop is to run the coordinator API
+locally and port-forward to the in-cluster agent:
 
 ```bash
 kubectl -n sporevm-system port-forward svc/spore-agent 18081:8080
@@ -105,27 +133,28 @@ runtime timing percentiles from the coordinator report.
 
 ## Current Live Baseline
 
-On 2026-07-06 UTC, a compatible Kubernetes cell with a port-forwarded agent and
-a local `spore-coordinator` API completed 10/10 isolated Node runs through
+On 2026-07-08 UTC, a compatible Kubernetes cell running public runtime
+`0.1.7` with SporeVM 0.9.1 completed an in-cluster one-child Node run through
 `POST /runs`:
 
 ```text
-transport=api median=15.80s p95=15.92s p99=15.92s success=100%
+transport=api-incluster wall=10.415s success=100%
+prepareBundle=5.200s runShard=3.710s artifactPull=3.235s resume=474ms resultCommit=0.291ms
 ```
 
 That is the cached-rootfs, per-request isolation path. It avoids Kubernetes Job
-startup, but still pays SporeVM prepare, fork, resume, guest command, and result
-reporting for every request.
+startup and the old `spore rm` cleanup floor, but still pays SporeVM prepare,
+fork, pack, bundle inspection, pull/materialization, restore, guest command,
+and result reporting for every request.
 
-The same cell's deployed runtime image still used the pre-rename hot-VM
-endpoints. As a warmed-pool diagnostic, 10 unique already-created named VMs
-executed `node -v` through the resident API with:
+A direct named-VM diagnostic on the same runtime measured:
 
 ```text
-transport=api-hot-vms-legacy median=154ms p95=160ms p99=160ms success=100%
+create=68ms exec=42ms rm=22ms
 ```
 
-Rerun `--sandbox-pool` after publishing a runtime image that contains the
-`/sandboxes` API rename. Until SporeVM can fork this disk-backed Node rootfs
-directly, the fast ComputeSDK-shaped path is a pool of unique warmed VMs with
-pool refill outside measured request TTI.
+The remaining `/runs` cost is therefore not named-VM cleanup. The next
+benchmark work is to separate `pack`, `inspect-bundle`, and `pull` into
+storage-aware buckets, then compare the current portable-bundle path against a
+same-agent fast path and the latest SporeVM chunked rootfs / writable disk
+storage model.

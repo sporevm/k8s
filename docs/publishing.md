@@ -22,13 +22,13 @@ git@github.com:sporevm/k8s.git
 Current public release:
 
 ```text
-ghcr.io/sporevm/k8s-runtime:0.1.7
+ghcr.io/sporevm/k8s-runtime:0.1.8
 ```
 
 Public runtime images should publish to GHCR:
 
 ```bash
-export SPOREVM_K8S_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:0.1.7
+export SPOREVM_K8S_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:0.1.8
 mise run runtime:image:push
 ```
 
@@ -42,13 +42,13 @@ runtime images and Helm charts on matching `v*` tags. Set
 The chart is published as an OCI artifact under GHCR:
 
 ```text
-oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.7
+oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.8
 ```
 
 ```bash
 helm registry login ghcr.io
 mise run chart:package
-helm push dist/charts/sporevm-k8s-0.1.7.tgz oci://ghcr.io/sporevm/charts
+helm push dist/charts/sporevm-k8s-0.1.8.tgz oci://ghcr.io/sporevm/charts
 ```
 
 That produces:
@@ -61,7 +61,7 @@ Install from the published chart:
 
 ```bash
 helm upgrade --install sporevm-k8s oci://ghcr.io/sporevm/charts/sporevm-k8s \
-  --version 0.1.7 \
+  --version 0.1.8 \
   --namespace sporevm-system \
   --create-namespace
 ```

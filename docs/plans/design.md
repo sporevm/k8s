@@ -272,9 +272,9 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
   Helm chart to GHCR.
-- Public release `v0.1.1` has been cut and published. Anonymous GHCR reads now
-  verify `ghcr.io/sporevm/k8s-runtime:0.1.1` and
-  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.1`.
+- Public release `v0.1.8` has been cut and published. Anonymous GHCR reads now
+  verify `ghcr.io/sporevm/k8s-runtime:0.1.8` and
+  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.8`.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
@@ -310,12 +310,12 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   archive, pushed into the cluster-local registry with `skopeo`, resolved by
   `spore-agent` through the private service DNS name, and run through the
   Kubernetes run path.
-- SporeVM now exposes single-child resume identity with
-  `spore resume --generation FILE`; the adapter writes one generation JSON per
-  child and passes that file when resuming materialized children.
+- SporeVM now exposes single-child restore identity with
+  `spore restore --generation FILE`; the adapter writes one generation JSON per
+  child and passes that file when restoring materialized children.
 - The runtime image can be pinned to a SporeVM release tarball. The latest live
-  child-command smoke used a SporeVM release with `spore resume --generation`,
-  named resume, `spore exec`, and `spore rm`.
+  child-command smoke used SporeVM 0.9.1 with `spore restore --generation`,
+  named restore, `spore exec`, and fast `spore rm`.
 - The real Rails/RSpec sharded smoke now succeeds in Kubernetes for one child
   without the unsharded fallback. The run prepared/forked/packed in 23.5s,
   completed its shard in 36.8s, and wrote a succeeded terminal result with
@@ -336,8 +336,16 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- The useful next gap is increasing honest live scale to 1,000 children without
-  overstating memory capacity.
+- The live resident API now runs in-cluster through the public chart. With
+  runtime `0.1.7` and SporeVM 0.9.1, direct named VM cleanup dropped from about
+  5s to 22ms, and a one-child Node `POST /runs` completed in about 10.4s.
+  The remaining measured cost is prepare/pack plus local bundle pull, not
+  restore cleanup.
+- SporeVM's landed storage model changes the next optimization target:
+  image-created spores can carry chunked rootfs storage and sealed writable disk
+  indexes. The Kubernetes adapter should stop treating pack/pull as an opaque
+  exact-rootfs byte copy and measure whether bundle work is index installation,
+  chunk transfer, or local materialization.
 
 ## Delivery Strategy
 
@@ -452,25 +460,36 @@ Done when:
   separately from prepare, fork, pull, resume, and result-reporting costs.
 
 Current live finding: the resident API removes Kubernetes Job startup from the
-hot path, but one isolated Node child is still dominated by SporeVM
-prepare/fork/resume work. A reusable named VM shows the API plus exec floor can
-be sub-second, but it is not per-request isolation. The next isolated TTI step
-is either disk-backed named live fork support in SporeVM or an explicit child
-pool that preserves the public contract.
+hot path, and SporeVM 0.9.1 removed the hidden `spore rm` cleanup floor. A
+direct named-VM probe measured create at 68ms, exec at 42ms, and cleanup at
+22ms. The same runtime completed a one-child Node `POST /runs` in about 10.4s:
+prepare-bundle was about 5.2s, shard execution was about 3.7s, artifact pull
+was about 3.2s, and the restore/exec/cleanup bucket was about 474ms.
 
-Follow-up live finding: SporeVM 0.5.2 still rejects `spore fork --vm` for this
-disk-backed Node rootfs, so the Kubernetes-side proof path is a warmed pool of
-unique named VMs. Each request can consume one already-warmed VM and return
-after `spore exec`; pool refill remains outside the measured request path until
-SporeVM can fork the disk-backed parent directly.
+The next isolated TTI work is now storage-aware pack/pull optimization, not
+restore cleanup. SporeVM's new block-storage contract records image-created
+rootfs state as chunked rootfs storage and writable rootfs state as sealed disk
+indexes. That should make portable bundles less about copying exact ext4 rootfs
+bytes, but the current `POST /runs` adapter still performs a conservative
+`prepare -> fork -> pack -> inspect-bundle -> pull -> restore` round trip even
+when the same agent prepares and executes the child.
 
-Latest live baseline: with a port-forwarded agent and local resident
-coordinator API, 10/10 isolated Node runs through `POST /runs` completed with
-15.80s median TTI and 15.92s p95. A warmed-pool diagnostic against the deployed
-pre-rename hot-VM API completed 10/10 unique already-created VMs with 154ms
-median and 160ms p95. The next proof step is publishing a runtime image with
-the `/sandboxes` API rename and rerunning the same warmed-pool diagnostic
-through the public API names.
+The optimization order is:
+
+- publish and benchmark a runtime that includes the latest landed SporeVM
+  storage model before hard-coding assumptions from the 0.9.1 exact timings;
+- split agent timings for `runSave`, `fork`, `pack`, `inspectBundle`,
+  `pullVerify`, `pullInstallIndexes`, `pullInstallChunks`, and child manifest
+  writes so pack/pull stops being one opaque bucket;
+- add a same-agent fast path for explicitly local or single-agent runs that
+  executes the forked child directory directly and skips `pack`,
+  `inspect-bundle`, and `pull`;
+- for real multi-agent fan-out, keep the portable bundle contract but push
+  SporeVM toward index-aware or lazy `pull` so a selected child can restore
+  from verified indexes and node-local chunks without full eager
+  materialization;
+- teach placement and preheat decisions to prefer agents that already have the
+  needed rootfs/disk indexes and chunks on node-local cache.
 
 ### Slice 7: Optional Kubernetes UX
 
