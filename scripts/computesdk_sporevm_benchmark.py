@@ -2,10 +2,10 @@
 """Run a ComputeSDK-shaped SporeVM Kubernetes TTI benchmark.
 
 This is a thin live harness around the resident coordinator API. It measures
-the public ComputeSDK sandbox TTI shape: submit one fresh one-child run, execute
-`node -v` in the child, and record wall-clock time until the coordinator report
-is available. Without --api-url it falls back to `sporectl submit` for smoke
-testing, which includes Kubernetes Job startup.
+the public ComputeSDK sandbox TTI shape: execute `node -v` in one fresh
+ephemeral child and record wall-clock time through its terminal event. Without
+--api-url it falls back to `sporectl submit` for batch smoke testing, which
+includes Kubernetes Job startup.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def main() -> int:
             tmpdir = Path(tmp)
             for index in range(args.iterations):
                 run_id = f"{args.run_prefix}-{run_stamp}-{index + 1:04d}"
-                run_doc = build_run(args, run_id)
+                run_doc = build_api_run(args, run_id) if args.api_url else build_submit_run(args, run_id)
                 run_path = tmpdir / f"{run_id}.json"
                 run_path.write_text(
                     json.dumps(run_doc, indent=2) + "\n",
@@ -82,13 +82,21 @@ def main() -> int:
                         print(f"  failed in {tti_ms / 1000:.2f}s", file=sys.stderr)
                         continue
                     raw_reports.append(report)
-                    state = report.get("summary", {}).get("state")
-                    if state != "succeeded":
-                        iterations.append({"ttiMs": 0, "error": f"runtime report state={state!r}"})
-                        print(f"  state={state!r} in {tti_ms / 1000:.2f}s", file=sys.stderr)
+                    terminal_error = run_response_error(report)
+                    if terminal_error:
+                        iterations.append({"ttiMs": 0, "error": terminal_error})
+                        print(f"  failed in {tti_ms / 1000:.2f}s", file=sys.stderr)
                         continue
-                    iterations.append({"ttiMs": round_ms(tti_ms)})
-                    print(f"  tti={tti_ms / 1000:.2f}s", file=sys.stderr)
+                    cache_hit = report.get("template", {}).get("cacheHit") is True
+                    iterations.append({
+                        "ttiMs": round_ms(tti_ms),
+                        "template": "hit" if cache_hit else "cold-parent",
+                        "nodeTimingsMs": report.get("timingsMs", {}),
+                    })
+                    print(
+                        f"  tti={tti_ms / 1000:.2f}s template={'hit' if cache_hit else 'cold-parent'}",
+                        file=sys.stderr,
+                    )
                     continue
 
                 completed = run_sporectl(repo, args, run_path)
@@ -121,11 +129,18 @@ def main() -> int:
                 print(f"warning: delete sandbox {name}: {error}", file=sys.stderr)
 
     successful = [item["ttiMs"] for item in iterations if "error" not in item]
+    summary = {"ttiMs": compute_stats(successful)}
+    cold_parent = [item["ttiMs"] for item in iterations if item.get("template") == "cold-parent"]
+    template_hits = [item["ttiMs"] for item in iterations if item.get("template") == "hit"]
+    if cold_parent:
+        summary["coldParentTtiMs"] = compute_stats(cold_parent)
+    if template_hits:
+        summary["templateHitTtiMs"] = compute_stats(template_hits)
     result = {
         "provider": PROVIDER,
         "mode": MODE,
         "iterations": iterations,
-        "summary": {"ttiMs": compute_stats(successful)},
+        "summary": summary,
         "successRate": round(len(successful) / len(iterations), 4) if iterations else 0,
     }
     config = {
@@ -162,8 +177,9 @@ def main() -> int:
         raw_dir = output_dir(repo, args.raw_report_dir)
         raw_dir.mkdir(parents=True, exist_ok=True)
         for report in raw_reports:
-            run_id = report.get("summary", {}).get("runID", "unknown-run")
-            (raw_dir / f"{run_id}.runtime-report.json").write_text(
+            run_id = report.get("runID") or report.get("summary", {}).get("runID", "unknown-run")
+            suffix = "run-response" if "events" in report else "runtime-report"
+            (raw_dir / f"{run_id}.{suffix}.json").write_text(
                 json.dumps(report, indent=2) + "\n",
                 encoding="utf-8",
             )
@@ -186,7 +202,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", default="30m")
     parser.add_argument("--result-store-prefix", default="s3://example-sporevm-results/computesdk/")
     parser.add_argument("--result-store-root", default="/var/lib/sporevm/coordinator-results")
-    parser.add_argument("--workload-image", default="docker.io/library/node:22-bookworm-slim")
+    parser.add_argument(
+        "--workload-image",
+        default="docker.io/library/node@sha256:6db9be2ebb4bafb687a078ef5ba1b1dd256e8004d246a31fd210b6b848ab6be2",
+    )
     parser.add_argument("--memory", default="1024mb")
     parser.add_argument("--prepare-sleep-seconds", type=int, default=300)
     parser.add_argument("--run-prefix", default="computesdk-node-seq")
@@ -204,7 +223,7 @@ def parse_args() -> argparse.Namespace:
         parser.error("--sandbox and --sandbox-pool require --api-url")
     if not args.result_store_prefix.endswith("/"):
         args.result_store_prefix += "/"
-    if not args.coordinator_image:
+    if not args.coordinator_image and not args.api_url:
         args.coordinator_image = default_runtime_image(Path(__file__).resolve().parents[1])
     return args
 
@@ -227,7 +246,16 @@ def transport_label(args: argparse.Namespace) -> str:
     return "sporectl"
 
 
-def build_run(args: argparse.Namespace, run_id: str) -> dict[str, Any]:
+def build_api_run(args: argparse.Namespace, run_id: str) -> dict[str, Any]:
+    return {
+        "runID": run_id,
+        "image": args.workload_image,
+        "memory": args.memory,
+        "command": ["/bin/sh", "-lc", "node -v"],
+    }
+
+
+def build_submit_run(args: argparse.Namespace, run_id: str) -> dict[str, Any]:
     ready_marker = "SPOREVM_NODE_READY"
     return {
         "runID": run_id,
@@ -297,12 +325,12 @@ def run_sporectl(repo: Path, args: argparse.Namespace, run_path: Path) -> subpro
 
 
 def run_api(args: argparse.Namespace, run_doc: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    report, error = api_json(args, "POST", "/runs", run_doc)
+    response, error = api_json(args, "POST", "/runs", run_doc)
     if error:
         return {}, error
-    if not isinstance(report, dict) or "plan" not in report or "summary" not in report:
-        return {}, "API response did not contain a RuntimeReport"
-    return report, ""
+    if not isinstance(response, dict) or not isinstance(response.get("events"), list):
+        return {}, "API response did not contain run events"
+    return response, ""
 
 
 def create_sandbox(args: argparse.Namespace, name: str) -> None:
@@ -314,7 +342,6 @@ def create_sandbox(args: argparse.Namespace, name: str) -> None:
             "name": name,
             "image": args.workload_image,
             "memory": args.memory,
-            "command": ["/bin/sh", "-lc", "node -v >/dev/null"],
         },
     )
     if error:
@@ -337,6 +364,21 @@ def run_sandbox_exec(args: argparse.Namespace, name: str) -> str:
         return "sandbox exec response had no terminal event"
     if terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
         return f"sandbox exec terminal={terminal!r}"
+    return ""
+
+
+def run_response_error(response: dict[str, Any]) -> str:
+    events = response.get("events")
+    if not isinstance(events, list):
+        return "run response had no event list"
+    terminal = next(
+        (event for event in reversed(events) if isinstance(event, dict) and event.get("event") in {"exit", "failure"}),
+        None,
+    )
+    if terminal is None:
+        return "run response had no terminal event"
+    if terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+        return f"run terminal={terminal!r}"
     return ""
 
 

@@ -1025,10 +1025,10 @@ func TestLocalResultStoreRejectsUnsafeBucketSegment(t *testing.T) {
 
 type fakeSporeClient struct {
 	mu          sync.Mutex
+	version     string
 	hostInfo    HostInfo
 	inspectFunc func(context.Context, InspectBundleRequest) (InspectBundleResult, error)
 	runFunc     func(context.Context, RunCaptureRequest) ([]RunEvent, error)
-	createFunc  func(context.Context, CreateVMRequest) error
 	forkFunc    func(context.Context, ForkRequest) error
 	packFunc    func(context.Context, PackRequest) error
 	pullFunc    func(context.Context, PullRequest) (PullResult, error)
@@ -1037,7 +1037,6 @@ type fakeSporeClient struct {
 	execFunc    func(context.Context, ExecRequest) ([]RunEvent, error)
 	removeFunc  func(context.Context, RemoveVMRequest) error
 	runCaptures []RunCaptureRequest
-	creates     []CreateVMRequest
 	forks       []ForkRequest
 	packs       []PackRequest
 	pulls       []PullRequest
@@ -1046,6 +1045,13 @@ type fakeSporeClient struct {
 	execs       []ExecRequest
 	removes     []RemoveVMRequest
 	outDir      string
+}
+
+func (c *fakeSporeClient) Version(context.Context) (string, error) {
+	if c.version != "" {
+		return c.version, nil
+	}
+	return "spore 0.11.1 (ReleaseSafe)", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {
@@ -1064,19 +1070,15 @@ func (c *fakeSporeClient) RunCapture(ctx context.Context, req RunCaptureRequest)
 	c.runCaptures = append(c.runCaptures, req)
 	c.mu.Unlock()
 	if c.runFunc == nil {
+		if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(req.CaptureDir, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+			return nil, err
+		}
 		return []RunEvent{captureExitEvent(req.CaptureDir)}, nil
 	}
 	return c.runFunc(ctx, req)
-}
-
-func (c *fakeSporeClient) CreateVM(ctx context.Context, req CreateVMRequest) error {
-	c.mu.Lock()
-	c.creates = append(c.creates, req)
-	c.mu.Unlock()
-	if c.createFunc == nil {
-		return nil
-	}
-	return c.createFunc(ctx, req)
 }
 
 func (c *fakeSporeClient) Fork(ctx context.Context, req ForkRequest) error {

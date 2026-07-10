@@ -44,10 +44,24 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /prepare-bundle", s.handlePrepareBundle)
 	mux.HandleFunc("POST /prepare-local", s.handlePrepareLocal)
 	mux.HandleFunc("POST /run-shard", s.handleRunShard)
+	mux.HandleFunc("POST /runs", s.handleRun)
 	mux.HandleFunc("POST /sandboxes", s.handleCreateSandbox)
 	mux.HandleFunc("POST /sandboxes/{name}/exec", s.handleExecSandbox)
 	mux.HandleFunc("DELETE /sandboxes/{name}", s.handleDeleteSandbox)
 	return mux, nil
+}
+
+func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	var req agent.RunRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	response, err := s.Runner.Run(r.Context(), req, s.pressure())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -176,18 +190,16 @@ func (s *Server) handleRunShard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
-	var req agent.CreateVMRequest
+	var req agent.SandboxCreateRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Backend == "" {
-		req.Backend = s.backend()
-	}
-	if err := s.Client.CreateVM(r.Context(), req); err != nil {
+	response, err := s.Runner.CreateSandbox(r.Context(), req, s.pressure())
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name})
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleExecSandbox(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +208,7 @@ func (s *Server) handleExecSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = r.PathValue("name")
-	events, err := s.Client.Exec(r.Context(), req)
+	events, err := s.Runner.ExecSandbox(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -205,7 +217,7 @@ func (s *Server) handleExecSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
-	if err := s.Client.RemoveVM(r.Context(), agent.RemoveVMRequest{Name: r.PathValue("name")}); err != nil {
+	if err := s.Runner.RemoveSandbox(r.Context(), agent.RemoveVMRequest{Name: r.PathValue("name")}); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

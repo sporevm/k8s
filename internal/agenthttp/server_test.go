@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/sporevm/k8s/internal/agent"
 	"github.com/sporevm/k8s/internal/fleet"
 )
+
+const testPinnedImage = "docker.io/library/node@sha256:6db9be2ebb4bafb687a078ef5ba1b1dd256e8004d246a31fd210b6b848ab6be2"
 
 func TestClientServerRoundTripRunsShard(t *testing.T) {
 	run := testBundleRun()
@@ -114,12 +118,15 @@ func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 func TestClientServerRoundTripSandbox(t *testing.T) {
 	client := newTestHTTPClient(t, testBundleRun())
 	ctx := context.Background()
-	if err := client.CreateSandbox(ctx, agent.CreateVMRequest{
-		Name:    "sporevm-sandbox-node",
-		Image:   "docker.io/library/node:22-bookworm-slim",
-		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
-	}); err != nil {
+	response, err := client.CreateSandbox(ctx, agent.SandboxCreateRequest{
+		Name:  "sporevm-sandbox-node",
+		Image: testPinnedImage,
+	})
+	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if response.Name != "sporevm-sandbox-node" || response.Template.ID == "" {
+		t.Fatalf("CreateSandbox response = %+v", response)
 	}
 	events, err := client.ExecSandbox(ctx, "sporevm-sandbox-node", []string{"/bin/sh", "-lc", "node -v"})
 	if err != nil {
@@ -267,6 +274,10 @@ type fakeSporeClient struct {
 	resumeErr  error
 }
 
+func (c fakeSporeClient) Version(context.Context) (string, error) {
+	return "spore 0.11.1 (ReleaseSafe)", nil
+}
+
 func (c fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	return agent.HostInfo{
 		Schema:        "spore.host-info.v1",
@@ -298,9 +309,15 @@ func (c fakeSporeClient) InspectBundle(context.Context, agent.InspectBundleReque
 	}, nil
 }
 
-func (c fakeSporeClient) RunCapture(context.Context, agent.RunCaptureRequest) ([]agent.RunEvent, error) {
+func (c fakeSporeClient) RunCapture(_ context.Context, req agent.RunCaptureRequest) ([]agent.RunEvent, error) {
+	if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(req.CaptureDir, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+		return nil, err
+	}
 	exitCode := 0
-	path := "/work/parent.spore"
+	path := req.CaptureDir
 	return []agent.RunEvent{{
 		Schema:        "spore.run-events.v1",
 		SchemaVersion: 1,
@@ -310,10 +327,6 @@ func (c fakeSporeClient) RunCapture(context.Context, agent.RunCaptureRequest) ([
 		Captured:      true,
 		CapturePath:   &path,
 	}}, nil
-}
-
-func (c fakeSporeClient) CreateVM(context.Context, agent.CreateVMRequest) error {
-	return nil
 }
 
 func (c fakeSporeClient) Fork(context.Context, agent.ForkRequest) error {

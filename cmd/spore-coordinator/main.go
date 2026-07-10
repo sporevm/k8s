@@ -148,37 +148,33 @@ func (a coordinatorAPI) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a coordinatorAPI) handleRun(w http.ResponseWriter, r *http.Request) {
-	var source fleet.Run
-	if !decodeRequestJSON(w, r, &source) {
+	var req agent.RunRequest
+	if !decodeRequestJSON(w, r, &req) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), a.cfg.Timeout)
 	defer cancel()
 
-	store, err := agent.NewLocalResultStore(a.cfg.ResultStoreRoot)
-	if err != nil {
-		writeHTTPError(w, http.StatusInternalServerError, fmt.Errorf("create coordinator result store: %w", err))
-		return
-	}
 	endpoints, err := discoverAgentEndpoints(ctx, a.cfg.AgentURLs, a.cfg.HTTPClient)
 	if err != nil {
 		writeHTTPError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	report, runErr := runSource(ctx, source, store, endpoints)
-	if !hasRuntimeReport(report) {
-		if runErr != nil {
-			writeHTTPError(w, http.StatusBadRequest, runErr)
-			return
-		}
-		writeHTTPError(w, http.StatusInternalServerError, errors.New("coordinator produced no runtime report"))
+	endpoint, err := selectRunEndpoint(endpoints)
+	if err != nil {
+		writeHTTPError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	writeResponseJSON(w, http.StatusOK, report)
+	response, err := endpoint.Client.Run(ctx, req)
+	if err != nil {
+		writeHTTPError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeResponseJSON(w, http.StatusOK, response)
 }
 
 func (a coordinatorAPI) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
-	var create agent.CreateVMRequest
+	var create agent.SandboxCreateRequest
 	if !decodeRequestJSON(w, r, &create) {
 		return
 	}
@@ -186,11 +182,12 @@ func (a coordinatorAPI) handleCreateSandbox(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	if err := endpoint.Client.CreateSandbox(r.Context(), create); err != nil {
+	response, err := endpoint.Client.CreateSandbox(r.Context(), create)
+	if err != nil {
 		writeHTTPError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeResponseJSON(w, http.StatusOK, map[string]string{"name": create.Name})
+	writeResponseJSON(w, http.StatusOK, response)
 }
 
 func (a coordinatorAPI) handleExecSandbox(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +251,25 @@ func selectSandboxEndpoint(endpoints []agentEndpoint) (agentEndpoint, error) {
 	}
 	if compatible > 1 {
 		return agentEndpoint{}, errors.New("sandbox API requires exactly one compatible agent")
+	}
+	return selected, nil
+}
+
+func selectRunEndpoint(endpoints []agentEndpoint) (agentEndpoint, error) {
+	var selected agentEndpoint
+	bestAvailable := 0
+	for _, endpoint := range endpoints {
+		status := endpoint.Status
+		if !status.Healthy || status.Pressure.Critical() || status.ExecutionSlots.Available < 1 {
+			continue
+		}
+		if status.ExecutionSlots.Available > bestAvailable {
+			selected = endpoint
+			bestAvailable = status.ExecutionSlots.Available
+		}
+	}
+	if bestAvailable == 0 {
+		return agentEndpoint{}, fleet.ErrNoCompatibleAgents
 	}
 	return selected, nil
 }

@@ -16,10 +16,12 @@ SporeVM is a general VMM built around fast capture, fork, materialize, and
 resume. The fleet layer should mirror those primitives directly instead of
 turning every child VM into a Kubernetes object or a CI parallel job.
 
-The product shape is a SporeVM run:
+The product has two execution shapes built on the same node-local SporeVM
+primitives:
 
 ```text
-source -> prepare parent -> fork children -> execute child ranges -> publish results
+interactive: immutable image -> cached boot template -> fresh child -> command -> discard
+batch:       source -> prepare parent -> fork children -> execute child ranges -> publish results
 ```
 
 Kubernetes is an adapter cell for deployment, host placement, access control,
@@ -48,8 +50,9 @@ The fleet has to avoid these failure modes:
 
 - Preserve SporeVM's core contract: verify bytes, materialize a selected child,
   and let SporeVM remain the final restore gate.
-- Model the fleet around SporeVM primitives: source, prepare, parent, fork,
-  child, shard, agent, and result.
+- Model interactive runs and persistent sandboxes around one immutable template
+  and child-execution engine.
+- Keep source, prepare, fork, shard, and result primitives for batch fan-out.
 - Run CI test fan-out for CI as the first concrete workload.
 - Keep Kubernetes useful as an adapter for compatible hosts, DaemonSets,
   one-shot coordinator Jobs for batch submissions, resident fast APIs, private
@@ -69,15 +72,55 @@ The fleet has to avoid these failure modes:
 - No CRD/operator requirement for the first useful CI path.
 - No public multi-tenant security claim.
 - No exactly-once execution claim for arbitrary non-idempotent workloads.
-- No general workflow engine. The first API should describe one warm parent and
-  many child executions.
+- No general workflow engine.
+- No caller-defined prepare command in the ordinary interactive API. Advanced
+  application templates can be added only after they have a clean lifecycle
+  contract.
 
 ## Target Model
 
-### Run Contract
+### Interactive Run And Sandbox APIs
 
-The public contract should be general enough for CI, simulations, fuzzing,
-browser swarms, and agent workloads:
+The latency-sensitive API is intentionally smaller than the batch contract.
+Callers select immutable image content and a command; the agent owns template
+creation and child lifecycle:
+
+```yaml
+runID: node-version-0001
+image: docker.io/library/node@sha256:...
+memory: 1gb
+command:
+  - /bin/sh
+  - -lc
+  - node -v
+```
+
+`POST /runs` ensures a boot template for the digest-pinned image, restores a
+fresh ephemeral child with `spore run --from`, executes the command, and
+discards the child. The response includes SporeVM events, node-local timings,
+and whether template creation was a cache hit.
+
+`POST /sandboxes` accepts `name`, `image`, and optional `memory`. It ensures the
+same boot template, restores a named child, waits for a no-op exec to prove the
+child is ready, and keeps that child alive for
+`POST /sandboxes/{name}/exec` until `DELETE /sandboxes/{name}`. A sandbox owns
+one execution slot for its lifetime; its filesystem state survives multiple
+exec calls.
+
+Boot templates are automatic, immutable cache entries. Their identity includes
+the image digest, memory, backend, SporeVM version, host class, and template
+schema version. Mutable image tags are rejected so a cache hit cannot silently
+select different bytes. The first request may pay image/rootfs resolution,
+boot, and capture. Later requests use the published template without forking,
+packing, pulling, or writing generation metadata.
+The current SporeVM capture and readiness probes require `/bin/true` in the
+selected image; a commandless capture primitive is deferred.
+
+### Batch Fan-Out Contract
+
+The submitted batch contract remains general enough for CI, simulations,
+fuzzing, browser swarms, and agent workloads that need an application-specific
+capture point and many child identities:
 
 ```yaml
 runID: rails-rspec-20260624
@@ -125,8 +168,8 @@ childCommand:
   - /usr/local/bin/sporevm-rspec-shard
 ```
 
-The lower-level bundle run remains useful for prebuilt bundles and benchmark
-work. The higher-level run is the normal user and CI entrypoint; its
+The lower-level bundle run remains useful for prebuilt bundles and portable
+multi-agent work. The higher-level batch run is the normal CI entrypoint; its
 `children.command` compiles to the lower-level `childCommand`.
 
 When the prepared bundle is still a local `file://` bundle, the preparing agent
@@ -149,12 +192,10 @@ the run, chooses compatible agents, prepares or references the bundle, leases
 child ranges, tracks compact aggregate state, and exits with a clear run
 result.
 
-For latency-sensitive callers, the same coordinator binary can run as a
-resident API. The first useful API is deliberately small: `POST /runs`
-accepts the same run document as `sporectl submit`, talks directly to
-the agent service, and returns the same aggregate runtime report. It removes
-Kubernetes Job startup from benchmark and sandbox request paths without adding
-CRDs, an operator, or per-child Kubernetes objects.
+For latency-sensitive callers, the same coordinator binary runs as a resident
+API. `POST /runs` accepts the compact ephemeral run request and proxies it to an
+available agent. `/sandboxes` exposes the persistent named-child lifecycle.
+Neither path creates a Kubernetes Job or enters the batch prepare/fork planner.
 
 `spore-agent` runs on compatible hosts. It owns `/dev/kvm`, SporeVM caches,
 object-store credentials, local work directories, slot admission, cache GC, and
@@ -174,7 +215,19 @@ Kubernetes owns deployment and coarse lifecycle for a cell:
 | detailed result | object-store key |
 | aggregate status | Job output today, optional CRD status later |
 
-### Run Lifecycle
+### Interactive Lifecycle
+
+1. Require a digest-pinned OCI image and validate slot and pressure admission.
+2. Derive the boot-template identity from image, memory, backend, SporeVM
+   version, template schema, and exact host class.
+3. On a cache miss, run `/bin/true` with `spore run --save` and atomically
+   publish the captured template. On a hit, reuse the immutable template.
+4. For `/runs`, execute the command with `spore run --from` and discard the
+   fresh child.
+5. For `/sandboxes`, restore a named child, preserve it across exec calls, and
+   release its slot only when deleted.
+
+### Batch Lifecycle
 
 1. Resolve the source image, rootfs, existing spore, or prebuilt bundle.
 2. Prepare a parent VM by running the warm command until the capture point.
@@ -253,6 +306,8 @@ Cold source and bundle pulls are scheduling resources. The coordinator should
 surface:
 
 - source/rootfs bytes fetched;
+- boot-template cache identity and hit or miss;
+- boot-template capture duration;
 - bundle bytes fetched;
 - cache hits and misses;
 - prepare duration;
@@ -272,10 +327,7 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
   Helm chart to GHCR.
-- Public release `v0.1.11` has been cut and published. Anonymous GHCR reads
-  verify `ghcr.io/sporevm/k8s-runtime:0.1.11` and
-  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.11`. The next release
-  source is pinned to SporeVM 0.11.1 as Kubernetes runtime `0.1.12`.
+- Public release `v0.1.12` is published and pins SporeVM 0.11.1.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
@@ -372,6 +424,16 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   measured one-child Node `POST /runs` at 319.61ms median and 348.80ms p95 from
   an in-cluster benchmark client. Parent capture was about 248.6ms, fork about
   1.5ms, and child resume about 35.1ms, with 100% success across ten requests.
+- The resident API implementation now separates interactive execution from the
+  batch fan-out contract. `/runs` accepts only `runID`, a digest-pinned image,
+  optional memory, and a command. `/sandboxes` uses the same automatic boot
+  template but restores a persistent named child. The first request captures
+  and atomically publishes a versioned host-compatible template; subsequent
+  requests execute directly from it. An unreleased in-cluster probe measured a
+  cold-parent Node run at 388.41ms wall and five template hits at 149.34ms
+  median, with about 119ms inside `spore run --from`. A template-hit sandbox
+  create took 793.69ms wall because named restore readiness took 748.60ms; its
+  first `node -v` exec took 120.70ms and the next nine had a 33.59ms median.
 
 ## Delivery Strategy
 
@@ -431,10 +493,9 @@ Done when:
 ### Slice 4: Kubernetes Adapter Cell
 
 Status: implemented for one-child public busybox and Rails/RSpec sharded run
-smokes in a compatible Kubernetes cell. Resident fast API wiring is implemented
-in code and live-smoked through a port-forwarded agent; in-cluster deployment
-requires publishing a runtime image containing the API mode. Multi-agent bundle
-handoff remains pending.
+smokes in a compatible Kubernetes cell. The resident API is deployed and has
+been measured from an in-cluster client. Multi-agent bundle handoff remains
+pending.
 
 Keep the existing adapter shape: DaemonSet agents, one coordinator Job per
 batch run, and an optional resident API for low-latency submit paths.
@@ -492,8 +553,8 @@ direct named-VM probe measured create at 68ms, exec at 42ms, and cleanup at
 prepare-bundle was about 5.2s, shard execution was about 3.7s, artifact pull
 was about 3.2s, and the restore/exec/cleanup bucket was about 474ms.
 
-The next isolated TTI work is now resume/command overhead, not restore cleanup
-or local bundle pull. SporeVM's new block-storage contract records
+The direct same-agent path isolated resume/command overhead from restore cleanup
+and local bundle pull. SporeVM's new block-storage contract records
 image-created rootfs state as chunked rootfs storage and writable rootfs state
 as sealed disk indexes. That should still improve portable multi-agent bundles,
 but the single-agent `POST /runs` adapter now has a local prepare path that
@@ -504,9 +565,8 @@ child.
 
 The remaining optimization order is:
 
-- separate a genuinely cold parent capture from a cached immutable parent
-  template before moving capture outside request TTI; both are useful product
-  modes, but their benchmark labels must not blur the distinction;
+- split the remaining template-hit `spore run --from` floor into VM resume and
+  application-cold command work without adding caller-defined prepare steps;
 - split portable bundle timings for `pack`, `inspectBundle`, `pullVerify`,
   `pullInstallIndexes`, `pullInstallChunks`, and child manifest writes so
   multi-agent pack/pull stops being one opaque bucket;
@@ -517,7 +577,27 @@ The remaining optimization order is:
 - teach placement and preheat decisions to prefer agents that already have the
   needed rootfs/disk indexes and chunks on node-local cache.
 
-### Slice 7: Optional Kubernetes UX
+### Slice 7: Shared Interactive Execution Engine
+
+Status: implemented locally and live-proved through the no-release in-cluster
+dev probe. Release and durable deployment remain pending.
+
+Use one automatic immutable boot-template cache for ephemeral `/runs` and
+persistent `/sandboxes`. Keep the batch source/prepare/fork planner behind
+`sporectl submit` rather than exposing it as the ordinary sandbox API.
+
+Done when:
+
+- `/runs` executes one command in a fresh child without pack, pull, fork, or a
+  Kubernetes Job;
+- `/sandboxes` restores from the same template and preserves state across execs;
+- mutable image tags are rejected and template identity includes runtime and
+  host compatibility inputs;
+- sandbox lifetime reserves an honest agent slot;
+- the dev probe measures from inside the cluster and labels cold-parent and
+  template-hit samples separately.
+
+### Slice 8: Optional Kubernetes UX
 
 Add CRDs, Kueue, or an operator only after the run and CI paths work.
 
@@ -533,8 +613,8 @@ Done when:
 - Schema tests for run and compiled bundle run examples.
 - Unit tests for child id derivation, shard overlap rejection, attempt keys, and
   terminal-result short-circuiting.
-- Agent tests for prepare, fork, pack, cache locking, slot admission,
-  cancellation, cleanup, and platform mismatch.
+- Agent tests for prepare, fork, pack, automatic boot-template reuse, sandbox
+  slot ownership, slot admission, cancellation, cleanup, and platform mismatch.
 - Coordinator tests for admission, lease assignment, retry behavior, aggregate
   status, and failed-child reporting.
 - A real Rails/RSpec fan-out smoke using `sporevm-examples`.
@@ -562,6 +642,11 @@ Done when:
 - Do not create one Kubernetes object per child.
 - Keep per-child results outside Kubernetes.
 - Keep KVM, credentials, caches, and SporeVM execution inside agents.
+- `/runs` means one fresh ephemeral child and one command. `/sandboxes` means a
+  caller-owned persistent named child with repeated execs.
+- Interactive runs and sandboxes share automatic immutable boot templates.
+  Caller-defined prepare commands remain a batch fan-out concern.
+- Require digest-pinned images for interactive template reuse.
 - In the first coordinator path, the agent that prepares a local
   `file://` bundle also executes a single sequential lease bounded by in-flight
   slots. Multi-agent runs require publishing the prepared bundle first.
@@ -588,6 +673,13 @@ Done when:
 - Public multi-tenant hardening.
 - Non-idempotent side-effect protocols beyond terminal result commits.
 - Richer cache peer selection and preheat scheduling.
+- Template cache garbage collection and size limits.
+- Durable sandbox ownership routing and restart reconciliation across multiple
+  agents.
+- Explicit application-template creation and versioning, if automatic boot
+  templates prove insufficient.
+- A commandless SporeVM boot-capture primitive so automatic templates do not
+  depend on `/bin/true` existing in the selected image.
 
 ## Open Questions
 
@@ -607,13 +699,13 @@ Done when:
 - Guest memory is part of the fleet contract in practice: 10 children inherited
   the default guest memory and OOM-killed the agent until the prepared parent
   used an explicit smaller memory budget.
-- Signal-based parent capture is part of the run contract for
-  long-lived warm commands. The agent owns that host-side trigger; Kubernetes
-  should only see the resulting run and aggregate status.
+- Signal-based parent capture is an advanced batch fan-out mechanism for
+  long-lived application preparation. It is not part of ordinary `/runs` or
+  sandbox creation.
 - Rails/RSpec proves that plain child `spore resume` is not equivalent to
   `spore fanout`: sharded workloads need stable `/run/sporevm/env` or
   `/run/sporevm/generation.json` identity on every resumed child.
 - The 100-child run held on one compatible KVM node with explicit 512 MB guest
   memory, which moves the next pressure point to honest 1,000-child capacity.
-- The next useful implementation work is scaling honest live capacity beyond
-  the current single-agent proof. CRDs and Kueue can wait.
+- The interactive floor must distinguish cold template creation, immutable
+  template hits, and already-running sandbox pools. CRDs and Kueue can wait.

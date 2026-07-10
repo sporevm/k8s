@@ -64,12 +64,22 @@ func (c Client) PrepareLocal(ctx context.Context, run fleet.Run) (fleet.Prepared
 	return prepared, nil
 }
 
-// CreateSandbox starts one named sandbox on the agent.
-func (c Client) CreateSandbox(ctx context.Context, req agent.CreateVMRequest) error {
-	var response struct {
-		Name string `json:"name"`
+// Run executes one command in a fresh ephemeral child on the agent.
+func (c Client) Run(ctx context.Context, req agent.RunRequest) (agent.RunResponse, error) {
+	var response agent.RunResponse
+	if err := c.postJSON(ctx, "/runs", req, &response); err != nil {
+		return agent.RunResponse{}, err
 	}
-	return c.postJSON(ctx, "/sandboxes", req, &response)
+	return response, nil
+}
+
+// CreateSandbox starts one named sandbox on the agent.
+func (c Client) CreateSandbox(ctx context.Context, req agent.SandboxCreateRequest) (agent.SandboxCreateResponse, error) {
+	var response agent.SandboxCreateResponse
+	if err := c.postJSON(ctx, "/sandboxes", req, &response); err != nil {
+		return agent.SandboxCreateResponse{}, err
+	}
+	return response, nil
 }
 
 // ExecSandbox runs one command inside a named sandbox.

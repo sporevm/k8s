@@ -24,6 +24,19 @@ type CommandClient struct {
 	Env  []string
 }
 
+// Version runs `spore version`.
+func (c CommandClient) Version(ctx context.Context) (string, error) {
+	stdout, stderr, err := c.run(ctx, "version")
+	if err != nil {
+		return "", commandError(err, stderr)
+	}
+	version := strings.TrimSpace(string(stdout))
+	if version == "" {
+		return "", invalidMachineOutput("spore version output is empty")
+	}
+	return version, nil
+}
+
 // HostInfo runs `spore --json host-info`.
 func (c CommandClient) HostInfo(ctx context.Context) (HostInfo, error) {
 	var result HostInfo
@@ -114,27 +127,6 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	return events, nil
 }
 
-// CreateVM runs `spore create` for a named VM.
-func (c CommandClient) CreateVM(ctx context.Context, req CreateVMRequest) error {
-	if err := req.validate(); err != nil {
-		return err
-	}
-	args := []string{"create", req.Name}
-	if req.Backend != "" {
-		args = append(args, "--backend", req.Backend)
-	}
-	if req.Memory != "" {
-		args = append(args, "--memory", req.Memory)
-	}
-	args = append(args, "--image", req.Image, "--")
-	args = append(args, req.Command...)
-	_, stderr, err := c.run(ctx, args...)
-	if err != nil {
-		return commandError(err, stderr)
-	}
-	return nil
-}
-
 // Fork runs `spore fork`.
 func (c CommandClient) Fork(ctx context.Context, req ForkRequest) error {
 	if err := req.validate(); err != nil {
@@ -197,7 +189,11 @@ func (c CommandClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEv
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
-	args = append(args, "--from", req.SporeDir, "--generation", req.GenerationPath, "--")
+	args = append(args, "--from", req.SporeDir)
+	if req.GenerationPath != "" {
+		args = append(args, "--generation", req.GenerationPath)
+	}
+	args = append(args, "--")
 	args = append(args, req.Command...)
 
 	stdout, stderr, err := c.run(ctx, args...)
@@ -241,8 +237,12 @@ func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error 
 	if err := req.validate(); err != nil {
 		return err
 	}
-	_, stderr, err := c.run(ctx, "rm", req.Name)
+	_, stderr, err := c.run(ctx, "--json", "rm", req.Name)
 	if err != nil {
+		var machineErr *MachineError
+		if errors.As(machineErrorFromStderr(stderr), &machineErr) && machineErr.Envelope.Error.Code == "object.not_found" {
+			return nil
+		}
 		return commandError(err, stderr)
 	}
 	return nil
