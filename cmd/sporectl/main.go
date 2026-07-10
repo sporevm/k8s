@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultNamespace          = "sporevm-system"
-	defaultImage              = "ghcr.io/sporevm/k8s-runtime:0.1.11"
+	defaultImage              = "ghcr.io/sporevm/k8s-runtime:0.1.12"
 	defaultResultRoot         = "/var/lib/sporevm/coordinator-results"
 	defaultRunMountPath       = "/etc/sporevm/run/run.json"
 	defaultBundleRunMountPath = "/etc/sporevm/run/bundle-run.json"

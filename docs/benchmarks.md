@@ -194,13 +194,27 @@ prepare.pack=0ms prepare.inspectBundle=0ms artifactPull=0ms materialization=0ms
 resume=~860ms resultCommit=~0.3ms
 ```
 
-The next adapter optimization replaces the child-command branch inside that
-remaining `resume` bucket with:
+Public runtime `0.1.11` shipped the child-command fast path and was measured
+from an in-cluster benchmark client, without port-forward latency:
+
+```text
+/runs api steady median=~2031ms success=100%
+prepare.runSave=~1963ms prepare.fork=~1.5ms
+prepare.pack=0ms prepare.inspectBundle=0ms artifactPull=0ms materialization=0ms
+resume=~33ms guestReady=~18ms resultCommit=~0.2ms
+```
+
+The first request after the SporeVM storage upgrade took about 18.1s because
+the new rootfs cache identity rebuilt the image. The following nine requests
+were stable around 2.03s. The child-command branch now uses:
 
 ```bash
 spore run --from CHILD --generation FILE -- COMMAND
 ```
 
-That avoids named restore, `spore exec`, and `spore rm`. It requires a SporeVM
-release containing PR #432; the runtime image is now pinned to SporeVM 0.11.0
-for that contract.
+That reduced the old `resume` bucket from about 860ms to about 33ms. The new
+limiter was SporeVM's hot parent capture, which regressed from about 158ms to
+about 1.96s by rescanning the full logical rootfs on every save. SporeVM 0.11.1
+fixes that scan while retaining writable-rootfs capture and the fast run-from
+path. Its ReleaseSafe Linux ARM64/KVM benchmark measured hot capture at 312ms;
+runtime `0.1.12` pins that release for the next live Kubernetes measurement.

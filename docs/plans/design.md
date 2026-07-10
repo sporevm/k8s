@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-06
+last_reviewed: 2026-07-10
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -272,9 +272,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
   Helm chart to GHCR.
-- Public release `v0.1.9` has been cut and published. Anonymous GHCR reads now
-  verify `ghcr.io/sporevm/k8s-runtime:0.1.9` and
-  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.9`.
+- Public release `v0.1.11` has been cut and published. Anonymous GHCR reads
+  verify `ghcr.io/sporevm/k8s-runtime:0.1.11` and
+  `oci://ghcr.io/sporevm/charts/sporevm-k8s --version 0.1.11`. The next release
+  source is pinned to SporeVM 0.11.1 as Kubernetes runtime `0.1.12`.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
@@ -314,8 +315,8 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   `spore restore --generation FILE`, and PR #432 adds the same generation file
   contract to `spore run --from`. The adapter writes one generation JSON per
   child and now uses `spore run --from CHILD --generation FILE -- COMMAND` for
-  child-command runs. The runtime image is pinned to SporeVM 0.11.0, which
-  contains that contract.
+  child-command runs. Public runtime `0.1.11` shipped that contract with
+  SporeVM 0.11.0; runtime `0.1.12` updates the pin to SporeVM 0.11.1.
 - The runtime image can be pinned to a SporeVM release tarball. The latest live
   child-command smoke used SporeVM 0.9.1 with `spore restore --generation`,
   named restore, `spore exec`, and fast `spore rm`.
@@ -359,6 +360,16 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   one-child Node `POST /runs` at about 1.30s median. The remaining hot bucket
   was child resume/command execution at about 860ms, which is why the next
   adapter change targets `spore run --from --generation`.
+- Public runtime `0.1.11` shipped `spore run --from --generation`. An in-cluster
+  benchmark client measured steady one-child Node `POST /runs` at about 2.03s:
+  child resume fell to about 33ms, while hot parent capture regressed to about
+  1.96s. The first request after the storage upgrade rebuilt the rootfs cache
+  and took about 18.1s.
+- SporeVM 0.11.1 fixes that parent-capture regression by reusing the canonical
+  rootfs index and publishing unchanged CAS objects without a full logical
+  rootfs scan. ReleaseSafe Linux ARM64/KVM measured hot capture at 312ms while
+  preserving 34-35ms run-from. Runtime `0.1.12` carries that fix; live
+  Kubernetes measurement remains the next release gate.
 
 ## Delivery Strategy
 
@@ -491,9 +502,11 @@ child.
 
 The optimization order is:
 
-- release and deploy the `spore run --from --generation` child-command path;
-- remeasure the remaining `resume` bucket, currently about 860ms for the Node
-  smoke after the direct same-agent path;
+- publish and deploy runtime `0.1.12` with SporeVM 0.11.1, then remeasure the
+  expected roughly 300-400ms cached-rootfs `/runs` path from inside the cluster;
+- separate a genuinely cold parent capture from a cached immutable parent
+  template before moving capture outside request TTI; both are useful product
+  modes, but their benchmark labels must not blur the distinction;
 - split portable bundle timings for `pack`, `inspectBundle`, `pullVerify`,
   `pullInstallIndexes`, `pullInstallChunks`, and child manifest writes so
   multi-agent pack/pull stops being one opaque bucket;
