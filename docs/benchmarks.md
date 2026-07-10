@@ -216,5 +216,18 @@ That reduced the old `resume` bucket from about 860ms to about 33ms. The new
 limiter was SporeVM's hot parent capture, which regressed from about 158ms to
 about 1.96s by rescanning the full logical rootfs on every save. SporeVM 0.11.1
 fixes that scan while retaining writable-rootfs capture and the fast run-from
-path. Its ReleaseSafe Linux ARM64/KVM benchmark measured hot capture at 312ms;
-runtime `0.1.12` pins that release for the next live Kubernetes measurement.
+path.
+
+On 2026-07-10 UTC, public runtime `0.1.12` with SporeVM 0.11.1 completed ten
+requests from the same in-cluster benchmark client:
+
+```text
+/runs api median=319.61ms p95=348.80ms success=100%
+prepare.runSave=~248.6ms prepare.fork=~1.5ms
+prepare.pack=0ms prepare.inspectBundle=0ms artifactPull=0ms materialization=0ms
+resume=~35.1ms guestReady=~18ms resultCommit=~0.2ms
+```
+
+That is about 6.4 times faster than runtime `0.1.11` at the same request shape.
+The remaining cold-parent floor is now parent boot and capture, not child
+resume or Kubernetes scheduling.

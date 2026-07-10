@@ -368,8 +368,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - SporeVM 0.11.1 fixes that parent-capture regression by reusing the canonical
   rootfs index and publishing unchanged CAS objects without a full logical
   rootfs scan. ReleaseSafe Linux ARM64/KVM measured hot capture at 312ms while
-  preserving 34-35ms run-from. Runtime `0.1.12` carries that fix; live
-  Kubernetes measurement remains the next release gate.
+  preserving 34-35ms run-from. Public runtime `0.1.12` carries that fix and
+  measured one-child Node `POST /runs` at 319.61ms median and 348.80ms p95 from
+  an in-cluster benchmark client. Parent capture was about 248.6ms, fork about
+  1.5ms, and child resume about 35.1ms, with 100% success across ten requests.
 
 ## Delivery Strategy
 
@@ -500,10 +502,8 @@ when the same agent prepares and executes a single-attempt child. Retry-enabled
 runs keep the portable bundle path so later attempts can materialize a clean
 child.
 
-The optimization order is:
+The remaining optimization order is:
 
-- publish and deploy runtime `0.1.12` with SporeVM 0.11.1, then remeasure the
-  expected roughly 300-400ms cached-rootfs `/runs` path from inside the cluster;
 - separate a genuinely cold parent capture from a cached immutable parent
   template before moving capture outside request TTI; both are useful product
   modes, but their benchmark labels must not blur the distinction;
