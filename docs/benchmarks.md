@@ -184,3 +184,23 @@ That path prepares and forks on the selected agent, executes the prepared child
 directory directly for single-attempt source runs, and leaves portable bundle
 packing/inspection for retry-enabled runs, bundle runs, or future multi-agent
 handoff.
+
+Public runtime `0.1.10` then shipped that path:
+
+```text
+/runs api median=1299.49ms p95=1321.83ms success=100%
+prepare.runSave=~158ms prepare.fork=~1.4ms
+prepare.pack=0ms prepare.inspectBundle=0ms artifactPull=0ms materialization=0ms
+resume=~860ms resultCommit=~0.3ms
+```
+
+The next adapter optimization replaces the child-command branch inside that
+remaining `resume` bucket with:
+
+```bash
+spore run --from CHILD --generation FILE -- COMMAND
+```
+
+That avoids named restore, `spore exec`, and `spore rm`. It requires a SporeVM
+release containing PR #432; the runtime image is now pinned to SporeVM 0.11.0
+for that contract.

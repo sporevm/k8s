@@ -425,6 +425,32 @@ func (r ResumeRequest) validate() error {
 	return nil
 }
 
+// RunFromRequest is one command execution from a saved spore.
+type RunFromRequest struct {
+	SporeDir       string
+	Backend        string
+	GenerationPath string
+	Command        []string
+}
+
+func (r RunFromRequest) validate() error {
+	if r.SporeDir == "" {
+		return invalidSporeRequest("run-from spore dir is required")
+	}
+	if r.GenerationPath == "" {
+		return invalidSporeRequest("run-from generation path is required")
+	}
+	if len(r.Command) == 0 {
+		return invalidSporeRequest("run-from command is required")
+	}
+	for i, arg := range r.Command {
+		if arg == "" {
+			return invalidSporeRequest("run-from command[%d] must not be empty", i)
+		}
+	}
+	return nil
+}
+
 // ExecRequest is one command execution inside a named resumed VM.
 type ExecRequest struct {
 	Name    string
