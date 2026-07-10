@@ -45,10 +45,10 @@ var (
 // The concrete subprocess implementation should wait for SporeVM's stable JSON
 // contract. Tests and coordinator dry-runs can use fakes behind this interface.
 type SporeClient interface {
+	Version(context.Context) (string, error)
 	HostInfo(context.Context) (HostInfo, error)
 	InspectBundle(context.Context, InspectBundleRequest) (InspectBundleResult, error)
 	RunCapture(context.Context, RunCaptureRequest) ([]RunEvent, error)
-	CreateVM(context.Context, CreateVMRequest) error
 	Fork(context.Context, ForkRequest) error
 	Pack(context.Context, PackRequest) error
 	Pull(context.Context, PullRequest) (PullResult, error)
@@ -187,14 +187,18 @@ func (s *SlotLimiter) TryAcquire(n int) (func(), bool) {
 
 // Runner owns node-local admission state for shard execution.
 type Runner struct {
-	slots        *SlotLimiter
-	client       SporeClient
-	results      ResultStore
-	workRoot     string
-	backend      string
-	now          func() time.Time
-	metrics      MetricsSink
-	childTimeout time.Duration
+	slots            *SlotLimiter
+	client           SporeClient
+	results          ResultStore
+	workRoot         string
+	backend          string
+	now              func() time.Time
+	metrics          MetricsSink
+	childTimeout     time.Duration
+	templateMu       sync.Mutex
+	templateIdentity *bootTemplateRuntimeIdentity
+	sandboxMu        sync.Mutex
+	sandboxes        map[string]func()
 }
 
 // NewRunner creates a Runner with totalSlots local child execution slots.
@@ -204,10 +208,11 @@ func NewRunner(totalSlots int, opts ...RunnerOption) (*Runner, error) {
 		return nil, err
 	}
 	runner := &Runner{
-		slots:    slots,
-		workRoot: filepath.Join(os.TempDir(), "sporevm-agent"),
-		backend:  "kvm",
-		now:      func() time.Time { return time.Now().UTC() },
+		slots:     slots,
+		workRoot:  filepath.Join(os.TempDir(), "sporevm-agent"),
+		backend:   "kvm",
+		now:       func() time.Time { return time.Now().UTC() },
+		sandboxes: make(map[string]func()),
 	}
 	for _, opt := range opts {
 		opt(runner)

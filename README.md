@@ -40,19 +40,16 @@ Publishing notes live in [docs/publishing.md](docs/publishing.md).
 
 ## Benchmarks
 
-The live ComputeSDK-shaped TTI harness can call the resident coordinator API
-and measure wall-clock time until `node -v` succeeds through the coordinator
-report:
+The live ComputeSDK-shaped TTI harness measures a fresh ephemeral child through
+the resident coordinator API. The development probe runs its client inside the
+cluster so port-forward latency is excluded:
 
 ```bash
-kubectl -n sporevm-system port-forward svc/spore-agent 18081:8080
-go run ./cmd/spore-coordinator --listen=127.0.0.1:18080 --agent-url=http://127.0.0.1:18081 --result-store-root="$(mktemp -d)"
-python3 scripts/computesdk_sporevm_benchmark.py \
-  --api-url http://127.0.0.1:18080 \
-  --iterations 10
+SPORE_DEV_ITERATIONS=10 mise run dev:runtime-probe
 ```
 
-It writes ComputeSDK-style JSON under `results/sequential_tti/`. See
+It labels the first automatic template capture separately from later immutable
+template hits and writes ComputeSDK-style JSON under `results/sequential_tti/`. See
 [docs/benchmarks.md](docs/benchmarks.md) for the live cluster command shape and
 scope.
 

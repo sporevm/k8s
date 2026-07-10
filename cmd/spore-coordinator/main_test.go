@@ -20,7 +20,10 @@ import (
 	"github.com/sporevm/k8s/internal/fleet"
 )
 
-const testBundleDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+const (
+	testBundleDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	testPinnedImage  = "docker.io/library/node@sha256:6db9be2ebb4bafb687a078ef5ba1b1dd256e8004d246a31fd210b6b848ab6be2"
+)
 
 func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	source := testRun()
@@ -73,7 +76,6 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 }
 
 func TestCoordinatorAPIExecutesRun(t *testing.T) {
-	source := testRun()
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 1}
 	agentServer := newTestAgentServer(t, spore, 1)
 	handler, err := coordinatorHandler(coordinatorConfig{
@@ -86,7 +88,13 @@ func TestCoordinatorAPIExecutesRun(t *testing.T) {
 		t.Fatalf("coordinatorHandler: %v", err)
 	}
 
-	payload, err := json.Marshal(source)
+	run := agent.RunRequest{
+		RunID:   "node-version-0001",
+		Image:   testPinnedImage,
+		Memory:  "512mb",
+		Command: []string{"/bin/sh", "-lc", "node -v"},
+	}
+	payload, err := json.Marshal(run)
 	if err != nil {
 		t.Fatalf("marshal source run: %v", err)
 	}
@@ -97,15 +105,32 @@ func TestCoordinatorAPIExecutesRun(t *testing.T) {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	var report fleet.RuntimeReport
-	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
-		t.Fatalf("decode report: %v\n%s", err, rec.Body.String())
+	var response agent.RunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, rec.Body.String())
 	}
-	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 1 {
-		t.Fatalf("summary = %+v", report.Summary)
+	terminal, err := agent.TerminalEvent(response.Events)
+	if err != nil || terminal.ExitCode == nil || *terminal.ExitCode != 0 {
+		t.Fatalf("terminal = %+v, err=%v", terminal, err)
+	}
+	if response.RunID != run.RunID || response.Template.ID == "" || response.Template.CacheHit {
+		t.Fatalf("response = %+v", response)
 	}
 	if got := spore.runCaptureCount(); got != 1 {
 		t.Fatalf("run capture count = %d, want 1", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/runs", bytes.NewReader(payload))
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cached status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode cached response: %v", err)
+	}
+	if !response.Template.CacheHit || spore.runCaptureCount() != 1 {
+		t.Fatalf("cached response = %+v, captures=%d", response, spore.runCaptureCount())
 	}
 }
 
@@ -122,10 +147,9 @@ func TestCoordinatorAPIProxiesSandbox(t *testing.T) {
 		t.Fatalf("coordinatorHandler: %v", err)
 	}
 
-	createPayload, err := json.Marshal(agent.CreateVMRequest{
-		Name:    "sporevm-sandbox-node",
-		Image:   "docker.io/library/node:22-bookworm-slim",
-		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
+	createPayload, err := json.Marshal(agent.SandboxCreateRequest{
+		Name:  "sporevm-sandbox-node",
+		Image: testPinnedImage,
 	})
 	if err != nil {
 		t.Fatalf("marshal create request: %v", err)
@@ -353,6 +377,28 @@ func TestSelectSandboxEndpointRequiresSingleCompatibleAgent(t *testing.T) {
 	}
 }
 
+func TestSelectRunEndpointChoosesAvailableCapacity(t *testing.T) {
+	first := agentEndpoint{Status: testAgentStatus()}
+	first.Status.AgentID = "spore-agent-test-0001"
+	second := agentEndpoint{Status: testAgentStatus()}
+	second.Status.AgentID = "spore-agent-test-0002"
+	second.Status.ExecutionSlots.Total = 2
+	second.Status.ExecutionSlots.Available = 2
+
+	selected, err := selectRunEndpoint([]agentEndpoint{first, second})
+	if err != nil {
+		t.Fatalf("selectRunEndpoint: %v", err)
+	}
+	if selected.Status.AgentID != second.Status.AgentID {
+		t.Fatalf("selected agent = %q, want %q", selected.Status.AgentID, second.Status.AgentID)
+	}
+	first.Status.ExecutionSlots.Available = 0
+	second.Status.ExecutionSlots.Available = 0
+	if _, err := selectRunEndpoint([]agentEndpoint{first, second}); !errors.Is(err, fleet.ErrNoCompatibleAgents) {
+		t.Fatalf("selectRunEndpoint error = %v, want ErrNoCompatibleAgents", err)
+	}
+}
+
 func newTestAgentServer(t *testing.T, spore *fakeSporeClient, slots int) *httptest.Server {
 	t.Helper()
 	store, err := agent.NewLocalResultStore(t.TempDir())
@@ -454,6 +500,10 @@ type fakeSporeClient struct {
 	packs          int
 }
 
+func (c *fakeSporeClient) Version(context.Context) (string, error) {
+	return "spore 0.11.1 (ReleaseSafe)", nil
+}
+
 func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	return agent.HostInfo{
 		Schema:        "spore.host-info.v1",
@@ -493,6 +543,12 @@ func (c *fakeSporeClient) RunCapture(_ context.Context, req agent.RunCaptureRequ
 	c.mu.Lock()
 	c.runCaptures = append(c.runCaptures, req)
 	c.mu.Unlock()
+	if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(req.CaptureDir, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+		return nil, err
+	}
 	exitCode := 0
 	path := req.CaptureDir
 	return []agent.RunEvent{{
@@ -504,10 +560,6 @@ func (c *fakeSporeClient) RunCapture(_ context.Context, req agent.RunCaptureRequ
 		Captured:      true,
 		CapturePath:   &path,
 	}}, nil
-}
-
-func (c *fakeSporeClient) CreateVM(context.Context, agent.CreateVMRequest) error {
-	return nil
 }
 
 func (c *fakeSporeClient) Fork(_ context.Context, req agent.ForkRequest) error {

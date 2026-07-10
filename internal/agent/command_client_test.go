@@ -223,6 +223,60 @@ exit 2
 	}
 }
 
+func TestCommandClientVersion(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "version" ]; then
+  printf '%s\n' 'spore 0.11.1 (ReleaseSafe)'
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	version, err := client.Version(context.Background())
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if version != "spore 0.11.1 (ReleaseSafe)" {
+		t.Fatalf("version = %q", version)
+	}
+	if args := strings.TrimSpace(readFile(t, argsFile)); args != "version" {
+		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestCommandClientRunCaptureOnGuestExit(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "run" ]; then
+  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"run","backend":"kvm","exit_code":0,"captured":true,"capture_path":"/work/template.spore"}'
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	_, err := client.RunCapture(context.Background(), RunCaptureRequest{
+		Image:      interactiveTestImage,
+		CaptureDir: "/work/template.spore",
+		Backend:    "kvm",
+		Memory:     "512mb",
+		Command:    []string{"/bin/true"},
+	})
+	if err != nil {
+		t.Fatalf("RunCapture: %v", err)
+	}
+	want := "run --events=jsonl --backend kvm --memory 512mb --image " + interactiveTestImage + " --save /work/template.spore -- /bin/true"
+	if args := strings.TrimSpace(readFile(t, argsFile)); args != want {
+		t.Fatalf("args = %q, want %q", args, want)
+	}
+}
+
 func TestCommandClientForkAndPack(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
@@ -252,35 +306,6 @@ exit 2
 
 	args := strings.TrimSpace(readFile(t, argsFile))
 	want := "fork /work/parent.spore --count 1000 --out /work/children\npack /work/parent.spore --children /work/children --out /work/bundle"
-	if args != want {
-		t.Fatalf("args = %q, want %q", args, want)
-	}
-}
-
-func TestCommandClientCreateVM(t *testing.T) {
-	argsFile := filepath.Join(t.TempDir(), "args")
-	spore := fakeSpore(t, `
-printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "create" ]; then
-  exit 0
-fi
-echo unexpected "$*" >&2
-exit 2
-	`, argsFile)
-
-	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
-	if err := client.CreateVM(context.Background(), CreateVMRequest{
-		Name:    "sporevm-sandbox-node",
-		Image:   "docker.io/library/node:22-bookworm-slim",
-		Backend: "kvm",
-		Memory:  "512mb",
-		Command: []string{"/bin/sh", "-lc", "node -v >/dev/null"},
-	}); err != nil {
-		t.Fatalf("CreateVM: %v", err)
-	}
-
-	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "create sporevm-sandbox-node --backend kvm --memory 512mb --image docker.io/library/node:22-bookworm-slim -- /bin/sh -lc node -v >/dev/null"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -393,6 +418,33 @@ exit 2
 	}
 }
 
+func TestCommandClientRunFromWithoutGeneration(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "run" ]; then
+  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"run","backend":"kvm","exit_code":0}'
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	_, err := client.RunFrom(context.Background(), RunFromRequest{
+		SporeDir: "/work/template.spore",
+		Backend:  "kvm",
+		Command:  []string{"/bin/sh", "-lc", "node -v"},
+	})
+	if err != nil {
+		t.Fatalf("RunFrom: %v", err)
+	}
+	want := "run --events=jsonl --backend kvm --from /work/template.spore -- /bin/sh -lc node -v"
+	if args := strings.TrimSpace(readFile(t, argsFile)); args != want {
+		t.Fatalf("args = %q, want %q", args, want)
+	}
+}
+
 func TestCommandClientExecTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
@@ -461,7 +513,7 @@ func TestCommandClientRemoveVM(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "rm" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "rm" ]; then
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -474,8 +526,23 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "rm sporevm-child-42" {
+	if args != "--json rm sporevm-child-42" {
 		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestCommandClientRemoveVMIgnoresMissingVM(t *testing.T) {
+	spore := fakeSpore(t, `
+if [ "$1" = "--json" ] && [ "$2" = "rm" ]; then
+  printf '%s\n' '{"schema":"spore.error.v1","schema_version":1,"error":{"code":"object.not_found","message":"VM not found","retryable":false,"scope":"object","exit_code":1,"source":"rm"}}' >&2
+  exit 1
+fi
+exit 2
+`, "")
+
+	client := CommandClient{Path: spore}
+	if err := client.RemoveVM(context.Background(), RemoveVMRequest{Name: "missing-vm"}); err != nil {
+		t.Fatalf("RemoveVM: %v", err)
 	}
 }
 
@@ -571,9 +638,6 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	}
 	if _, err := client.Exec(context.Background(), ExecRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Exec error = %v, want ErrInvalidSporeRequest", err)
-	}
-	if err := client.CreateVM(context.Background(), CreateVMRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
-		t.Fatalf("CreateVM error = %v, want ErrInvalidSporeRequest", err)
 	}
 	if err := client.RemoveVM(context.Background(), RemoveVMRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("RemoveVM error = %v, want ErrInvalidSporeRequest", err)

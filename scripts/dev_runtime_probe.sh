@@ -4,9 +4,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 kubectl_bin="${KUBECTL:-kubectl}"
+context="${SPORE_CONTEXT:-}"
 namespace="${SPORE_NAMESPACE:-sporevm-system}"
 pod_name="${SPORE_DEV_POD_NAME:-spore-dev-runtime-probe}"
-local_port="${SPORE_DEV_LOCAL_PORT:-18081}"
+client_pod_name="${SPORE_DEV_CLIENT_POD_NAME:-${pod_name}-client}"
+benchmark_image="${SPORE_DEV_BENCHMARK_IMAGE:-python:3.13-slim}"
 iterations="${SPORE_DEV_ITERATIONS:-3}"
 timeout="${SPORE_DEV_TIMEOUT:-10m}"
 run_prefix="${SPORE_DEV_RUN_PREFIX:-computesdk-node-dev-runtime}"
@@ -21,15 +23,11 @@ work_root="${spore_root}/work-dev-runtime-probe"
 agent_result_root="${spore_root}/results-dev-runtime-probe"
 api_result_root="${spore_root}/coordinator-results-dev-runtime-probe"
 tmpdir="$(mktemp -d)"
-port_forward_pid=""
 
 cleanup() {
-  if [[ -n "${port_forward_pid}" ]] && kill -0 "${port_forward_pid}" >/dev/null 2>&1; then
-    kill "${port_forward_pid}" >/dev/null 2>&1 || true
-    wait "${port_forward_pid}" >/dev/null 2>&1 || true
-  fi
   if [[ "${SPORE_DEV_KEEP_POD:-}" != "1" ]]; then
-    "${kubectl_bin}" -n "${namespace}" delete pod "${pod_name}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    kube -n "${namespace}" delete pod "${client_pod_name}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    kube -n "${namespace}" delete pod "${pod_name}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   fi
   rm -rf "${tmpdir}"
 }
@@ -48,15 +46,24 @@ need "${kubectl_bin}"
 need go
 need python3
 
-agent_pod="$("${kubectl_bin}" -n "${namespace}" get pod -l app.kubernetes.io/name=spore-agent -o jsonpath='{.items[0].metadata.name}')"
+kubectl_args=()
+if [[ -n "${context}" ]]; then
+  kubectl_args+=(--context "${context}")
+fi
+
+kube() {
+  "${kubectl_bin}" "${kubectl_args[@]}" "$@"
+}
+
+agent_pod="$(kube -n "${namespace}" get pod -l app.kubernetes.io/name=spore-agent -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "${agent_pod}" ]] || die "no spore-agent pod found in namespace ${namespace}"
 
-node_name="$("${kubectl_bin}" -n "${namespace}" get pod "${agent_pod}" -o jsonpath='{.spec.nodeName}')"
+node_name="$(kube -n "${namespace}" get pod "${agent_pod}" -o jsonpath='{.spec.nodeName}')"
 [[ -n "${node_name}" ]] || die "could not resolve node for pod ${agent_pod}"
 
 runtime_image="${SPORE_DEV_RUNTIME_IMAGE:-}"
 if [[ -z "${runtime_image}" ]]; then
-  runtime_image="$("${kubectl_bin}" -n "${namespace}" get ds spore-agent -o jsonpath='{.spec.template.spec.containers[0].image}')"
+  runtime_image="$(kube -n "${namespace}" get ds spore-agent -o jsonpath='{.spec.template.spec.containers[0].image}')"
 fi
 [[ -n "${runtime_image}" ]] || die "could not resolve runtime image"
 
@@ -68,8 +75,8 @@ echo "dev_runtime_probe: building linux/arm64 binaries" >&2
 )
 
 echo "dev_runtime_probe: creating ${namespace}/${pod_name} from ${runtime_image}" >&2
-"${kubectl_bin}" -n "${namespace}" delete pod "${pod_name}" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
-"${kubectl_bin}" apply -f - <<YAML
+kube -n "${namespace}" delete pod "${pod_name}" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
+kube apply -f - <<YAML
 apiVersion: v1
 kind: Pod
 metadata:
@@ -122,11 +129,11 @@ spec:
         type: DirectoryOrCreate
 YAML
 
-"${kubectl_bin}" -n "${namespace}" wait --for=condition=Ready "pod/${pod_name}" --timeout=5m
+kube -n "${namespace}" wait --for=condition=Ready "pod/${pod_name}" --timeout=5m
 
 echo "dev_runtime_probe: copying local binaries" >&2
-"${kubectl_bin}" -n "${namespace}" cp "${tmpdir}/spore-agent" "${pod_name}:/tmp/spore-agent" -c runtime
-"${kubectl_bin}" -n "${namespace}" cp "${tmpdir}/spore-coordinator" "${pod_name}:/tmp/spore-coordinator" -c runtime
+kube -n "${namespace}" cp "${tmpdir}/spore-agent" "${pod_name}:/tmp/spore-agent" -c runtime
+kube -n "${namespace}" cp "${tmpdir}/spore-coordinator" "${pod_name}:/tmp/spore-coordinator" -c runtime
 
 region_arg=()
 if [[ -n "${SPORE_DEV_REGION:-}" ]]; then
@@ -134,7 +141,7 @@ if [[ -n "${SPORE_DEV_REGION:-}" ]]; then
 fi
 
 echo "dev_runtime_probe: starting temporary agent and API" >&2
-"${kubectl_bin}" -n "${namespace}" exec "${pod_name}" -c runtime -- /bin/sh -ec "
+kube -n "${namespace}" exec "${pod_name}" -c runtime -- /bin/sh -ec "
 chmod +x /tmp/spore-agent /tmp/spore-coordinator
 rm -rf '${work_root}' '${agent_result_root}' '${api_result_root}'
 mkdir -p '${work_root}' '${agent_result_root}' '${api_result_root}'
@@ -164,29 +171,63 @@ kill -0 \$(cat /tmp/spore-agent-dev-runtime-probe.pid)
 kill -0 \$(cat /tmp/spore-api-dev-runtime-probe.pid)
 "
 
-port_log="${tmpdir}/port-forward.log"
-echo "dev_runtime_probe: port-forwarding API on 127.0.0.1:${local_port}" >&2
-"${kubectl_bin}" -n "${namespace}" port-forward "pod/${pod_name}" "${local_port}:${api_port}" >"${port_log}" 2>&1 &
-port_forward_pid="$!"
-sleep 2
-if ! kill -0 "${port_forward_pid}" >/dev/null 2>&1; then
-  cat "${port_log}" >&2 || true
-  die "port-forward failed"
-fi
+pod_ip="$(kube -n "${namespace}" get pod "${pod_name}" -o jsonpath='{.status.podIP}')"
+[[ -n "${pod_ip}" ]] || die "could not resolve pod IP for ${pod_name}"
 
-echo "dev_runtime_probe: running ComputeSDK-shaped benchmark" >&2
-(
-  cd "${repo_root}"
-  python3 scripts/computesdk_sporevm_benchmark.py \
-    --api-url "http://127.0.0.1:${local_port}" \
+echo "dev_runtime_probe: creating in-cluster benchmark client ${namespace}/${client_pod_name}" >&2
+kube -n "${namespace}" delete pod "${client_pod_name}" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
+kube apply -f - <<YAML
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${client_pod_name}
+  namespace: ${namespace}
+  labels:
+    app.kubernetes.io/name: spore-dev-runtime-probe-client
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  nodeName: ${node_name}
+  tolerations:
+    - key: sporevm.io/agent
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  containers:
+    - name: benchmark
+      image: ${benchmark_image}
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "sleep 36000"]
+YAML
+kube -n "${namespace}" wait --for=condition=Ready "pod/${client_pod_name}" --timeout=5m
+kube -n "${namespace}" cp "${repo_root}/scripts/computesdk_sporevm_benchmark.py" "${client_pod_name}:/tmp/computesdk_sporevm_benchmark.py" -c benchmark
+
+echo "dev_runtime_probe: running ComputeSDK-shaped benchmark inside the cluster" >&2
+kube -n "${namespace}" exec "${client_pod_name}" -c benchmark -- \
+  python3 /tmp/computesdk_sporevm_benchmark.py \
+    --api-url "http://${pod_ip}:${api_port}" \
     --iterations "${iterations}" \
-    --raw-report-dir "${raw_report_dir}" \
-    --out-dir "${out_dir}" \
+    --raw-report-dir /tmp/sporevm-raw \
+    --out-dir /tmp/sporevm-results \
     --run-prefix "${run_prefix}" \
     --timeout "${timeout}"
-)
 
-python3 - "${repo_root}" "${raw_report_dir}" "${run_prefix}" <<'PY'
+resolve_output_dir() {
+  if [[ "$1" = /* ]]; then
+    printf '%s\n' "$1"
+  else
+    printf '%s/%s\n' "${repo_root}" "$1"
+  fi
+}
+
+local_out_dir="$(resolve_output_dir "${out_dir}")"
+local_raw_report_dir="$(resolve_output_dir "${raw_report_dir}")"
+probe_raw_report_dir="${tmpdir}/raw-reports"
+mkdir -p "${local_out_dir}" "${local_raw_report_dir}" "${probe_raw_report_dir}"
+kube -n "${namespace}" cp "${client_pod_name}:/tmp/sporevm-results/." "${local_out_dir}" -c benchmark
+kube -n "${namespace}" cp "${client_pod_name}:/tmp/sporevm-raw/." "${probe_raw_report_dir}" -c benchmark
+
+python3 - "${repo_root}" "${probe_raw_report_dir}" "${run_prefix}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -197,25 +238,34 @@ repo = Path(sys.argv[1])
 raw = Path(sys.argv[2])
 run_prefix = sys.argv[3]
 raw_dir = raw if raw.is_absolute() else repo / raw
-reports = sorted(raw_dir.glob(f"{run_prefix}-*.runtime-report.json"))
+reports = sorted(raw_dir.glob(f"{run_prefix}-*.run-response.json"))
 if not reports:
-    raise SystemExit(f"no runtime reports found in {raw_dir} for prefix {run_prefix!r}")
+    raise SystemExit(f"no run responses found in {raw_dir} for prefix {run_prefix!r}")
 
+cache_hits = []
 for path in reports:
     report = json.loads(path.read_text(encoding="utf-8"))
-    state = report.get("summary", {}).get("state")
-    if state != "succeeded":
-        raise SystemExit(f"{path.name}: state={state!r}, want 'succeeded'")
-    prepare = report.get("prepare", {}).get("timingsMs", {})
-    for key in ("runSave", "fork"):
-        if key not in prepare:
-            raise SystemExit(f"{path.name}: missing prepare.timingsMs.{key}")
-    for key in ("pack", "inspectBundle"):
-        if prepare.get(key, 0) != 0:
-            raise SystemExit(f"{path.name}: prepare.timingsMs.{key}={prepare.get(key)}, want zero for direct same-agent runs")
-    artifact = report.get("timings", {}).get("stagePercentilesMs", {}).get("artifactPull", {})
-    if any(artifact.get(key) != 0 for key in ("p50", "p95", "p99")):
-        raise SystemExit(f"{path.name}: artifactPull={artifact}, want all zero")
+    terminal = next(
+        (event for event in reversed(report.get("events", [])) if event.get("event") in {"exit", "failure"}),
+        None,
+    )
+    if terminal is None or terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+        raise SystemExit(f"{path.name}: terminal={terminal!r}")
+    template = report.get("template", {})
+    if not template.get("id"):
+        raise SystemExit(f"{path.name}: missing template id")
+    cache_hits.append(template.get("cacheHit"))
+    timings = report.get("timingsMs", {})
+    for key in ("templateMs", "executionMs", "totalMs"):
+        if key not in timings:
+            raise SystemExit(f"{path.name}: missing timingsMs.{key}")
 
-print(f"dev_runtime_probe: verified {len(reports)} runtime report(s)")
+if cache_hits[0] is not False:
+    raise SystemExit(f"first request cacheHit={cache_hits[0]!r}, want false")
+if any(hit is not True for hit in cache_hits[1:]):
+    raise SystemExit(f"later request cache hits={cache_hits[1:]!r}, want all true")
+
+print(f"dev_runtime_probe: verified one cold-parent request and {len(reports) - 1} template hit(s)")
 PY
+
+cp -R "${probe_raw_report_dir}/." "${local_raw_report_dir}"
