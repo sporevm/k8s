@@ -62,10 +62,27 @@ node_name="$(kube -n "${namespace}" get pod "${agent_pod}" -o jsonpath='{.spec.n
 [[ -n "${node_name}" ]] || die "could not resolve node for pod ${agent_pod}"
 
 runtime_image="${SPORE_DEV_RUNTIME_IMAGE:-}"
+spore_archive="${SPORE_DEV_SPORE_ARCHIVE:-}"
+spore_path="/usr/local/bin/spore"
 if [[ -z "${runtime_image}" ]]; then
   runtime_image="$(kube -n "${namespace}" get ds spore-agent -o jsonpath='{.spec.template.spec.containers[0].image}')"
 fi
 [[ -n "${runtime_image}" ]] || die "could not resolve runtime image"
+
+if [[ -n "${spore_archive}" ]]; then
+  [[ -f "${spore_archive}" ]] || die "SporeVM archive does not exist: ${spore_archive}"
+  mkdir -p "${tmpdir}/spore-release"
+  tar -xzf "${spore_archive}" -C "${tmpdir}/spore-release"
+  if [[ -x "${tmpdir}/spore-release/spore_Linux_arm64/bin/spore" ]]; then
+    spore_release_root="${tmpdir}/spore-release/spore_Linux_arm64"
+    spore_path="/tmp/spore-release/bin/spore"
+  elif [[ -x "${tmpdir}/spore-release/spore_Linux_arm64/spore" ]]; then
+    spore_release_root="${tmpdir}/spore-release/spore_Linux_arm64"
+    spore_path="/tmp/spore-release/spore"
+  else
+    die "SporeVM archive does not contain spore_Linux_arm64/bin/spore or spore_Linux_arm64/spore"
+  fi
+fi
 
 echo "dev_runtime_probe: building linux/arm64 binaries" >&2
 (
@@ -134,6 +151,12 @@ kube -n "${namespace}" wait --for=condition=Ready "pod/${pod_name}" --timeout=5m
 echo "dev_runtime_probe: copying local binaries" >&2
 kube -n "${namespace}" cp "${tmpdir}/spore-agent" "${pod_name}:/tmp/spore-agent" -c runtime
 kube -n "${namespace}" cp "${tmpdir}/spore-coordinator" "${pod_name}:/tmp/spore-coordinator" -c runtime
+if [[ -n "${spore_archive}" ]]; then
+  echo "dev_runtime_probe: copying SporeVM archive contents" >&2
+  kube -n "${namespace}" exec "${pod_name}" -c runtime -- mkdir -p /tmp/spore-release
+  kube -n "${namespace}" cp "${spore_release_root}/." "${pod_name}:/tmp/spore-release" -c runtime
+fi
+kube -n "${namespace}" exec "${pod_name}" -c runtime -- "${spore_path}" version
 
 region_arg=()
 if [[ -n "${SPORE_DEV_REGION:-}" ]]; then
@@ -150,7 +173,7 @@ mkdir -p '${work_root}' '${agent_result_root}' '${api_result_root}'
   --agent-id='${agent_id}' \
   --cell-id='${cell_id}' \
   --slots=1 \
-  --spore-path=/usr/local/bin/spore \
+  --spore-path='${spore_path}' \
   --result-store-root='${agent_result_root}' \
   --work-root='${work_root}' \
   --bundle-cache-root='${spore_root}/bundle-cache' \

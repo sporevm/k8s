@@ -53,9 +53,11 @@ type SporeClient interface {
 	Pack(context.Context, PackRequest) error
 	Pull(context.Context, PullRequest) (PullResult, error)
 	Resume(context.Context, ResumeRequest) ([]RunEvent, error)
+	RestoreNamed(context.Context, RestoreNamedRequest) (NamedLifecycleResult, error)
 	RunFrom(context.Context, RunFromRequest) ([]RunEvent, error)
 	Exec(context.Context, ExecRequest) ([]RunEvent, error)
 	RemoveVM(context.Context, RemoveVMRequest) error
+	RemoveSavedSpore(context.Context, RemoveSavedSporeRequest) error
 }
 
 // RunnerOption configures a node-local Runner.
@@ -195,6 +197,8 @@ type Runner struct {
 	now              func() time.Time
 	metrics          MetricsSink
 	childTimeout     time.Duration
+	hostClassMu      sync.Mutex
+	hostClasses      map[string]fleet.HostClass
 	templateMu       sync.Mutex
 	templateIdentity *bootTemplateRuntimeIdentity
 	sandboxMu        sync.Mutex
@@ -208,11 +212,12 @@ func NewRunner(totalSlots int, opts ...RunnerOption) (*Runner, error) {
 		return nil, err
 	}
 	runner := &Runner{
-		slots:     slots,
-		workRoot:  filepath.Join(os.TempDir(), "sporevm-agent"),
-		backend:   "kvm",
-		now:       func() time.Time { return time.Now().UTC() },
-		sandboxes: make(map[string]func()),
+		slots:       slots,
+		workRoot:    filepath.Join(os.TempDir(), "sporevm-agent"),
+		backend:     "kvm",
+		now:         func() time.Time { return time.Now().UTC() },
+		hostClasses: make(map[string]fleet.HostClass),
+		sandboxes:   make(map[string]func()),
 	}
 	for _, opt := range opts {
 		opt(runner)
@@ -267,7 +272,7 @@ type localPreparation struct {
 	TimingsMS   fleet.PrepareTimings
 }
 
-// Status reports the runner's current fleet status using `spore host-info`.
+// Status reports live capacity with the process-stable SporeVM host class.
 func (r *Runner) Status(ctx context.Context, req StatusRequest) (fleet.AgentStatus, error) {
 	if r.client == nil {
 		return fleet.AgentStatus{}, ErrSporeClientNotConfigured
@@ -281,11 +286,7 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (fleet.AgentStat
 		observedAt = r.now()
 	}
 
-	info, err := r.client.HostInfo(ctx)
-	if err != nil {
-		return fleet.AgentStatus{}, err
-	}
-	hostClass, err := info.FleetHostClass(backend)
+	hostClass, err := r.hostClass(ctx, backend)
 	if err != nil {
 		return fleet.AgentStatus{}, err
 	}
@@ -303,6 +304,24 @@ func (r *Runner) Status(ctx context.Context, req StatusRequest) (fleet.AgentStat
 		Healthy:  !req.Pressure.Critical(),
 	}
 	return status, status.Validate()
+}
+
+func (r *Runner) hostClass(ctx context.Context, backend string) (fleet.HostClass, error) {
+	r.hostClassMu.Lock()
+	defer r.hostClassMu.Unlock()
+	if hostClass, ok := r.hostClasses[backend]; ok {
+		return hostClass, nil
+	}
+	info, err := r.client.HostInfo(ctx)
+	if err != nil {
+		return fleet.HostClass{}, err
+	}
+	hostClass, err := info.FleetHostClass(backend)
+	if err != nil {
+		return fleet.HostClass{}, err
+	}
+	r.hostClasses[backend] = hostClass
+	return hostClass, nil
 }
 
 // PrepareLocal prepares and forks a source run without building a portable bundle.
@@ -398,11 +417,7 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 	if backend == "" {
 		backend = r.backend
 	}
-	info, err := r.client.HostInfo(ctx)
-	if err != nil {
-		return localPreparation{}, err
-	}
-	hostClass, err := info.FleetHostClass(backend)
+	hostClass, err := r.hostClass(ctx, backend)
 	if err != nil {
 		return localPreparation{}, err
 	}

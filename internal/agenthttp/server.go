@@ -10,11 +10,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/sporevm/k8s/internal/agent"
 	"github.com/sporevm/k8s/internal/fleet"
 )
+
+// ponytail: refresh advisory cache metrics on demand; move scans off-request if expiry spikes matter.
+const statusCacheTTL = 5 * time.Second
 
 // Server serves fleet agent status, bundle inspection, and shard execution.
 type Server struct {
@@ -29,6 +33,9 @@ type Server struct {
 	Pressure                fleet.Pressure
 	AllowMetadataOnlyRootFS bool
 	Now                     func() time.Time
+	statusMu                sync.Mutex
+	statusCache             fleet.CacheStatus
+	statusCacheAt           time.Time
 }
 
 // Handler returns the HTTP handler for the agent API.
@@ -84,7 +91,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	cache, err := statusForCacheRoots(s.BundleCacheRoot, s.RootFSCacheRoot)
+	cache, err := s.cacheStatus()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -102,6 +109,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) cacheStatus() (fleet.CacheStatus, error) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	now := s.now()
+	if !s.statusCacheAt.IsZero() && now.Before(s.statusCacheAt.Add(statusCacheTTL)) {
+		return s.statusCache, nil
+	}
+	status, err := statusForCacheRoots(s.BundleCacheRoot, s.RootFSCacheRoot)
+	if err != nil {
+		return fleet.CacheStatus{}, err
+	}
+	s.statusCache = status
+	s.statusCacheAt = now
+	return status, nil
 }
 
 func (s *Server) handleInspectRunBundle(w http.ResponseWriter, r *http.Request) {

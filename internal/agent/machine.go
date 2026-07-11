@@ -12,6 +12,7 @@ import (
 
 const (
 	hostInfoSchema      = "spore.host-info.v1"
+	lifecycleSchema     = "spore.lifecycle.v1"
 	inspectBundleSchema = "spore.bundle.inspect.v1"
 	pullResultSchema    = "spore.pull.result.v1"
 	errorSchema         = "spore.error.v1"
@@ -388,12 +389,63 @@ type ResumeRequest struct {
 	SporeDir       string
 	Backend        string
 	GenerationPath string
-	Name           string
 }
 
 func (r ResumeRequest) validate() error {
 	if r.SporeDir == "" {
 		return invalidSporeRequest("resume spore dir is required")
+	}
+	return nil
+}
+
+// RestoreNamedRequest starts one persistent named VM from a saved spore.
+type RestoreNamedRequest struct {
+	SporeDir       string
+	Backend        string
+	GenerationPath string
+	Name           string
+}
+
+func (r RestoreNamedRequest) validate() error {
+	if r.SporeDir == "" {
+		return invalidSporeRequest("named restore spore dir is required")
+	}
+	if r.Name == "" {
+		return invalidSporeRequest("named restore VM name is required")
+	}
+	return nil
+}
+
+// NamedLifecycleResult is the SporeVM named lifecycle machine contract.
+type NamedLifecycleResult struct {
+	Schema        string                `json:"schema"`
+	SchemaVersion uint32                `json:"schema_version"`
+	Action        string                `json:"action"`
+	Name          string                `json:"name"`
+	State         string                `json:"state"`
+	Timing        *NamedLifecycleTiming `json:"timing"`
+}
+
+// NamedLifecycleTiming reports named restore startup phases in milliseconds.
+type NamedLifecycleTiming struct {
+	PrepareMS       uint64 `json:"prepare_ms"`
+	SpawnMonitorMS  uint64 `json:"spawn_monitor_ms"`
+	WaitExecReadyMS uint64 `json:"wait_exec_ready_ms"`
+	TotalMS         uint64 `json:"total_ms"`
+}
+
+func (r NamedLifecycleResult) validateRestored(name string) error {
+	if r.Schema != lifecycleSchema || r.SchemaVersion != uint32(schemaVersion) {
+		return invalidMachineOutput("named lifecycle schema = %q v%d", r.Schema, r.SchemaVersion)
+	}
+	if r.Action != "restored" || r.State != "ready" {
+		return invalidMachineOutput("named lifecycle action = %q state = %q", r.Action, r.State)
+	}
+	if r.Name != name {
+		return invalidMachineOutput("named lifecycle name = %q, want %q", r.Name, name)
+	}
+	if r.Timing == nil {
+		return invalidMachineOutput("named lifecycle timing is missing")
 	}
 	return nil
 }
@@ -452,6 +504,22 @@ func (r RemoveVMRequest) validate() error {
 		return invalidSporeRequest("remove VM name is required")
 	}
 	return nil
+}
+
+// RemoveSavedSporeRequest removes a machine-local saved spore and its durable pin.
+type RemoveSavedSporeRequest struct {
+	SporeDir string
+}
+
+func (r RemoveSavedSporeRequest) validate() error {
+	if r.SporeDir == "" {
+		return invalidSporeRequest("remove saved spore dir is required")
+	}
+	return nil
+}
+
+type removedSavedSporeResult struct {
+	Action string `json:"action"`
 }
 
 // RunEvent is one SporeVM JSONL lifecycle event.

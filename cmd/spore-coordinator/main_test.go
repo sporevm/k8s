@@ -501,7 +501,7 @@ type fakeSporeClient struct {
 }
 
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
-	return "spore 0.11.1 (ReleaseSafe)", nil
+	return "spore 0.13.0 (ReleaseSafe)", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
@@ -607,6 +607,17 @@ func (c *fakeSporeClient) Resume(context.Context, agent.ResumeRequest) ([]agent.
 	}}, nil
 }
 
+func (c *fakeSporeClient) RestoreNamed(_ context.Context, req agent.RestoreNamedRequest) (agent.NamedLifecycleResult, error) {
+	return agent.NamedLifecycleResult{
+		Schema:        "spore.lifecycle.v1",
+		SchemaVersion: 1,
+		Action:        "restored",
+		Name:          req.Name,
+		State:         "ready",
+		Timing:        &agent.NamedLifecycleTiming{},
+	}, nil
+}
+
 func (c *fakeSporeClient) RunFrom(context.Context, agent.RunFromRequest) ([]agent.RunEvent, error) {
 	exitCode := c.execExitCode
 	return []agent.RunEvent{{
@@ -631,6 +642,10 @@ func (c *fakeSporeClient) Exec(context.Context, agent.ExecRequest) ([]agent.RunE
 }
 
 func (c *fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error {
+	return nil
+}
+
+func (c *fakeSporeClient) RemoveSavedSpore(context.Context, agent.RemoveSavedSporeRequest) error {
 	return nil
 }
 

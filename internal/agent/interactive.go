@@ -17,7 +17,9 @@ import (
 
 const bootTemplateSchema = "sporevm-k8s.boot-template.v1"
 
-const sandboxCleanupTimeout = 30 * time.Second
+const interactiveDefaultMemory = "1024mb"
+
+const lifecycleCleanupTimeout = 30 * time.Second
 
 var (
 	// ErrMutableImage means an interactive request did not select immutable image content.
@@ -80,10 +82,13 @@ type RunResponse struct {
 
 // SandboxTimings reports the node-local work in sandbox creation.
 type SandboxTimings struct {
-	Template float64 `json:"templateMs"`
-	Restore  float64 `json:"restoreMs"`
-	Ready    float64 `json:"readyMs"`
-	Total    float64 `json:"totalMs"`
+	Template             float64 `json:"templateMs"`
+	Restore              float64 `json:"restoreMs"`
+	RestorePrepare       float64 `json:"restorePrepareMs"`
+	RestoreSpawnMonitor  float64 `json:"restoreSpawnMonitorMs"`
+	RestoreWaitExecReady float64 `json:"restoreWaitExecReadyMs"`
+	RestoreSporeTotal    float64 `json:"restoreSporeTotalMs"`
+	Total                float64 `json:"totalMs"`
 }
 
 // SandboxCreateResponse reports the template used to create a sandbox.
@@ -113,6 +118,9 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, pressure fleet.Pressur
 	response := RunResponse{RunID: req.RunID}
 	if err := req.validate(); err != nil {
 		return response, err
+	}
+	if req.Memory == "" {
+		req.Memory = interactiveDefaultMemory
 	}
 	release, err := r.admitOne(pressure)
 	if err != nil {
@@ -153,6 +161,9 @@ func (r *Runner) CreateSandbox(ctx context.Context, req SandboxCreateRequest, pr
 	if err := req.validate(); err != nil {
 		return response, err
 	}
+	if req.Memory == "" {
+		req.Memory = interactiveDefaultMemory
+	}
 	release, err := r.admitOne(pressure)
 	if err != nil {
 		return response, err
@@ -179,7 +190,7 @@ func (r *Runner) CreateSandbox(ctx context.Context, req SandboxCreateRequest, pr
 	response.Template = template
 
 	restoreStarted := r.now()
-	events, err := r.client.Resume(ctx, ResumeRequest{
+	restored, err := r.client.RestoreNamed(ctx, RestoreNamedRequest{
 		SporeDir: templateDir,
 		Backend:  r.backend,
 		Name:     req.Name,
@@ -189,29 +200,13 @@ func (r *Runner) CreateSandbox(ctx context.Context, req SandboxCreateRequest, pr
 	if err != nil {
 		return response, r.failSandboxCreation(ctx, req.Name, release, &keepReservation, err)
 	}
-	terminal, err := TerminalEvent(events)
-	if err != nil {
+	if err := restored.validateRestored(req.Name); err != nil {
 		return response, r.failSandboxCreation(ctx, req.Name, release, &keepReservation, err)
 	}
-	if terminal.Event != "exit" || terminal.ExitCode == nil || *terminal.ExitCode != 0 {
-		return response, r.failSandboxCreation(ctx, req.Name, release, &keepReservation,
-			invalidMachineOutput("sandbox restore did not exit successfully"))
-	}
-	readyStarted := r.now()
-	readyEvents, err := r.client.Exec(ctx, ExecRequest{Name: req.Name, Command: []string{"/bin/true"}})
-	response.Timings.Ready = elapsedMS(readyStarted, r.now())
-	response.Timings.Total = elapsedMS(started, r.now())
-	if err != nil {
-		return response, r.failSandboxCreation(ctx, req.Name, release, &keepReservation, err)
-	}
-	readyTerminal, err := TerminalEvent(readyEvents)
-	if err != nil || readyTerminal.Event != "exit" || readyTerminal.ExitCode == nil || *readyTerminal.ExitCode != 0 {
-		if err != nil {
-			return response, r.failSandboxCreation(ctx, req.Name, release, &keepReservation, err)
-		}
-		return response, r.failSandboxCreation(ctx, req.Name, release, &keepReservation,
-			invalidMachineOutput("sandbox readiness command did not exit successfully"))
-	}
+	response.Timings.RestorePrepare = float64(restored.Timing.PrepareMS)
+	response.Timings.RestoreSpawnMonitor = float64(restored.Timing.SpawnMonitorMS)
+	response.Timings.RestoreWaitExecReady = float64(restored.Timing.WaitExecReadyMS)
+	response.Timings.RestoreSporeTotal = float64(restored.Timing.TotalMS)
 
 	r.activateSandbox(req.Name, release)
 	keepReservation = true
@@ -293,8 +288,8 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 	if err != nil {
 		return TemplateStatus{}, "", err
 	}
-	defer os.RemoveAll(tmpDir)
 	tmpTemplateDir := filepath.Join(tmpDir, "parent.spore")
+	defer r.cleanupTemplateBuild(ctx, tmpDir, tmpTemplateDir)
 	events, err := r.client.RunCapture(ctx, RunCaptureRequest{
 		Image:      image,
 		CaptureDir: tmpTemplateDir,
@@ -329,6 +324,18 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 	return TemplateStatus{ID: id, CacheHit: false}, templateDir, nil
 }
 
+func (r *Runner) cleanupTemplateBuild(ctx context.Context, tmpDir, templateDir string) {
+	if bootTemplateReady(templateDir) {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleCleanupTimeout)
+		defer cancel()
+		if err := r.client.RemoveSavedSpore(cleanupCtx, RemoveSavedSporeRequest{SporeDir: templateDir}); err != nil {
+			// Keep the save visible so its durable pin can be recovered by an operator.
+			return
+		}
+	}
+	_ = os.RemoveAll(tmpDir)
+}
+
 func (r *Runner) bootTemplateIdentity(ctx context.Context) (bootTemplateRuntimeIdentity, error) {
 	if r.templateIdentity != nil {
 		return *r.templateIdentity, nil
@@ -343,11 +350,7 @@ func (r *Runner) bootTemplateIdentity(ctx context.Context) (bootTemplateRuntimeI
 	if err != nil {
 		return bootTemplateRuntimeIdentity{}, err
 	}
-	info, err := r.client.HostInfo(ctx)
-	if err != nil {
-		return bootTemplateRuntimeIdentity{}, err
-	}
-	hostClass, err := info.FleetHostClass(r.backend)
+	hostClass, err := r.hostClass(ctx, r.backend)
 	if err != nil {
 		return bootTemplateRuntimeIdentity{}, err
 	}
@@ -420,7 +423,7 @@ func (r *Runner) sandboxRelease(name string) (func(), bool, error) {
 }
 
 func (r *Runner) failSandboxCreation(ctx context.Context, name string, release func(), keepReservation *bool, cause error) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxCleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleCleanupTimeout)
 	defer cancel()
 	if cleanupErr := r.client.RemoveVM(cleanupCtx, RemoveVMRequest{Name: name}); cleanupErr != nil {
 		r.activateSandbox(name, release)

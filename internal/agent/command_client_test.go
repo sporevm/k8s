@@ -350,12 +350,12 @@ exit 2
 	}
 }
 
-func TestCommandClientResumeSupportsName(t *testing.T) {
+func TestCommandClientRestoreNamedWaitsForReadyLifecycle(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "restore" ]; then
-  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"restore","backend":"kvm","exit_code":0}'
+if [ "$1" = "--json" ] && [ "$2" = "restore" ]; then
+  printf '%s\n' '{"schema":"spore.lifecycle.v1","schema_version":1,"action":"restored","name":"sporevm-child-42","state":"ready","timing":{"prepare_ms":3,"spawn_monitor_ms":4,"wait_exec_ready_ms":17,"total_ms":24}}'
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -363,18 +363,41 @@ exit 2
 `, argsFile)
 
 	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
-	if _, err := client.Resume(context.Background(), ResumeRequest{
+	result, err := client.RestoreNamed(context.Background(), RestoreNamedRequest{
 		SporeDir:       "/work/child-42.spore",
 		Backend:        "kvm",
 		GenerationPath: "/work/child-42.generation.json",
 		Name:           "sporevm-child-42",
-	}); err != nil {
-		t.Fatalf("Resume: %v", err)
+	})
+	if err != nil {
+		t.Fatalf("RestoreNamed: %v", err)
+	}
+	if result.Timing == nil || result.Timing.WaitExecReadyMS != 17 || result.Timing.TotalMS != 24 {
+		t.Fatalf("result = %+v", result)
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "restore /work/child-42.spore --events=jsonl --name sporevm-child-42 --backend kvm --generation /work/child-42.generation.json" {
+	if args != "--json restore /work/child-42.spore --name sporevm-child-42 --backend kvm --generation /work/child-42.generation.json" {
 		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestCommandClientRestoreNamedRejectsNonReadyLifecycle(t *testing.T) {
+	spore := fakeSpore(t, `
+if [ "$1" = "--json" ] && [ "$2" = "restore" ]; then
+  printf '%s\n' '{"schema":"spore.lifecycle.v1","schema_version":1,"action":"restored","name":"sporevm-child-42","state":"starting","timing":{"prepare_ms":3,"spawn_monitor_ms":4,"wait_exec_ready_ms":0,"total_ms":7}}'
+  exit 0
+fi
+exit 2
+`, "")
+
+	client := CommandClient{Path: spore}
+	_, err := client.RestoreNamed(context.Background(), RestoreNamedRequest{
+		SporeDir: "/work/child-42.spore",
+		Name:     "sporevm-child-42",
+	})
+	if !errors.Is(err, ErrInvalidMachineOutput) {
+		t.Fatalf("RestoreNamed error = %v, want ErrInvalidMachineOutput", err)
 	}
 }
 
@@ -546,6 +569,29 @@ exit 2
 	}
 }
 
+func TestCommandClientRemoveSavedSpore(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+if [ "$1" = "--json" ] && [ "$2" = "rm" ] && [ "$3" = "--spore" ]; then
+  printf '%s\n' '{"action":"removed_spore","spore_dir":"/work/template.spore","pin_id":"pin-1","pin_removed":true}'
+  exit 0
+fi
+echo unexpected "$*" >&2
+exit 2
+`, argsFile)
+
+	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
+	if err := client.RemoveSavedSpore(context.Background(), RemoveSavedSporeRequest{SporeDir: "/work/template.spore"}); err != nil {
+		t.Fatalf("RemoveSavedSpore: %v", err)
+	}
+
+	args := strings.TrimSpace(readFile(t, argsFile))
+	if args != "--json rm --spore /work/template.spore" {
+		t.Fatalf("args = %q", args)
+	}
+}
+
 func TestCommandClientResumeRejectsExitMismatch(t *testing.T) {
 	spore := fakeSpore(t, `
 if [ "$1" = "attach" ]; then
@@ -633,6 +679,9 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	if _, err := client.Resume(context.Background(), ResumeRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Resume error = %v, want ErrInvalidSporeRequest", err)
 	}
+	if _, err := client.RestoreNamed(context.Background(), RestoreNamedRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+		t.Fatalf("RestoreNamed error = %v, want ErrInvalidSporeRequest", err)
+	}
 	if _, err := client.RunFrom(context.Background(), RunFromRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("RunFrom error = %v, want ErrInvalidSporeRequest", err)
 	}
@@ -641,6 +690,9 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	}
 	if err := client.RemoveVM(context.Background(), RemoveVMRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("RemoveVM error = %v, want ErrInvalidSporeRequest", err)
+	}
+	if err := client.RemoveSavedSpore(context.Background(), RemoveSavedSporeRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+		t.Fatalf("RemoveSavedSpore error = %v, want ErrInvalidSporeRequest", err)
 	}
 	if _, err := client.RunCapture(context.Background(), RunCaptureRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("RunCapture error = %v, want ErrInvalidSporeRequest", err)
