@@ -90,6 +90,41 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 	}
 }
 
+func TestServerCachesCacheRootStatusBriefly(t *testing.T) {
+	bundleRoot := t.TempDir()
+	rootFSRoot := t.TempDir()
+	now := time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)
+	server := &Server{
+		BundleCacheRoot: bundleRoot,
+		RootFSCacheRoot: rootFSRoot,
+		Now:             func() time.Time { return now },
+	}
+
+	first, err := server.cacheStatus()
+	if err != nil {
+		t.Fatalf("first cacheStatus: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootFSRoot, "new-entry"), []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write cache entry: %v", err)
+	}
+	second, err := server.cacheStatus()
+	if err != nil {
+		t.Fatalf("second cacheStatus: %v", err)
+	}
+	if second != first {
+		t.Fatalf("cached status = %+v, want %+v", second, first)
+	}
+
+	now = now.Add(statusCacheTTL)
+	refreshed, err := server.cacheStatus()
+	if err != nil {
+		t.Fatalf("refreshed cacheStatus: %v", err)
+	}
+	if refreshed.RootFSCacheEntries != 1 || refreshed.RootFSCacheBytes != int64(len("cache")) {
+		t.Fatalf("refreshed status = %+v", refreshed)
+	}
+}
+
 func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	source := testRun()
 	client := newTestHTTPClientWithSporeClient(t, testBundleRun(), fakeSporeClient{
@@ -275,7 +310,7 @@ type fakeSporeClient struct {
 }
 
 func (c fakeSporeClient) Version(context.Context) (string, error) {
-	return "spore 0.11.1 (ReleaseSafe)", nil
+	return "spore 0.13.0 (ReleaseSafe)", nil
 }
 
 func (c fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
@@ -361,6 +396,20 @@ func (c fakeSporeClient) Resume(context.Context, agent.ResumeRequest) ([]agent.R
 	}}, nil
 }
 
+func (c fakeSporeClient) RestoreNamed(_ context.Context, req agent.RestoreNamedRequest) (agent.NamedLifecycleResult, error) {
+	if c.resumeErr != nil {
+		return agent.NamedLifecycleResult{}, c.resumeErr
+	}
+	return agent.NamedLifecycleResult{
+		Schema:        "spore.lifecycle.v1",
+		SchemaVersion: 1,
+		Action:        "restored",
+		Name:          req.Name,
+		State:         "ready",
+		Timing:        &agent.NamedLifecycleTiming{},
+	}, nil
+}
+
 func (c fakeSporeClient) RunFrom(context.Context, agent.RunFromRequest) ([]agent.RunEvent, error) {
 	exitCode := 0
 	return []agent.RunEvent{{
@@ -385,6 +434,10 @@ func (c fakeSporeClient) Exec(context.Context, agent.ExecRequest) ([]agent.RunEv
 }
 
 func (c fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error {
+	return nil
+}
+
+func (c fakeSporeClient) RemoveSavedSpore(context.Context, agent.RemoveSavedSporeRequest) error {
 	return nil
 }
 

@@ -12,13 +12,18 @@ posts a digest-pinned Node image and `node -v`, executes the command in one
 fresh ephemeral child, waits for the terminal SporeVM event, and records
 wall-clock TTI. This matches the public benchmark's create-plus-first-command
 shape without creating a Kubernetes object per request.
+Interactive requests default to `1024mb` when memory is omitted; the benchmark
+sends that value explicitly.
 
 The first request after an empty template work root is labeled `cold-parent`.
 It includes automatic boot-template capture. Later requests are labeled
 `template-hit` and execute with `spore run --from` against the immutable cached
 template. Do not combine those samples with warmed sandbox-pool results.
-The current automatic template and sandbox readiness probes require
-`/bin/true` in the workload image.
+Automatic boot-template capture currently requires `/bin/true` in the workload
+image. SporeVM 0.13.0 makes successful named restore completion the sandbox
+exec-readiness boundary and uses proof-gated local RAM backing, so sandbox
+creation neither runs a synthetic no-op nor eagerly reconstructs RAM when the
+same-host backing remains valid.
 
 Use the resident API path for TTI measurements. The `sporectl submit` fallback
 is only a smoke path because it creates a Kubernetes Job per iteration.
@@ -29,8 +34,9 @@ that VM for each iteration, and deletes the VM at the end. Use it to separate
 resident API plus `spore exec` overhead from fresh-child execution. It is not a
 per-request isolation benchmark. The coordinator only enables this path when it
 sees exactly one compatible agent, because named VM state is local to one agent.
-Sandbox creation waits for an internal no-op exec, so restore startup is charged
-to create rather than the first measured caller command.
+Sandbox creation waits for SporeVM's named restore to report exec-ready, so
+restore startup is charged to create rather than the first measured caller
+command.
 
 The `--sandbox-pool` mode pre-creates one named sandbox per iteration, executes each
 VM exactly once in the measured loop, and deletes the pool at the end. This is
@@ -66,6 +72,11 @@ mise run dev:runtime-probe
 
 Set `SPORE_DEV_KEEP_POD=1` only while debugging; the default cleans up the
 temporary runtime and benchmark pods.
+
+Set `SPORE_DEV_SPORE_ARCHIVE` to a local `spore_Linux_arm64.tar.gz` release
+archive to copy its CLI and runtime assets into the temporary pod. This tests a
+new SporeVM release together with local adapter binaries without publishing a
+Kubernetes runtime image.
 
 For coordinator-only functional checks, another short loop is to run the
 coordinator API locally and port-forward to the in-cluster agent:
@@ -268,8 +279,51 @@ first node exec=120.70ms
 next nine node execs median=33.59ms
 ```
 
-Sandbox create waits for an internal no-op exec, so its response means the VM
-is ready. The first Node command still pays application-cold work; repeated
-execs benefit from the running VM's page cache and process environment. These
-numbers are not comparable to fresh-child `/runs` isolation without stating
-that difference.
+In that pre-0.12.0 probe, sandbox create waited for an internal no-op exec, so
+its response meant the VM was ready. The first Node command still paid
+application-cold work; repeated execs benefited from the running VM's page
+cache and process environment. These numbers are not comparable to fresh-child
+`/runs` isolation without stating that difference.
+
+Public runtime `0.1.13` later measured template-hit Node `/runs` at 153.68ms
+median through the durable API. On 2026-07-11 UTC, an unreleased adapter probe
+using the published SporeVM 0.12.0 archive cached process-stable host class and
+five-second cache-root metrics instead of rediscovering both on every request:
+
+```text
+cold-parent /runs wall=400.31ms node=352.10ms template=231.20ms execution=120.90ms
+template-hit /runs median=119.22ms p95=120.20ms node execution=~118ms
+template-hit sandbox create wall=794.54ms restore=754.71ms waitExecReady=753ms
+first sandbox no-op exec=4.19ms
+first sandbox node exec=93.92ms
+next nine sandbox node execs median=6.56ms
+```
+
+Within the warmed five-second status-cache window, the coordinator adds about
+1ms to template-hit `/runs` on this path. A request that refreshes recursive
+cache-root metrics can still pay that directory walk. Named restore still owns
+the sandbox startup cost, but SporeVM 0.12.0 reports that cost truthfully before
+returning; the adapter no longer needs a second command to establish readiness.
+Warm sandbox exec remains a diagnostic and is not equivalent to a fresh
+isolated `/runs` request.
+
+On 2026-07-13 UTC, the same no-release probe with the published SporeVM 0.13.0
+archive exercised its proof-gated named restore and durable saved-spore disk
+format:
+
+```text
+first post-upgrade /runs wall=2118.13ms
+warm-rootfs cold-parent /runs wall=381.00ms node=333.16ms
+template-hit /runs median=136.13ms p95=137.26ms node execution=~135ms
+template-hit sandbox create wall=91.98ms restore=51.64ms
+restore prepare=19ms spawnMonitor=0ms waitExecReady=31ms
+first sandbox node exec=105.18ms
+next nine sandbox node exec median=6.71ms
+```
+
+The first v0.13.0 request took 2.12 seconds, while a second empty-template run
+with the rootfs cache warm captured the parent in 193.95ms. Treat the first
+post-upgrade sample as migration or cache-rebuild evidence rather than
+steady-state cold-parent TTI. Temporary captures are removed through
+`spore rm --spore`; raw directory deletion is unsafe because v0.13.0
+disk-backed saves own durable host-cache pins.

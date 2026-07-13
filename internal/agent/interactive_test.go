@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +72,29 @@ func TestRunnerRunTemplateKeyIncludesMemory(t *testing.T) {
 	}
 }
 
+func TestRunnerRunDefaultsInteractiveMemory(t *testing.T) {
+	client := &fakeSporeClient{hostInfo: validHostInfo()}
+	runner := newInteractiveTestRunner(t, 1, client)
+	req := RunRequest{Image: interactiveTestImage, Command: []string{"/bin/true"}}
+
+	first, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	req.Memory = interactiveDefaultMemory
+	second, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if !second.Template.CacheHit || second.Template.ID != first.Template.ID {
+		t.Fatalf("templates = %+v and %+v", first.Template, second.Template)
+	}
+	captures := client.runCaptureRequests()
+	if len(captures) != 1 || captures[0].Memory != interactiveDefaultMemory {
+		t.Fatalf("capture requests = %+v", captures)
+	}
+}
+
 func TestRunnerRunRejectsMutableImage(t *testing.T) {
 	client := &fakeSporeClient{hostInfo: validHostInfo()}
 	runner := newInteractiveTestRunner(t, 1, client)
@@ -121,6 +145,75 @@ func TestRunnerRunDoesNotCacheIncompleteTemplate(t *testing.T) {
 	}
 }
 
+func TestRunnerRunReleasesCapturedTemplateOnPublicationFailure(t *testing.T) {
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		runFunc: func(_ context.Context, req RunCaptureRequest) ([]RunEvent, error) {
+			if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(req.CaptureDir, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+				return nil, err
+			}
+			return []RunEvent{exitEvent(0)}, nil
+		},
+	}
+	runner := newInteractiveTestRunner(t, 1, client)
+
+	_, err := runner.Run(context.Background(), RunRequest{
+		Image:   interactiveTestImage,
+		Command: []string{"/bin/true"},
+	}, normalPressure())
+	if err == nil {
+		t.Fatal("Run succeeded without a captured terminal event")
+	}
+	removes := client.removeSavedSporeRequests()
+	if len(removes) != 1 || filepath.Base(removes[0].SporeDir) != "parent.spore" {
+		t.Fatalf("saved spore removals = %+v", removes)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(runner.workRoot, "templates"))
+	if readErr != nil {
+		t.Fatalf("read template root: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temporary template entries = %d, want 0", len(entries))
+	}
+}
+
+func TestRunnerRunKeepsCapturedTemplateWhenDurableRemovalFails(t *testing.T) {
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		runFunc: func(_ context.Context, req RunCaptureRequest) ([]RunEvent, error) {
+			if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(req.CaptureDir, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+				return nil, err
+			}
+			return []RunEvent{exitEvent(0)}, nil
+		},
+		removeSavedFunc: func(context.Context, RemoveSavedSporeRequest) error {
+			return errors.New("cache lock unavailable")
+		},
+	}
+	runner := newInteractiveTestRunner(t, 1, client)
+
+	_, err := runner.Run(context.Background(), RunRequest{
+		Image:   interactiveTestImage,
+		Command: []string{"/bin/true"},
+	}, normalPressure())
+	if err == nil {
+		t.Fatal("Run succeeded without a captured terminal event")
+	}
+	entries, readErr := os.ReadDir(filepath.Join(runner.workRoot, "templates"))
+	if readErr != nil {
+		t.Fatalf("read template root: %v", readErr)
+	}
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), ".build-") {
+		t.Fatalf("temporary template entries = %+v, want one recoverable build", entries)
+	}
+}
+
 func TestRunnerSandboxUsesTemplateAndOwnsSlot(t *testing.T) {
 	client := &fakeSporeClient{hostInfo: validHostInfo()}
 	runner := newInteractiveTestRunner(t, 1, client)
@@ -136,13 +229,16 @@ func TestRunnerSandboxUsesTemplateAndOwnsSlot(t *testing.T) {
 	if runner.AvailableSlots() != 0 {
 		t.Fatalf("available slots = %d, want 0", runner.AvailableSlots())
 	}
-	resumes := client.resumeRequests()
-	if len(resumes) != 1 || resumes[0].Name != req.Name || resumes[0].GenerationPath != "" {
-		t.Fatalf("resume requests = %+v", resumes)
+	restores := client.restoreNamedRequests()
+	if len(restores) != 1 || restores[0].Name != req.Name || restores[0].GenerationPath != "" {
+		t.Fatalf("named restore requests = %+v", restores)
 	}
-	execs := client.execRequests()
-	if len(execs) != 1 || len(execs[0].Command) != 1 || execs[0].Command[0] != "/bin/true" {
-		t.Fatalf("sandbox readiness execs = %+v", execs)
+	if created.Timings.RestorePrepare != 3 || created.Timings.RestoreSpawnMonitor != 4 ||
+		created.Timings.RestoreWaitExecReady != 17 || created.Timings.RestoreSporeTotal != 24 {
+		t.Fatalf("restore timings = %+v", created.Timings)
+	}
+	if execs := client.execRequests(); len(execs) != 0 {
+		t.Fatalf("sandbox readiness execs = %+v, want none", execs)
 	}
 	if _, err := runner.ExecSandbox(context.Background(), ExecRequest{
 		Name:    req.Name,
@@ -150,8 +246,8 @@ func TestRunnerSandboxUsesTemplateAndOwnsSlot(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ExecSandbox: %v", err)
 	}
-	if execs := client.execRequests(); len(execs) != 2 {
-		t.Fatalf("sandbox exec requests = %d, want 2", len(execs))
+	if execs := client.execRequests(); len(execs) != 1 {
+		t.Fatalf("sandbox exec requests = %d, want 1", len(execs))
 	}
 	if err := runner.RemoveSandbox(context.Background(), RemoveVMRequest{Name: req.Name}); err != nil {
 		t.Fatalf("RemoveSandbox: %v", err)
@@ -165,8 +261,8 @@ func TestRunnerSandboxCleanupFailureKeepsSlotUntilDelete(t *testing.T) {
 	cleanupCalls := 0
 	client := &fakeSporeClient{
 		hostInfo: validHostInfo(),
-		resumeFunc: func(context.Context, ResumeRequest) ([]RunEvent, error) {
-			return nil, errors.New("restore interrupted")
+		restoreNamedFunc: func(context.Context, RestoreNamedRequest) (NamedLifecycleResult, error) {
+			return NamedLifecycleResult{}, errors.New("restore interrupted")
 		},
 		removeFunc: func(context.Context, RemoveVMRequest) error {
 			cleanupCalls++

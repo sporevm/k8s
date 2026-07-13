@@ -158,19 +158,13 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 	}
 	commandName := "spore attach"
 	args := []string{"attach", "--events=jsonl"}
-	if req.Name != "" {
-		commandName = "spore restore"
-		args = []string{"restore", req.SporeDir, "--events=jsonl", "--name", req.Name}
-	}
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
 	if req.GenerationPath != "" {
 		args = append(args, "--generation", req.GenerationPath)
 	}
-	if req.Name == "" {
-		args = append(args, req.SporeDir)
-	}
+	args = append(args, req.SporeDir)
 
 	stdout, stderr, err := c.run(ctx, args...)
 	events, _, decodeErr := decodeRunEventsAfterCommand(commandName, stdout, stderr, err, false)
@@ -178,6 +172,25 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 		return events, decodeErr
 	}
 	return events, nil
+}
+
+// RestoreNamed runs `spore --json restore` and returns only after the VM is exec-ready.
+func (c CommandClient) RestoreNamed(ctx context.Context, req RestoreNamedRequest) (NamedLifecycleResult, error) {
+	if err := req.validate(); err != nil {
+		return NamedLifecycleResult{}, err
+	}
+	args := []string{"--json", "restore", req.SporeDir, "--name", req.Name}
+	if req.Backend != "" {
+		args = append(args, "--backend", req.Backend)
+	}
+	if req.GenerationPath != "" {
+		args = append(args, "--generation", req.GenerationPath)
+	}
+	var result NamedLifecycleResult
+	if err := c.runJSON(ctx, &result, args...); err != nil {
+		return NamedLifecycleResult{}, err
+	}
+	return result, result.validateRestored(req.Name)
 }
 
 // RunFrom runs one command from a saved spore.
@@ -244,6 +257,21 @@ func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error 
 			return nil
 		}
 		return commandError(err, stderr)
+	}
+	return nil
+}
+
+// RemoveSavedSpore runs `spore rm --spore` so durable cache pins are released.
+func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSporeRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	var result removedSavedSporeResult
+	if err := c.runJSON(ctx, &result, "--json", "rm", "--spore", req.SporeDir); err != nil {
+		return err
+	}
+	if result.Action != "removed_spore" {
+		return invalidMachineOutput("remove saved spore action = %q", result.Action)
 	}
 	return nil
 }

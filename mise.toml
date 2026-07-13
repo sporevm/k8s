@@ -23,7 +23,7 @@ description = "Run a dev-only live runtime probe with local arm64 binaries in a 
 run = "scripts/dev_runtime_probe.sh"
 
 [tasks."runtime:image:build"]
-description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.11.1"
+description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.13.0"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:dev ."
 
 [tasks."runtime:image:push"]

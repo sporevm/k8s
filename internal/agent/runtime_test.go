@@ -151,6 +151,17 @@ func TestRunnerStatusReportsHostClassAndSlots(t *testing.T) {
 	if !status.Healthy {
 		t.Fatal("status should be healthy")
 	}
+	if _, err := runner.Status(context.Background(), StatusRequest{
+		AgentID:    "spore-agent-us-east-1a-0001",
+		CellID:     "cell-us-east-1a",
+		Pressure:   normalPressure(),
+		ObservedAt: time.Date(2026, 6, 20, 4, 0, 1, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("second Status: %v", err)
+	}
+	if calls := client.hostInfoCallCount(); calls != 1 {
+		t.Fatalf("host-info calls = %d, want 1", calls)
+	}
 }
 
 func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
@@ -1024,37 +1035,45 @@ func TestLocalResultStoreRejectsUnsafeBucketSegment(t *testing.T) {
 }
 
 type fakeSporeClient struct {
-	mu          sync.Mutex
-	version     string
-	hostInfo    HostInfo
-	inspectFunc func(context.Context, InspectBundleRequest) (InspectBundleResult, error)
-	runFunc     func(context.Context, RunCaptureRequest) ([]RunEvent, error)
-	forkFunc    func(context.Context, ForkRequest) error
-	packFunc    func(context.Context, PackRequest) error
-	pullFunc    func(context.Context, PullRequest) (PullResult, error)
-	resumeFunc  func(context.Context, ResumeRequest) ([]RunEvent, error)
-	runFromFunc func(context.Context, RunFromRequest) ([]RunEvent, error)
-	execFunc    func(context.Context, ExecRequest) ([]RunEvent, error)
-	removeFunc  func(context.Context, RemoveVMRequest) error
-	runCaptures []RunCaptureRequest
-	forks       []ForkRequest
-	packs       []PackRequest
-	pulls       []PullRequest
-	resumes     []ResumeRequest
-	runFroms    []RunFromRequest
-	execs       []ExecRequest
-	removes     []RemoveVMRequest
-	outDir      string
+	mu               sync.Mutex
+	version          string
+	hostInfo         HostInfo
+	inspectFunc      func(context.Context, InspectBundleRequest) (InspectBundleResult, error)
+	runFunc          func(context.Context, RunCaptureRequest) ([]RunEvent, error)
+	forkFunc         func(context.Context, ForkRequest) error
+	packFunc         func(context.Context, PackRequest) error
+	pullFunc         func(context.Context, PullRequest) (PullResult, error)
+	resumeFunc       func(context.Context, ResumeRequest) ([]RunEvent, error)
+	restoreNamedFunc func(context.Context, RestoreNamedRequest) (NamedLifecycleResult, error)
+	runFromFunc      func(context.Context, RunFromRequest) ([]RunEvent, error)
+	execFunc         func(context.Context, ExecRequest) ([]RunEvent, error)
+	removeFunc       func(context.Context, RemoveVMRequest) error
+	removeSavedFunc  func(context.Context, RemoveSavedSporeRequest) error
+	runCaptures      []RunCaptureRequest
+	forks            []ForkRequest
+	packs            []PackRequest
+	pulls            []PullRequest
+	resumes          []ResumeRequest
+	restoreNameds    []RestoreNamedRequest
+	runFroms         []RunFromRequest
+	execs            []ExecRequest
+	removes          []RemoveVMRequest
+	removeSaveds     []RemoveSavedSporeRequest
+	outDir           string
+	hostInfoCalls    int
 }
 
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
 	if c.version != "" {
 		return c.version, nil
 	}
-	return "spore 0.11.1 (ReleaseSafe)", nil
+	return "spore 0.13.0 (ReleaseSafe)", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {
+	c.mu.Lock()
+	c.hostInfoCalls++
+	c.mu.Unlock()
 	return c.hostInfo, nil
 }
 
@@ -1122,6 +1141,16 @@ func (c *fakeSporeClient) Resume(ctx context.Context, req ResumeRequest) ([]RunE
 	return c.resumeFunc(ctx, req)
 }
 
+func (c *fakeSporeClient) RestoreNamed(ctx context.Context, req RestoreNamedRequest) (NamedLifecycleResult, error) {
+	c.mu.Lock()
+	c.restoreNameds = append(c.restoreNameds, req)
+	c.mu.Unlock()
+	if c.restoreNamedFunc == nil {
+		return readyNamedLifecycle(req.Name), nil
+	}
+	return c.restoreNamedFunc(ctx, req)
+}
+
 func (c *fakeSporeClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEvent, error) {
 	c.mu.Lock()
 	c.runFroms = append(c.runFroms, req)
@@ -1155,6 +1184,16 @@ func (c *fakeSporeClient) RemoveVM(ctx context.Context, req RemoveVMRequest) err
 	return c.removeFunc(ctx, req)
 }
 
+func (c *fakeSporeClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSporeRequest) error {
+	c.mu.Lock()
+	c.removeSaveds = append(c.removeSaveds, req)
+	c.mu.Unlock()
+	if c.removeSavedFunc == nil {
+		return os.RemoveAll(req.SporeDir)
+	}
+	return c.removeSavedFunc(ctx, req)
+}
+
 func (c *fakeSporeClient) runCaptureRequests() []RunCaptureRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1185,6 +1224,34 @@ func (c *fakeSporeClient) resumeRequests() []ResumeRequest {
 	return append([]ResumeRequest(nil), c.resumes...)
 }
 
+func (c *fakeSporeClient) restoreNamedRequests() []RestoreNamedRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]RestoreNamedRequest(nil), c.restoreNameds...)
+}
+
+func (c *fakeSporeClient) hostInfoCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hostInfoCalls
+}
+
+func readyNamedLifecycle(name string) NamedLifecycleResult {
+	return NamedLifecycleResult{
+		Schema:        lifecycleSchema,
+		SchemaVersion: uint32(schemaVersion),
+		Action:        "restored",
+		Name:          name,
+		State:         "ready",
+		Timing: &NamedLifecycleTiming{
+			PrepareMS:       3,
+			SpawnMonitorMS:  4,
+			WaitExecReadyMS: 17,
+			TotalMS:         24,
+		},
+	}
+}
+
 func (c *fakeSporeClient) runFromRequests() []RunFromRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1201,6 +1268,12 @@ func (c *fakeSporeClient) removeRequests() []RemoveVMRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]RemoveVMRequest(nil), c.removes...)
+}
+
+func (c *fakeSporeClient) removeSavedSporeRequests() []RemoveSavedSporeRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]RemoveSavedSporeRequest(nil), c.removeSaveds...)
 }
 
 func (c *fakeSporeClient) lastOutDir() string {

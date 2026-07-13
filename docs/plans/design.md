@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-10
+last_reviewed: 2026-07-11
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -100,9 +100,10 @@ fresh ephemeral child with `spore run --from`, executes the command, and
 discards the child. The response includes SporeVM events, node-local timings,
 and whether template creation was a cache hit.
 
-`POST /sandboxes` accepts `name`, `image`, and optional `memory`. It ensures the
-same boot template, restores a named child, waits for a no-op exec to prove the
-child is ready, and keeps that child alive for
+`POST /sandboxes` accepts `name`, `image`, and optional `memory`; interactive
+requests default to `1024mb`. It ensures the
+same boot template, restores a named child, treats successful SporeVM restore
+completion as exec-ready, and keeps that child alive for
 `POST /sandboxes/{name}/exec` until `DELETE /sandboxes/{name}`. A sandbox owns
 one execution slot for its lifetime; its filesystem state survives multiple
 exec calls.
@@ -113,8 +114,11 @@ schema version. Mutable image tags are rejected so a cache hit cannot silently
 select different bytes. The first request may pay image/rootfs resolution,
 boot, and capture. Later requests use the published template without forking,
 packing, pulling, or writing generation metadata.
-The current SporeVM capture and readiness probes require `/bin/true` in the
-selected image; a commandless capture primitive is deferred.
+SporeVM 0.13.0 disk-backed saves own durable host-cache pins, so failed
+temporary captures are removed through `spore rm --spore`; raw directory
+deletion would leak the pin.
+The current boot-template capture requires `/bin/true` in the selected image; a
+commandless capture primitive is deferred.
 
 ### Batch Fan-Out Contract
 
@@ -327,7 +331,9 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
   Helm chart to GHCR.
-- Public release `v0.1.12` is published and pins SporeVM 0.11.1.
+- Public release `v0.1.13` is published and pins SporeVM 0.11.1. The next
+  runtime slice targets SporeVM 0.13.0's proof-gated named restore, truthful
+  readiness timing, and durable saved-spore storage contract.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
@@ -434,6 +440,23 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   median, with about 119ms inside `spore run --from`. A template-hit sandbox
   create took 793.69ms wall because named restore readiness took 748.60ms; its
   first `node -v` exec took 120.70ms and the next nine had a 33.59ms median.
+- A durable public `0.1.13` run measured template-hit Node `/runs` at 153.68ms
+  median. An unreleased adapter probe with SporeVM 0.12.0 then cached immutable
+  host class and five-second cache-root metrics, reducing template-hit median
+  to 119.22ms while node execution remained about 118ms. SporeVM's truthful
+  named restore took 754.71ms on the same node, after which a no-op exec took
+  4.19ms; first and repeated Node execs measured 93.92ms and 6.56ms median. A
+  request that refreshes the five-second cache metrics can still pay the
+  recursive directory walk; move that refresh off-request only if measured
+  tail latency warrants the added lifecycle machinery.
+- An unreleased SporeVM 0.13.0 adapter probe reduced template-hit named sandbox
+  restore to 51.64ms on the same KVM node: 19ms prepare and 31ms exec readiness.
+  End-to-end create was 91.98ms, the first Node exec was 105.18ms, and the next
+  nine Node execs had a 6.71ms median. Template-hit `/runs` measured 136.13ms
+  median. The first request after the disk-format upgrade took 2.12s; with the
+  rootfs cache warm, a fresh parent capture took 381.00ms wall, so the first
+  post-upgrade cache-rebuild sample must remain separate from steady-state
+  cold-parent measurements.
 
 ## Delivery Strategy
 
@@ -579,8 +602,10 @@ The remaining optimization order is:
 
 ### Slice 7: Shared Interactive Execution Engine
 
-Status: implemented locally and live-proved through the no-release in-cluster
-dev probe. Release and durable deployment remain pending.
+Status: implemented, released in public runtime `v0.1.13`, and durably deployed.
+The next runtime consumes SporeVM 0.13.0's proof-gated named restore, removes
+the adapter's synthetic sandbox readiness exec, consumes named lifecycle timing
+directly, and releases durable saved-spore pins during failed publication.
 
 Use one automatic immutable boot-template cache for ephemeral `/runs` and
 persistent `/sandboxes`. Keep the batch source/prepare/fork planner behind

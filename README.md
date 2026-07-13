@@ -53,6 +53,15 @@ template hits and writes ComputeSDK-style JSON under `results/sequential_tti/`. 
 [docs/benchmarks.md](docs/benchmarks.md) for the live cluster command shape and
 scope.
 
+To test a published SporeVM archive before cutting a Kubernetes runtime release,
+pass its local path to the same probe:
+
+```bash
+SPORE_DEV_SPORE_ARCHIVE=/tmp/spore_Linux_arm64.tar.gz \
+SPORE_DEV_ITERATIONS=10 \
+mise run dev:runtime-probe
+```
+
 ## Development
 
 ```bash
