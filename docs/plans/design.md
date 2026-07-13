@@ -331,9 +331,9 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The public repository validation path is wired: CI runs `mise run fleet:test`
   and `mise run public:leak-scan`, and tag builds publish the runtime image and
   Helm chart to GHCR.
-- Public release `v0.1.13` is published and pins SporeVM 0.11.1. The next
-  runtime slice targets SporeVM 0.13.0's proof-gated named restore, truthful
-  readiness timing, and durable saved-spore storage contract.
+- Public release `v0.1.14` pins SporeVM 0.13.0 and consumes its proof-gated
+  named restore, truthful readiness timing, and durable saved-spore storage
+  contract.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - The thin Kubernetes adapter shape has been proved live: `spore-agent` as a
   DaemonSet, `spore-coordinator` as a one-shot Job, private ClusterIP agent
@@ -602,10 +602,11 @@ The remaining optimization order is:
 
 ### Slice 7: Shared Interactive Execution Engine
 
-Status: implemented, released in public runtime `v0.1.13`, and durably deployed.
-The next runtime consumes SporeVM 0.13.0's proof-gated named restore, removes
-the adapter's synthetic sandbox readiness exec, consumes named lifecycle timing
-directly, and releases durable saved-spore pins during failed publication.
+Status: implemented and released in public runtime `v0.1.14`; private rollout
+is tracked separately. This runtime consumes SporeVM 0.13.0's proof-gated named
+restore, removes the adapter's synthetic sandbox readiness exec, consumes named
+lifecycle timing directly, and releases durable saved-spore pins during failed
+publication.
 
 Use one automatic immutable boot-template cache for ephemeral `/runs` and
 persistent `/sandboxes`. Keep the batch source/prepare/fork planner behind

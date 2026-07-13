@@ -2,7 +2,7 @@ agent:
   enabled: true
   image:
     repository: ghcr.io/sporevm/k8s-runtime
-    tag: "0.1.13"
+    tag: "0.1.14"
     pullPolicy: IfNotPresent
   serviceAccount:
     create: true
