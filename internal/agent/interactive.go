@@ -67,9 +67,13 @@ type TemplateStatus struct {
 
 // RunTimings reports the node-local work in one ephemeral run.
 type RunTimings struct {
-	Template  float64 `json:"templateMs"`
-	Execution float64 `json:"executionMs"`
-	Total     float64 `json:"totalMs"`
+	Template            float64 `json:"templateMs"`
+	Execution           float64 `json:"executionMs"`
+	RuntimeStart        float64 `json:"runtimeStartMs"`
+	RuntimeVSockConnect float64 `json:"runtimeVSockConnectMs"`
+	RuntimeExecResponse float64 `json:"runtimeExecResponseMs"`
+	RuntimeProbe        float64 `json:"runtimeProbeMs"`
+	Total               float64 `json:"totalMs"`
 }
 
 // RunResponse is the result of one ephemeral run.
@@ -148,8 +152,15 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, pressure fleet.Pressur
 	if err != nil {
 		return response, err
 	}
-	if _, err := TerminalEvent(response.Events); err != nil {
+	terminal, err := TerminalEvent(response.Events)
+	if err != nil {
 		return response, err
+	}
+	if terminal.Timings != nil {
+		response.Timings.RuntimeStart = float64(terminal.Timings.StartMS)
+		response.Timings.RuntimeVSockConnect = float64(terminal.Timings.VSockConnectMS)
+		response.Timings.RuntimeExecResponse = float64(terminal.Timings.ExecResponseMS)
+		response.Timings.RuntimeProbe = float64(terminal.Timings.ProbeDurationMS)
 	}
 	return response, nil
 }
