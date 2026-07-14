@@ -28,7 +28,7 @@ Private environments should keep their values file in ops:
 
 ```bash
 helm upgrade --install sporevm-k8s oci://ghcr.io/sporevm/charts/sporevm-k8s \
-  --version 0.1.14 \
+  --version 0.1.15 \
   --namespace sporevm-system \
   --create-namespace \
   -f values/sporevm-k8s.yaml
