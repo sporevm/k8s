@@ -100,6 +100,12 @@ fresh ephemeral child with `spore run --from`, executes the command, and
 discards the child. The response includes SporeVM events, node-local timings,
 and whether template creation was a cache hit.
 
+The response separates agent wall time from SporeVM runtime phases. Alongside
+`templateMs`, `executionMs`, and `totalMs`, `timingsMs` reports
+`runtimeStartMs`, `runtimeVSockConnectMs`, `runtimeExecResponseMs`, and
+`runtimeProbeMs` from the terminal event. This keeps VM start, guest connection,
+command completion, and compatibility probing independently measurable.
+
 `POST /sandboxes` accepts `name`, `image`, and optional `memory`; interactive
 requests default to `1024mb`. It ensures the
 same boot template, restores a named child, treats successful SporeVM restore

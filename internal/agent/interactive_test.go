@@ -95,6 +95,37 @@ func TestRunnerRunDefaultsInteractiveMemory(t *testing.T) {
 	}
 }
 
+func TestRunnerRunReportsRuntimeSubphaseTimings(t *testing.T) {
+	terminal := exitEvent(0)
+	terminal.Timings = &RunEventTimings{
+		StartMS:         11,
+		VSockConnectMS:  22,
+		ExecResponseMS:  33,
+		ProbeDurationMS: 44,
+	}
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		runFromFunc: func(context.Context, RunFromRequest) ([]RunEvent, error) {
+			return []RunEvent{terminal}, nil
+		},
+	}
+	runner := newInteractiveTestRunner(t, 1, client)
+
+	response, err := runner.Run(context.Background(), RunRequest{
+		Image:   interactiveTestImage,
+		Command: []string{"/bin/true"},
+	}, normalPressure())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if response.Timings.RuntimeStart != 11 ||
+		response.Timings.RuntimeVSockConnect != 22 ||
+		response.Timings.RuntimeExecResponse != 33 ||
+		response.Timings.RuntimeProbe != 44 {
+		t.Fatalf("runtime timings = %+v", response.Timings)
+	}
+}
+
 func TestRunnerRunRejectsMutableImage(t *testing.T) {
 	client := &fakeSporeClient{hostInfo: validHostInfo()}
 	runner := newInteractiveTestRunner(t, 1, client)
