@@ -37,6 +37,9 @@ helm upgrade --install sporevm-k8s oci://ghcr.io/sporevm/charts/sporevm-k8s \
 The chart installs long-lived cell pieces only. Per-run coordinator jobs are
 created by `sporectl submit`.
 
+Buildkite steps use the same command with `--buildkite` to wait for aggregate
+completion and post the runtime summary. See [docs/ci.md](docs/ci.md).
+
 Publishing notes live in [docs/publishing.md](docs/publishing.md).
 
 ## Benchmarks
