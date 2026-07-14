@@ -41,6 +41,14 @@ type submitOptions struct {
 	Logs            bool
 	DryRun          bool
 	Replace         bool
+	Buildkite       bool
+	BuildkiteAgent  string
+	ResultURLPrefix string
+}
+
+type submitDetails struct {
+	RunID       string
+	ResultStore string
 }
 
 type stringsFlag []string
@@ -90,6 +98,7 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 		Kubectl:         envString("KUBECTL", "kubectl"),
 		Wait:            true,
 		Logs:            true,
+		BuildkiteAgent:  envString("BUILDKITE_AGENT_BIN", "buildkite-agent"),
 	}
 
 	fs := flag.NewFlagSet("submit", flag.ContinueOnError)
@@ -109,6 +118,9 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&opts.Logs, "logs", opts.Logs, "print coordinator logs after waiting")
 	fs.BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print Kubernetes JSON and do not apply it")
 	fs.BoolVar(&opts.Replace, "replace", opts.Replace, "delete an existing coordinator Job for the run before apply")
+	fs.BoolVar(&opts.Buildkite, "buildkite", opts.Buildkite, "post the aggregate run summary as a Buildkite annotation")
+	fs.StringVar(&opts.BuildkiteAgent, "buildkite-agent", opts.BuildkiteAgent, "buildkite-agent binary used with --buildkite")
+	fs.StringVar(&opts.ResultURLPrefix, "result-url-prefix", opts.ResultURLPrefix, "optional HTTP URL for the run result objects")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -131,8 +143,11 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 	if len(opts.AgentURLs) == 0 {
 		_ = opts.AgentURLs.Set(defaultAgentURL(opts.Namespace))
 	}
+	if opts.Buildkite && !opts.Wait {
+		return errors.New("--buildkite requires --wait")
+	}
 
-	resources, names, runID, err := buildSubmitResourcesFromOptions(opts)
+	resources, names, details, err := buildSubmitResourcesFromOptions(opts)
 	if err != nil {
 		return err
 	}
@@ -158,53 +173,127 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 	if err := kubectl.Run(ctx, payload, "apply", "-f", "-"); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "submitted run %s as job/%s\n", runID, names.Job)
+	fmt.Fprintf(stdout, "submitted run %s as job/%s\n", details.RunID, names.Job)
 	if !opts.Wait {
 		return nil
 	}
-	if err := waitForJob(ctx, kubectl, opts.Namespace, names.Job, opts.Timeout); err != nil {
-		if opts.Logs {
-			_ = kubectl.Run(ctx, nil, "logs", "-n", opts.Namespace, "job/"+names.Job, "--all-containers=true")
+	waitErr := waitForJob(ctx, kubectl, opts.Namespace, names.Job, opts.Timeout)
+	var logs []byte
+	var logsErr error
+	var annotationErr error
+	if opts.Buildkite {
+		logs, logsErr = kubectl.Output(ctx, "logs", "-n", opts.Namespace, "job/"+names.Job, "--all-containers=true")
+		if opts.Logs && len(logs) > 0 {
+			_, _ = stdout.Write(logs)
 		}
-		return err
+	} else if opts.Logs {
+		logsErr = kubectl.Run(ctx, nil, "logs", "-n", opts.Namespace, "job/"+names.Job, "--all-containers=true")
 	}
-	if opts.Logs {
-		return kubectl.Run(ctx, nil, "logs", "-n", opts.Namespace, "job/"+names.Job, "--all-containers=true")
+	if opts.Buildkite {
+		report, reportFound := runtimeReportFromLogs(logs)
+		if !reportFound && waitErr == nil {
+			annotationErr = errors.New("coordinator logs did not contain a runtime report")
+		}
+		annotation := buildkiteRunAnnotation(details, report, waitErr, opts.ResultURLPrefix)
+		style := "success"
+		if waitErr != nil || report.Summary.State != "succeeded" {
+			style = "error"
+		}
+		annotator := kubectlRunner{Path: opts.BuildkiteAgent, Stdout: stdout, Stderr: stderr}
+		if err := annotator.Run(ctx, []byte(annotation), "annotate", "--style", style, "--context", kubernetesName("sporevm", details.RunID)); err != nil {
+			annotationErr = errors.Join(annotationErr, fmt.Errorf("post Buildkite annotation: %w", err))
+			fmt.Fprintln(stderr, annotationErr)
+		}
+	}
+	if waitErr != nil {
+		return waitErr
+	}
+	if logsErr != nil {
+		return logsErr
+	}
+	if annotationErr != nil {
+		return annotationErr
 	}
 	return nil
 }
 
-func buildSubmitResourcesFromOptions(opts submitOptions) (resourceList, resourceNames, string, error) {
+func buildSubmitResourcesFromOptions(opts submitOptions) (resourceList, resourceNames, submitDetails, error) {
 	if opts.InputPath == "" {
-		return resourceList{}, resourceNames{}, "", errors.New("run JSON path is required")
+		return resourceList{}, resourceNames{}, submitDetails{}, errors.New("run JSON path is required")
 	}
 	runBytes, err := os.ReadFile(opts.InputPath)
 	if err != nil {
-		return resourceList{}, resourceNames{}, "", fmt.Errorf("read run: %w", err)
+		return resourceList{}, resourceNames{}, submitDetails{}, fmt.Errorf("read run: %w", err)
 	}
 	kind, err := detectSubmitRunKind(runBytes)
 	if err != nil {
-		return resourceList{}, resourceNames{}, "", err
+		return resourceList{}, resourceNames{}, submitDetails{}, err
 	}
 
 	switch kind {
 	case submitRunKindBundle:
 		run, err := fleet.DecodeBundleRun(bytes.NewReader(runBytes))
 		if err != nil {
-			return resourceList{}, resourceNames{}, "", err
+			return resourceList{}, resourceNames{}, submitDetails{}, err
 		}
 		resources, names, err := buildBundleSubmitResources(run, runBytes, opts)
-		return resources, names, run.RunID, err
+		return resources, names, submitDetails{RunID: run.RunID, ResultStore: run.ResultStore}, err
 	case submitRunKindRun:
 		run, err := fleet.DecodeRun(bytes.NewReader(runBytes))
 		if err != nil {
-			return resourceList{}, resourceNames{}, "", err
+			return resourceList{}, resourceNames{}, submitDetails{}, err
 		}
 		resources, names, err := buildSubmitResources(run, runBytes, opts)
-		return resources, names, run.RunID, err
+		return resources, names, submitDetails{RunID: run.RunID, ResultStore: run.ResultStore}, err
 	default:
-		return resourceList{}, resourceNames{}, "", fmt.Errorf("unsupported run document kind %q", kind)
+		return resourceList{}, resourceNames{}, submitDetails{}, fmt.Errorf("unsupported run document kind %q", kind)
 	}
+}
+
+func runtimeReportFromLogs(logs []byte) (fleet.RuntimeReport, bool) {
+	for offset := 0; offset < len(logs); {
+		start := bytes.IndexByte(logs[offset:], '{')
+		if start < 0 {
+			break
+		}
+		start += offset
+		var report fleet.RuntimeReport
+		if err := json.NewDecoder(bytes.NewReader(logs[start:])).Decode(&report); err == nil && report.Summary.RunID != "" {
+			return report, true
+		}
+		offset = start + 1
+	}
+	return fleet.RuntimeReport{}, false
+}
+
+func buildkiteRunAnnotation(details submitDetails, report fleet.RuntimeReport, runErr error, resultURLPrefix string) string {
+	state := report.Summary.State
+	if state == "" {
+		if runErr != nil {
+			state = "failed"
+		} else {
+			state = "unknown"
+		}
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "### SporeVM run `%s`: %s\n\n", details.RunID, state)
+	if report.Summary.RunID != "" {
+		fmt.Fprintf(&body, "| children | succeeded | failed | attempts |\n| ---: | ---: | ---: | ---: |\n| %d | %d | %d | %d |\n\n",
+			report.Summary.ChildCount,
+			report.Summary.SucceededChildren,
+			report.Summary.FailedChildren,
+			report.Summary.AttemptCount,
+		)
+	}
+	if resultURLPrefix != "" {
+		fmt.Fprintf(&body, "[Child result objects](%s)\n", resultURLPrefix)
+	} else if details.ResultStore != "" {
+		fmt.Fprintf(&body, "Child result objects: `%s`\n", details.ResultStore)
+	}
+	if runErr != nil {
+		fmt.Fprintf(&body, "\nCoordinator: `%s`\n", runErr)
+	}
+	return body.String()
 }
 
 type submitRunKind string

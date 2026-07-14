@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,12 +141,12 @@ func TestBuildSubmitResourcesUsesRunArg(t *testing.T) {
 
 func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 	runBytes := mustJSON(t, testBundleRun("ruby-counter-20260620"))
-	resources, _, runID, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
+	resources, _, details, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
 	if err != nil {
 		t.Fatalf("build submit resources: %v", err)
 	}
-	if runID != "ruby-counter-20260620" {
-		t.Fatalf("runID = %q", runID)
+	if details.RunID != "ruby-counter-20260620" {
+		t.Fatalf("runID = %q", details.RunID)
 	}
 
 	configMap := resources.Items[0].(configMap)
@@ -164,12 +165,12 @@ func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 
 func TestBuildSubmitResourcesFromOptionsInfersRun(t *testing.T) {
 	runBytes := mustJSON(t, testRun("rails-rspec-20260624"))
-	resources, _, runID, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
+	resources, _, details, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))
 	if err != nil {
 		t.Fatalf("build submit resources: %v", err)
 	}
-	if runID != "rails-rspec-20260624" {
-		t.Fatalf("runID = %q", runID)
+	if details.RunID != "rails-rspec-20260624" {
+		t.Fatalf("runID = %q", details.RunID)
 	}
 
 	configMap := resources.Items[0].(configMap)
@@ -275,6 +276,39 @@ func TestJobTerminalState(t *testing.T) {
 				t.Fatalf("state = %+v, want complete=%v failed=%v", state, tc.complete, tc.failed)
 			}
 		})
+	}
+}
+
+func TestBuildkiteRunAnnotationUsesAggregateReportAndResultLink(t *testing.T) {
+	logs := []byte("coordinator log line\n" + `{
+  "summary": {
+    "runID": "rails-rspec-20260624",
+    "state": "failed",
+    "childCount": 100,
+    "succeededChildren": 98,
+    "failedChildren": 2,
+    "attemptCount": 102
+  }
+}` + "\n")
+	report, ok := runtimeReportFromLogs(logs)
+	if !ok {
+		t.Fatal("runtime report was not found in coordinator logs")
+	}
+	annotation := buildkiteRunAnnotation(
+		submitDetails{RunID: "rails-rspec-20260624", ResultStore: "s3://example-results/run/"},
+		report,
+		errors.New("coordinator job failed"),
+		"https://results.example/run/",
+	)
+	for _, want := range []string{
+		"SporeVM run `rails-rspec-20260624`: failed",
+		"| 100 | 98 | 2 | 102 |",
+		"[Child result objects](https://results.example/run/)",
+		"Coordinator: `coordinator job failed`",
+	} {
+		if !strings.Contains(annotation, want) {
+			t.Fatalf("annotation missing %q:\n%s", want, annotation)
+		}
 	}
 }
 

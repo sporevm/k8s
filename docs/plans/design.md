@@ -384,6 +384,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   coordinator Job for either a run or a prebuilt bundle run. The
   submitter infers the run shape and passes run contracts through to
   `spore-coordinator --run`.
+- `sporectl submit --buildkite RUN.json` preserves that execution path, waits
+  for the aggregate result, parses the coordinator report, and posts a compact
+  Buildkite annotation. An optional result-browser URL turns the result object
+  prefix into a link without putting environment-specific locations here.
 - A one-child public busybox run now completes in the Kubernetes adapter
   cell through `sporectl submit`, `spore-coordinator`, private ClusterIP agent
   access, agent-side prepare/fork/pack, local file-bundle handoff, shard
@@ -563,9 +567,12 @@ Done when:
 
 ### Slice 5: CI Submit Profile
 
-Status: not implemented. The current CI pipeline validates and publishes this
-repository; it does not yet submit a SporeVM fan-out run. The intended CLI path
-is `sporectl submit sporevm-run.json`, not a separate `sporectl ci` command.
+Status: the public `sporectl submit --buildkite` profile is implemented. It
+waits for aggregate completion, exits with the run result, and posts aggregate
+counts plus an optional result-browser link. Wiring a private Rails/RSpec run
+into a cluster-authenticated pipeline remains an ops concern. The intended CLI
+path remains `sporectl submit sporevm-run.json`, not a separate `sporectl ci`
+command.
 
 Add the smallest CI-specific submit behavior on top of the run.
 
