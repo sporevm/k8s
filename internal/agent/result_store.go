@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,23 +79,9 @@ func (s *LocalResultStore) TerminalResult(ctx context.Context, run fleet.BundleR
 	}
 	defer file.Close()
 
-	decoder := json.NewDecoder(file)
-	decoder.DisallowUnknownFields()
-	var result fleet.AttemptResult
-	if err := decoder.Decode(&result); err != nil {
-		return fleet.AttemptResult{}, false, fmt.Errorf("%w: decode terminal result: %v", ErrInvalidMachineOutput, err)
-	}
-	var extra struct{}
-	if err := decoder.Decode(&extra); err == nil {
-		return fleet.AttemptResult{}, false, fmt.Errorf("%w: terminal result has multiple JSON documents", ErrInvalidMachineOutput)
-	} else if !errors.Is(err, io.EOF) {
-		return fleet.AttemptResult{}, false, fmt.Errorf("%w: decode trailing terminal result: %v", ErrInvalidMachineOutput, err)
-	}
-	if err := result.Validate(run); err != nil {
+	result, err := decodeTerminalResult(file, run)
+	if err != nil {
 		return fleet.AttemptResult{}, false, err
-	}
-	if !result.Terminal {
-		return fleet.AttemptResult{}, false, fmt.Errorf("%w: committed terminal result is not terminal", ErrInvalidMachineOutput)
 	}
 	return result, true, nil
 }
@@ -149,21 +134,14 @@ func (s *LocalResultStore) pathForURI(raw string) (string, error) {
 	if s == nil || s.Root == "" {
 		return "", ErrResultStoreNotConfigured
 	}
-	parsed, err := url.Parse(raw)
+	bucket, key, err := parseS3ResultURI(raw)
 	if err != nil {
 		return "", err
 	}
-	if parsed.Scheme != "s3" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("unsupported result URI %q", raw)
-	}
-	if unsafeLocalPathSegment(parsed.Host) {
+	if unsafeLocalPathSegment(bucket) {
 		return "", fmt.Errorf("result URI %q contains an unsafe bucket segment", raw)
 	}
-	key := strings.TrimPrefix(parsed.Path, "/")
-	if key == "" {
-		return "", fmt.Errorf("result URI %q has empty object key", raw)
-	}
-	parts := []string{s.Root, parsed.Host}
+	parts := []string{s.Root, bucket}
 	for _, part := range strings.Split(key, "/") {
 		if unsafeLocalPathSegment(part) {
 			return "", fmt.Errorf("result URI %q contains an unsafe path segment", raw)
@@ -171,6 +149,21 @@ func (s *LocalResultStore) pathForURI(raw string) (string, error) {
 		parts = append(parts, part)
 	}
 	return filepath.Join(parts...), nil
+}
+
+func parseS3ResultURI(raw string) (string, string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", "", err
+	}
+	if parsed.Scheme != "s3" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", "", fmt.Errorf("unsupported result URI %q", raw)
+	}
+	key := strings.TrimPrefix(parsed.Path, "/")
+	if key == "" {
+		return "", "", fmt.Errorf("result URI %q has empty object key", raw)
+	}
+	return parsed.Host, key, nil
 }
 
 func unsafeLocalPathSegment(part string) bool {

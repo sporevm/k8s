@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,13 +42,17 @@ func (f *agentURLsFlag) Set(value string) error {
 }
 
 type coordinatorConfig struct {
-	RunPath         string
-	BundleRunPath   string
-	Listen          string
-	ResultStoreRoot string
-	Timeout         time.Duration
-	AgentURLs       agentURLsFlag
-	HTTPClient      *http.Client
+	RunPath              string
+	BundleRunPath        string
+	Listen               string
+	ResultStoreRoot      string
+	ResultStoreBackend   string
+	ResultStoreRegion    string
+	ResultStoreEndpoint  string
+	ResultStorePathStyle bool
+	Timeout              time.Duration
+	AgentURLs            agentURLsFlag
+	HTTPClient           *http.Client
 }
 
 type agentEndpoint struct {
@@ -64,6 +69,10 @@ func main() {
 	flag.StringVar(&cfg.Listen, "listen", envString("SPORE_COORDINATOR_LISTEN", ""), "HTTP listen address for the resident coordinator API")
 	flag.Var(&cfg.AgentURLs, "agent-url", "agent base URL; may be repeated or comma-separated")
 	flag.StringVar(&cfg.ResultStoreRoot, "result-store-root", envString("SPORE_COORDINATOR_RESULT_STORE_ROOT", "/var/lib/sporevm/coordinator-results"), "local root for coordinator terminal prechecks")
+	flag.StringVar(&cfg.ResultStoreBackend, "result-store-backend", envString("SPORE_RESULT_STORE_BACKEND", "local"), "result store backend: local or s3")
+	flag.StringVar(&cfg.ResultStoreRegion, "result-store-region", envString("SPORE_RESULT_STORE_REGION", envString("AWS_REGION", "")), "AWS region for the S3 result store")
+	flag.StringVar(&cfg.ResultStoreEndpoint, "result-store-endpoint", envString("SPORE_RESULT_STORE_ENDPOINT", ""), "optional S3-compatible result store endpoint")
+	flag.BoolVar(&cfg.ResultStorePathStyle, "result-store-path-style", envBool("SPORE_RESULT_STORE_PATH_STYLE", false), "use path-style S3 result store URLs")
 	flag.DurationVar(&cfg.Timeout, "timeout", envDuration("SPORE_COORDINATOR_TIMEOUT", 30*time.Minute), "coordinator run timeout")
 	flag.Parse()
 
@@ -110,7 +119,7 @@ func coordinatorHandler(cfg coordinatorConfig) (http.Handler, error) {
 	if len(cfg.AgentURLs) == 0 {
 		return nil, errors.New("at least one --agent-url or SPORE_AGENT_URLS entry is required")
 	}
-	if cfg.ResultStoreRoot == "" {
+	if (cfg.ResultStoreBackend == "" || cfg.ResultStoreBackend == "local") && cfg.ResultStoreRoot == "" {
 		return nil, errors.New("result store root is required")
 	}
 	if cfg.Timeout <= 0 {
@@ -303,7 +312,13 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 		return err
 	}
 
-	store, err := agent.NewLocalResultStore(cfg.ResultStoreRoot)
+	store, err := agent.NewResultStore(runCtx, agent.ResultStoreConfig{
+		Backend:      cfg.ResultStoreBackend,
+		LocalRoot:    cfg.ResultStoreRoot,
+		Region:       cfg.ResultStoreRegion,
+		Endpoint:     cfg.ResultStoreEndpoint,
+		UsePathStyle: cfg.ResultStorePathStyle,
+	})
 	if err != nil {
 		return fmt.Errorf("create coordinator result store: %w", err)
 	}
@@ -595,6 +610,18 @@ func envDuration(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envBool(name string, fallback bool) bool {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		return fallback
 	}

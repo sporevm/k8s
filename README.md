@@ -40,6 +40,9 @@ created by `sporectl submit`.
 Buildkite steps use the same command with `--buildkite` to wait for aggregate
 completion and post the runtime summary. See [docs/ci.md](docs/ci.md).
 
+Production batch results use conditional S3 writes; local directory mapping is
+kept for tests and smokes. See [docs/results.md](docs/results.md).
+
 Publishing notes live in [docs/publishing.md](docs/publishing.md).
 
 ## Benchmarks

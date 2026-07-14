@@ -186,9 +186,10 @@ python3 scripts/computesdk_sporevm_benchmark.py \
   --iterations 100
 ```
 
-`--result-store-prefix` only needs to be an S3-shaped prefix because the current
-agent maps result documents into its local result-store root. Use a private
-prefix from ops when a live environment has a real object-store backend.
+`--result-store-prefix` is an S3-shaped prefix. Local smokes map it into the
+agent's local result-store root; production cells can use the durable S3
+backend described in [results.md](results.md). Keep live prefixes and workload
+identity in the private ops repository.
 
 This harness measures external sequential TTI through the resident coordinator
 API. A cold-parent sample includes automatic template capture; a template-hit
