@@ -78,6 +78,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: SPOREVM_RUNTIME_DIR
+              value: {{ printf "%s/runtime" .Values.agent.cache.workDir | quote }}
             - name: SPOREVM_KERNEL_CACHE_DIR
               value: {{ .Values.agent.cache.kernelDir | quote }}
             - name: SPOREVM_BUNDLE_CACHE_DIR

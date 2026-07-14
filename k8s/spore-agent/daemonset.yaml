@@ -57,6 +57,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: SPOREVM_RUNTIME_DIR
+              value: /var/lib/sporevm/work/runtime
             - name: SPOREVM_KERNEL_CACHE_DIR
               value: /var/lib/sporevm/kernels
             - name: SPOREVM_BUNDLE_CACHE_DIR
