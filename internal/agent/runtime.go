@@ -201,6 +201,7 @@ type Runner struct {
 	hostClasses      map[string]fleet.HostClass
 	templateMu       sync.Mutex
 	templateIdentity *bootTemplateRuntimeIdentity
+	templateUses     map[string]int
 	sandboxMu        sync.Mutex
 	sandboxes        map[string]func()
 }
@@ -212,12 +213,13 @@ func NewRunner(totalSlots int, opts ...RunnerOption) (*Runner, error) {
 		return nil, err
 	}
 	runner := &Runner{
-		slots:       slots,
-		workRoot:    filepath.Join(os.TempDir(), "sporevm-agent"),
-		backend:     "kvm",
-		now:         func() time.Time { return time.Now().UTC() },
-		hostClasses: make(map[string]fleet.HostClass),
-		sandboxes:   make(map[string]func()),
+		slots:        slots,
+		workRoot:     filepath.Join(os.TempDir(), "sporevm-agent"),
+		backend:      "kvm",
+		now:          func() time.Time { return time.Now().UTC() },
+		hostClasses:  make(map[string]fleet.HostClass),
+		templateUses: make(map[string]int),
+		sandboxes:    make(map[string]func()),
 	}
 	for _, opt := range opts {
 		opt(runner)

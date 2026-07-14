@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sporevm/k8s/internal/fleet"
@@ -133,12 +134,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, pressure fleet.Pressur
 	defer release()
 
 	templateStarted := r.now()
-	template, templateDir, err := r.ensureBootTemplate(ctx, req.Image, req.Memory)
+	template, templateDir, releaseTemplate, err := r.ensureBootTemplate(ctx, req.Image, req.Memory)
 	response.Timings.Template = elapsedMS(templateStarted, r.now())
 	if err != nil {
 		response.Timings.Total = elapsedMS(started, r.now())
 		return response, err
 	}
+	defer releaseTemplate()
 	response.Template = template
 
 	executionStarted := r.now()
@@ -192,12 +194,13 @@ func (r *Runner) CreateSandbox(ctx context.Context, req SandboxCreateRequest, pr
 	}()
 
 	templateStarted := r.now()
-	template, templateDir, err := r.ensureBootTemplate(ctx, req.Image, req.Memory)
+	template, templateDir, releaseTemplate, err := r.ensureBootTemplate(ctx, req.Image, req.Memory)
 	response.Timings.Template = elapsedMS(templateStarted, r.now())
 	if err != nil {
 		response.Timings.Total = elapsedMS(started, r.now())
 		return response, err
 	}
+	defer releaseTemplate()
 	response.Template = template
 
 	restoreStarted := r.now()
@@ -260,14 +263,14 @@ func (r *Runner) RemoveSandbox(ctx context.Context, req RemoveVMRequest) error {
 	return nil
 }
 
-func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory string) (TemplateStatus, string, error) {
+func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory string) (TemplateStatus, string, func(), error) {
 	// ponytail: one lock keeps publication atomic; use per-key locks only if parallel cold builds become necessary.
 	r.templateMu.Lock()
 	defer r.templateMu.Unlock()
 
 	identity, err := r.bootTemplateIdentity(ctx)
 	if err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	key := bootTemplateKey{
 		Schema:    bootTemplateSchema,
@@ -279,7 +282,7 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 	}
 	payload, err := json.Marshal(key)
 	if err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	digest := sha256.Sum256(payload)
 	id := "sha256:" + hex.EncodeToString(digest[:])
@@ -287,17 +290,17 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 	entryDir := filepath.Join(templateRoot, hex.EncodeToString(digest[:]))
 	templateDir := filepath.Join(entryDir, "parent.spore")
 	if bootTemplateReady(templateDir) {
-		return TemplateStatus{ID: id, CacheHit: true}, templateDir, nil
+		return TemplateStatus{ID: id, CacheHit: true}, templateDir, r.leaseBootTemplate(templateDir), nil
 	}
 	if err := os.RemoveAll(entryDir); err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	if err := os.MkdirAll(templateRoot, 0o755); err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	tmpDir, err := os.MkdirTemp(templateRoot, ".build-")
 	if err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	tmpTemplateDir := filepath.Join(tmpDir, "parent.spore")
 	defer r.cleanupTemplateBuild(ctx, tmpDir, tmpTemplateDir)
@@ -309,30 +312,46 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 		Command:    []string{"/bin/true"},
 	})
 	if err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	terminal, err := TerminalEvent(events)
 	if err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	if terminal.Event != "exit" || terminal.ExitCode == nil || *terminal.ExitCode != 0 || !terminal.Captured {
-		return TemplateStatus{}, "", invalidMachineOutput("boot template capture did not exit successfully")
+		return TemplateStatus{}, "", nil, invalidMachineOutput("boot template capture did not exit successfully")
 	}
 	if !bootTemplateReady(tmpTemplateDir) {
-		return TemplateStatus{}, "", invalidMachineOutput("boot template capture did not produce manifest.json")
+		return TemplateStatus{}, "", nil, invalidMachineOutput("boot template capture did not produce manifest.json")
 	}
 	metadata, err := json.MarshalIndent(key, "", "  ")
 	if err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	metadata = append(metadata, '\n')
 	if err := os.WriteFile(filepath.Join(tmpDir, "template.json"), metadata, 0o644); err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
 	if err := os.Rename(tmpDir, entryDir); err != nil {
-		return TemplateStatus{}, "", err
+		return TemplateStatus{}, "", nil, err
 	}
-	return TemplateStatus{ID: id, CacheHit: false}, templateDir, nil
+	return TemplateStatus{ID: id, CacheHit: false}, templateDir, r.leaseBootTemplate(templateDir), nil
+}
+
+// leaseBootTemplate records an active consumer while templateMu is held.
+func (r *Runner) leaseBootTemplate(templateDir string) func() {
+	r.templateUses[templateDir]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.templateMu.Lock()
+			defer r.templateMu.Unlock()
+			r.templateUses[templateDir]--
+			if r.templateUses[templateDir] == 0 {
+				delete(r.templateUses, templateDir)
+			}
+		})
+	}
 }
 
 func (r *Runner) cleanupTemplateBuild(ctx context.Context, tmpDir, templateDir string) {
