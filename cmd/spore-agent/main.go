@@ -41,6 +41,10 @@ func main() {
 	var memoryReserveBytes int64
 	var sporePath string
 	var resultStoreRoot string
+	var resultStoreBackend string
+	var resultStoreRegion string
+	var resultStoreEndpoint string
+	var resultStorePathStyle bool
 	var workRoot string
 	var bundleCacheRoot string
 	var rootFSCacheRoot string
@@ -59,6 +63,10 @@ func main() {
 	flag.Int64Var(&memoryReserveBytes, "memory-reserve-bytes", envInt64("SPORE_AGENT_MEMORY_RESERVE_BYTES", defaultMemoryReserveBytes), "memory held back from slot calculation for the agent and kernel")
 	flag.StringVar(&sporePath, "spore-path", envString("SPORE_PATH", "spore"), "path to the spore CLI")
 	flag.StringVar(&resultStoreRoot, "result-store-root", envString("SPORE_RESULT_STORE_ROOT", "/var/lib/sporevm/results"), "local root for S3-shaped result documents")
+	flag.StringVar(&resultStoreBackend, "result-store-backend", envString("SPORE_RESULT_STORE_BACKEND", "local"), "result store backend: local or s3")
+	flag.StringVar(&resultStoreRegion, "result-store-region", envString("SPORE_RESULT_STORE_REGION", envString("AWS_REGION", "")), "AWS region for the S3 result store")
+	flag.StringVar(&resultStoreEndpoint, "result-store-endpoint", envString("SPORE_RESULT_STORE_ENDPOINT", ""), "optional S3-compatible result store endpoint")
+	flag.BoolVar(&resultStorePathStyle, "result-store-path-style", envBool("SPORE_RESULT_STORE_PATH_STYLE", false), "use path-style S3 result store URLs")
 	flag.StringVar(&workRoot, "work-root", envString("SPORE_WORK_ROOT", "/var/lib/sporevm/work"), "local root for materialized child spores")
 	flag.StringVar(&bundleCacheRoot, "bundle-cache-root", envString("SPORE_BUNDLE_CACHE_ROOT", "/var/lib/sporevm/bundle-cache"), "bundle cache root used for status")
 	flag.StringVar(&rootFSCacheRoot, "rootfs-cache-root", envString("SPORE_ROOTFS_CACHE_ROOT", "/var/lib/sporevm/rootfs-cache"), "rootfs cache root used for status")
@@ -97,7 +105,13 @@ func main() {
 		log.Printf("clamped execution slots by cgroup memory requested_slots=%d effective_slots=%d child_memory_bytes=%d memory_reserve_bytes=%d", slots, effectiveSlots, childMemoryBytes, memoryReserveBytes)
 	}
 
-	store, err := agent.NewLocalResultStore(resultStoreRoot)
+	store, err := agent.NewResultStore(context.Background(), agent.ResultStoreConfig{
+		Backend:      resultStoreBackend,
+		LocalRoot:    resultStoreRoot,
+		Region:       resultStoreRegion,
+		Endpoint:     resultStoreEndpoint,
+		UsePathStyle: resultStorePathStyle,
+	})
 	if err != nil {
 		log.Fatalf("create result store: %v", err)
 	}

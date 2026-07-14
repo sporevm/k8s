@@ -29,21 +29,26 @@ const (
 )
 
 type submitOptions struct {
-	InputPath       string
-	Namespace       string
-	Image           string
-	ImagePullPolicy string
-	AgentURLs       stringsFlag
-	ResultStoreRoot string
-	Timeout         time.Duration
-	Kubectl         string
-	Wait            bool
-	Logs            bool
-	DryRun          bool
-	Replace         bool
-	Buildkite       bool
-	BuildkiteAgent  string
-	ResultURLPrefix string
+	InputPath            string
+	Namespace            string
+	Image                string
+	ImagePullPolicy      string
+	AgentURLs            stringsFlag
+	ResultStoreRoot      string
+	ResultStoreBackend   string
+	ResultStoreRegion    string
+	ResultStoreEndpoint  string
+	ResultStorePathStyle bool
+	ServiceAccountName   string
+	Timeout              time.Duration
+	Kubectl              string
+	Wait                 bool
+	Logs                 bool
+	DryRun               bool
+	Replace              bool
+	Buildkite            bool
+	BuildkiteAgent       string
+	ResultURLPrefix      string
 }
 
 type submitDetails struct {
@@ -90,15 +95,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func runSubmit(args []string, stdout, stderr io.Writer) error {
 	opts := submitOptions{
-		Namespace:       defaultNamespace,
-		Image:           envString("SPORE_RUNTIME_IMAGE", defaultImage),
-		ImagePullPolicy: defaultRuntimePolicy,
-		ResultStoreRoot: defaultResultRoot,
-		Timeout:         30 * time.Minute,
-		Kubectl:         envString("KUBECTL", "kubectl"),
-		Wait:            true,
-		Logs:            true,
-		BuildkiteAgent:  envString("BUILDKITE_AGENT_BIN", "buildkite-agent"),
+		Namespace:          defaultNamespace,
+		Image:              envString("SPORE_RUNTIME_IMAGE", defaultImage),
+		ImagePullPolicy:    defaultRuntimePolicy,
+		ResultStoreRoot:    defaultResultRoot,
+		ResultStoreBackend: "local",
+		Timeout:            30 * time.Minute,
+		Kubectl:            envString("KUBECTL", "kubectl"),
+		Wait:               true,
+		Logs:               true,
+		BuildkiteAgent:     envString("BUILDKITE_AGENT_BIN", "buildkite-agent"),
 	}
 
 	fs := flag.NewFlagSet("submit", flag.ContinueOnError)
@@ -112,6 +118,11 @@ func runSubmit(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&opts.ImagePullPolicy, "image-pull-policy", opts.ImagePullPolicy, "coordinator image pull policy")
 	fs.Var(&opts.AgentURLs, "agent-url", "agent base URL; may be repeated or comma-separated")
 	fs.StringVar(&opts.ResultStoreRoot, "result-store-root", opts.ResultStoreRoot, "coordinator local result-store root")
+	fs.StringVar(&opts.ResultStoreBackend, "result-store-backend", opts.ResultStoreBackend, "result store backend: local or s3")
+	fs.StringVar(&opts.ResultStoreRegion, "result-store-region", opts.ResultStoreRegion, "AWS region for the S3 result store")
+	fs.StringVar(&opts.ResultStoreEndpoint, "result-store-endpoint", opts.ResultStoreEndpoint, "optional S3-compatible result store endpoint")
+	fs.BoolVar(&opts.ResultStorePathStyle, "result-store-path-style", opts.ResultStorePathStyle, "use path-style S3 result store URLs")
+	fs.StringVar(&opts.ServiceAccountName, "service-account", opts.ServiceAccountName, "service account for the coordinator Job")
 	fs.DurationVar(&opts.Timeout, "timeout", opts.Timeout, "coordinator and kubectl wait timeout")
 	fs.StringVar(&opts.Kubectl, "kubectl", opts.Kubectl, "kubectl binary")
 	fs.BoolVar(&opts.Wait, "wait", opts.Wait, "wait for the coordinator Job to complete")
@@ -392,6 +403,13 @@ func buildSubmitResourcesForPayload(payload submitPayload, opts submitOptions) (
 	if opts.ImagePullPolicy == "" {
 		return resourceList{}, resourceNames{}, errors.New("image pull policy must not be empty")
 	}
+	backend := resultStoreBackend(opts)
+	if backend != "local" && backend != "s3" {
+		return resourceList{}, resourceNames{}, fmt.Errorf("unsupported result store backend %q", backend)
+	}
+	if backend == "local" && opts.ResultStoreRoot == "" {
+		return resourceList{}, resourceNames{}, errors.New("local result store root must not be empty")
+	}
 	if len(opts.AgentURLs) == 0 {
 		return resourceList{}, resourceNames{}, errors.New("at least one agent URL is required")
 	}
@@ -432,7 +450,17 @@ func coordinatorJob(names resourceNames, labels map[string]string, opts submitOp
 	args := []string{
 		"--" + payload.CoordinatorFlag + "=" + payload.MountPath,
 		"--result-store-root=" + opts.ResultStoreRoot,
+		"--result-store-backend=" + resultStoreBackend(opts),
 		"--timeout=" + opts.Timeout.String(),
+	}
+	if opts.ResultStoreRegion != "" {
+		args = append(args, "--result-store-region="+opts.ResultStoreRegion)
+	}
+	if opts.ResultStoreEndpoint != "" {
+		args = append(args, "--result-store-endpoint="+opts.ResultStoreEndpoint)
+	}
+	if opts.ResultStorePathStyle {
+		args = append(args, "--result-store-path-style=true")
 	}
 	for _, url := range opts.AgentURLs {
 		args = append(args, "--agent-url="+url)
@@ -453,6 +481,7 @@ func coordinatorJob(names resourceNames, labels map[string]string, opts submitOp
 				Spec: podSpec{
 					RestartPolicy:                "Never",
 					AutomountServiceAccountToken: boolPtr(false),
+					ServiceAccountName:           opts.ServiceAccountName,
 					NodeSelector: map[string]string{
 						"kubernetes.io/arch": "arm64",
 						"sporevm.io/agent":   "true",
@@ -488,6 +517,13 @@ func coordinatorJob(names resourceNames, labels map[string]string, opts submitOp
 			},
 		},
 	}
+}
+
+func resultStoreBackend(opts submitOptions) string {
+	if opts.ResultStoreBackend == "" {
+		return "local"
+	}
+	return opts.ResultStoreBackend
 }
 
 func kubernetesName(prefix, raw string) string {
@@ -672,6 +708,7 @@ type podTemplate struct {
 type podSpec struct {
 	RestartPolicy                string            `json:"restartPolicy"`
 	AutomountServiceAccountToken *bool             `json:"automountServiceAccountToken,omitempty"`
+	ServiceAccountName           string            `json:"serviceAccountName,omitempty"`
 	NodeSelector                 map[string]string `json:"nodeSelector,omitempty"`
 	Tolerations                  []toleration      `json:"tolerations,omitempty"`
 	Containers                   []container       `json:"containers"`

@@ -53,6 +53,14 @@ spec:
             - --slots={{ .Values.agent.slots }}
             - --spore-path={{ .Values.agent.sporePath }}
             - --result-store-root={{ .Values.agent.cache.resultDir }}
+            - --result-store-backend={{ .Values.agent.resultStore.backend }}
+            {{- if .Values.agent.resultStore.region }}
+            - --result-store-region={{ .Values.agent.resultStore.region }}
+            {{- end }}
+            {{- if .Values.agent.resultStore.endpoint }}
+            - --result-store-endpoint={{ .Values.agent.resultStore.endpoint }}
+            {{- end }}
+            - --result-store-path-style={{ .Values.agent.resultStore.pathStyle }}
             - --work-root={{ .Values.agent.cache.workDir }}
             - --bundle-cache-root={{ .Values.agent.cache.bundleDir }}
             - --rootfs-cache-root={{ .Values.agent.cache.rootfsDir }}

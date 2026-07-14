@@ -46,6 +46,11 @@ agent:
     workDir: /var/lib/sporevm/work
     templateRetain: 16
     templateReconcileInterval: 15m
+  resultStore:
+    backend: local
+    region: ""
+    endpoint: ""
+    pathStyle: false
   kvm:
     hostPath: /dev/kvm
   registryCA:

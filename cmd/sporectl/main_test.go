@@ -139,6 +139,42 @@ func TestBuildSubmitResourcesUsesRunArg(t *testing.T) {
 	}
 }
 
+func TestBuildSubmitResourcesConfiguresS3ResultStore(t *testing.T) {
+	run := testRun("rails-rspec-s3")
+	resources, _, err := buildSubmitResources(run, mustJSON(t, run), submitOptions{
+		Namespace:            "sporevm-system",
+		Image:                "example.com/sporevm-k8s-runtime:dev",
+		ImagePullPolicy:      "Always",
+		AgentURLs:            stringsFlag{"http://spore-agent.sporevm-system.svc.cluster.local:8080"},
+		ResultStoreRoot:      "/unused",
+		ResultStoreBackend:   "s3",
+		ResultStoreRegion:    "example-region-1",
+		ResultStoreEndpoint:  "https://objects.example.test",
+		ResultStorePathStyle: true,
+		ServiceAccountName:   "spore-coordinator",
+		Timeout:              30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("build resources: %v", err)
+	}
+	payload, err := json.Marshal(resources)
+	if err != nil {
+		t.Fatalf("marshal resources: %v", err)
+	}
+	body := string(payload)
+	for _, want := range []string{
+		`--result-store-backend=s3`,
+		`--result-store-region=example-region-1`,
+		`--result-store-endpoint=https://objects.example.test`,
+		`--result-store-path-style=true`,
+		`"serviceAccountName":"spore-coordinator"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("resource JSON missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 	runBytes := mustJSON(t, testBundleRun("ruby-counter-20260620"))
 	resources, _, details, err := buildSubmitResourcesFromOptions(testSubmitOptions(t, runBytes))

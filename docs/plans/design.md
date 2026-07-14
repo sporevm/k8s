@@ -388,6 +388,10 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
   for the aggregate result, parses the coordinator report, and posts a compact
   Buildkite annotation. An optional result-browser URL turns the result object
   prefix into a link without putting environment-specific locations here.
+- Agents and batch coordinators can now use a durable S3 result store through
+  the same `ResultStore` contract as local smokes. Attempts and terminals use
+  conditional `PutObject` with `If-None-Match: *`, so retries cannot overwrite
+  an existing attempt or committed terminal object.
 - A one-child public busybox run now completes in the Kubernetes adapter
   cell through `sporectl submit`, `spore-coordinator`, private ClusterIP agent
   access, agent-side prepare/fork/pack, local file-bundle handoff, shard
@@ -702,6 +706,8 @@ Done when:
 - CI fan-out is the first workload, not the exclusive contract.
 - Do not create one Kubernetes object per child.
 - Keep per-child results outside Kubernetes.
+- Use S3 conditional writes as the first durable result backend; keep the local
+  URI mapper for deterministic tests and smokes.
 - Keep KVM, credentials, caches, and SporeVM execution inside agents.
 - `/runs` means one fresh ephemeral child and one command. `/sandboxes` means a
   caller-owned persistent named child with repeated execs.
@@ -744,10 +750,8 @@ Done when:
 
 ## Open Questions
 
-- What is the first durable result backend: S3 conditional writes, a small API,
-  or the existing bundle store?
-- How much CI UI polish is needed for the first useful demo: annotation
-  only, artifact links, or a richer summary document?
+- How much CI UI polish is needed beyond the aggregate annotation and result
+  browser link?
 
 ## Key Learnings From Pressure-Testing
 
