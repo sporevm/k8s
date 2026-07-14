@@ -62,6 +62,17 @@ SPORE_DEV_ITERATIONS=10 \
 mise run dev:runtime-probe
 ```
 
+After deploying a runtime image, run the isolated in-cluster acceptance path:
+
+```bash
+mise run release:accept
+```
+
+It records the pulled image digest and SporeVM version, verifies one cold parent
+followed by a template hit, exercises first and warm execs in a named sandbox,
+then releases the template pins and fails if the sandbox slot or temporary pods
+remain allocated.
+
 ## Development
 
 ```bash

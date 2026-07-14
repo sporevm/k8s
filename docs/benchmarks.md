@@ -78,6 +78,23 @@ archive to copy its CLI and runtime assets into the temporary pod. This tests a
 new SporeVM release together with local adapter binaries without publishing a
 Kubernetes runtime image.
 
+Once an image is deployed, run its release acceptance separately from latency
+benchmarking:
+
+```bash
+mise run release:accept
+```
+
+The command discovers the deployed runtime image and a compatible node, starts
+an isolated agent and coordinator from that image, and drives the API from a
+second pod on the same node. It verifies the pulled image ID and SporeVM
+version, a cold-parent `/runs` request followed by a template hit, named sandbox
+create plus first and warm exec, restored slot capacity after delete, durable
+template-pin release, and deletion of both temporary pods. The JSON evidence is
+written to `results/runtime-acceptance/latest.json` by default. Use
+`SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE` and
+`SPORE_ACCEPTANCE_EXPECT_SPORE_VERSION` to make provenance mismatches fatal.
+
 For coordinator-only functional checks, another short loop is to run the
 coordinator API locally and port-forward to the in-cluster agent:
 

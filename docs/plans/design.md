@@ -106,6 +106,13 @@ The response separates agent wall time from SporeVM runtime phases. Alongside
 `runtimeProbeMs` from the terminal event. This keeps VM start, guest connection,
 command completion, and compatibility probing independently measurable.
 
+Published runtime acceptance uses an isolated agent and coordinator from the
+deployed image on a compatible node. A same-node client verifies image and
+SporeVM provenance, cold-parent and template-hit `/runs`, named sandbox create,
+first and warm exec, slot recovery, durable template-pin release, and cleanup
+of the temporary Kubernetes resources. This keeps release proof reproducible
+without making a Kubernetes object part of an ordinary run request.
+
 `POST /sandboxes` accepts `name`, `image`, and optional `memory`; interactive
 requests default to `1024mb`. It ensures the
 same boot template, restores a named child, treats successful SporeVM restore
