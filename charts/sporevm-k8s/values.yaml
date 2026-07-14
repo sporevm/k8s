@@ -44,6 +44,8 @@ agent:
     rootfsDir: /var/lib/sporevm/rootfs-cache
     resultDir: /var/lib/sporevm/results
     workDir: /var/lib/sporevm/work
+    templateRetain: 16
+    templateReconcileInterval: 15m
   kvm:
     hostPath: /dev/kvm
   registryCA:

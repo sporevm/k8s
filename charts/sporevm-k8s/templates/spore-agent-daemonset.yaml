@@ -56,6 +56,8 @@ spec:
             - --work-root={{ .Values.agent.cache.workDir }}
             - --bundle-cache-root={{ .Values.agent.cache.bundleDir }}
             - --rootfs-cache-root={{ .Values.agent.cache.rootfsDir }}
+            - --template-retain={{ .Values.agent.cache.templateRetain }}
+            - --template-reconcile-interval={{ .Values.agent.cache.templateReconcileInterval }}
             {{- if .Values.agent.region }}
             - --region={{ .Values.agent.region }}
             {{- end }}

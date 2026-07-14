@@ -22,6 +22,9 @@ import (
 const (
 	defaultChildMemoryBytes   = int64(512 * 1024 * 1024)
 	defaultMemoryReserveBytes = int64(256 * 1024 * 1024)
+	defaultTemplateRetain     = 16
+	defaultTemplateReconcile  = 15 * time.Minute
+	templateReconcileTimeout  = 2 * time.Minute
 )
 
 var cgroupMemoryLimitFiles = []string{
@@ -45,6 +48,8 @@ func main() {
 	var backend string
 	var childTimeout time.Duration
 	var allowMetadataOnlyRootFS bool
+	var templateRetain int
+	var templateReconcileInterval time.Duration
 
 	flag.StringVar(&listen, "listen", envString("SPORE_AGENT_LISTEN", ":8080"), "HTTP listen address")
 	flag.StringVar(&agentID, "agent-id", envString("SPORE_AGENT_ID", envString("HOSTNAME", "spore-agent-local")), "stable fleet agent id")
@@ -61,6 +66,8 @@ func main() {
 	flag.StringVar(&backend, "backend", envString("SPORE_BACKEND", "kvm"), "SporeVM backend used for resume")
 	flag.DurationVar(&childTimeout, "child-timeout", envDuration("SPORE_AGENT_CHILD_TIMEOUT", 0), "optional per-child resume timeout; 0 disables the agent-side timeout")
 	flag.BoolVar(&allowMetadataOnlyRootFS, "allow-metadata-only-rootfs", envBool("SPORE_ALLOW_METADATA_ONLY_ROOTFS", false), "allow metadata-only rootfs pulls")
+	flag.IntVar(&templateRetain, "template-retain", envInt("SPORE_AGENT_TEMPLATE_RETAIN", defaultTemplateRetain), "newest completed boot templates retained on this agent")
+	flag.DurationVar(&templateReconcileInterval, "template-reconcile-interval", envDuration("SPORE_AGENT_TEMPLATE_RECONCILE_INTERVAL", defaultTemplateReconcile), "interval between boot-template reconciliation passes; 0 disables periodic reconciliation")
 	flag.Parse()
 
 	for _, root := range []string{resultStoreRoot, workRoot, bundleCacheRoot, rootFSCacheRoot} {
@@ -71,6 +78,12 @@ func main() {
 
 	if slots < 1 {
 		log.Fatalf("slots must be >= 1: slots=%d", slots)
+	}
+	if templateRetain < 0 {
+		log.Fatalf("template-retain must be >= 0: template_retain=%d", templateRetain)
+	}
+	if templateReconcileInterval < 0 {
+		log.Fatalf("template-reconcile-interval must be >= 0: template_reconcile_interval=%s", templateReconcileInterval)
 	}
 	memoryLimitFiles := cgroupMemoryLimitFileCandidates("/proc/self/cgroup", "/sys/fs/cgroup", cgroupMemoryLimitFiles)
 	effectiveSlots, memoryLimited, err := effectiveSlotsForCgroup(slots, childMemoryBytes, memoryReserveBytes, memoryLimitFiles)
@@ -100,6 +113,35 @@ func main() {
 	if err != nil {
 		log.Fatalf("create runner: %v", err)
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	reconcileTemplates := func() {
+		reconcileCtx, cancel := context.WithTimeout(ctx, templateReconcileTimeout)
+		defer cancel()
+		result, err := runner.ReconcileBootTemplates(reconcileCtx, templateRetain)
+		if err != nil {
+			log.Printf("reconcile boot templates: %v", err)
+		}
+		if result.RemovedBuilds > 0 || result.RemovedTemplates > 0 {
+			log.Printf("reconciled boot templates removed_builds=%d removed_templates=%d retained_templates=%d", result.RemovedBuilds, result.RemovedTemplates, result.RetainedTemplates)
+		}
+	}
+	reconcileTemplates()
+	if templateReconcileInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(templateReconcileInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					reconcileTemplates()
+				}
+			}
+		}()
+	}
 	handler, err := (&agenthttp.Server{
 		Runner:                  runner,
 		Client:                  spore,
@@ -114,9 +156,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("create handler: %v", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	server := &http.Server{
 		Addr:              listen,

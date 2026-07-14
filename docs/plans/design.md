@@ -130,6 +130,14 @@ packing, pulling, or writing generation metadata.
 SporeVM 0.13.0 disk-backed saves own durable host-cache pins, so failed
 temporary captures are removed through `spore rm --spore`; raw directory
 deletion would leak the pin.
+The agent reconciles this cache before serving and periodically thereafter.
+Each pass removes abandoned builds and incomplete entries, keeps the newest 16
+completed templates by default, skips templates currently restoring a child,
+and releases every evicted durable pin through SporeVM before deleting its
+metadata. Operators can set the count and interval with the chart's
+`agent.cache.templateRetain` and `agent.cache.templateReconcileInterval`
+values; a zero interval keeps startup reconciliation but disables the periodic
+pass.
 The current boot-template capture requires `/bin/true` in the selected image; a
 commandless capture primitive is deferred.
 
@@ -712,7 +720,7 @@ Done when:
 - Public multi-tenant hardening.
 - Non-idempotent side-effect protocols beyond terminal result commits.
 - Richer cache peer selection and preheat scheduling.
-- Template cache garbage collection and size limits.
+- Template cache byte-size limits and pressure-aware eviction.
 - Durable sandbox ownership routing and restart reconciliation across multiple
   agents.
 - Explicit application-template creation and versioning, if automatic boot
