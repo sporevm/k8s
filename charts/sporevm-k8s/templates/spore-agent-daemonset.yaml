@@ -66,6 +66,7 @@ spec:
             - --rootfs-cache-root={{ .Values.agent.cache.rootfsDir }}
             - --template-retain={{ .Values.agent.cache.templateRetain }}
             - --template-reconcile-interval={{ .Values.agent.cache.templateReconcileInterval }}
+            - --reset-runtime-on-start=true
             {{- if .Values.agent.region }}
             - --region={{ .Values.agent.region }}
             {{- end }}
