@@ -1,0 +1,24 @@
+{
+  "name": "@sporevm/computesdk-k8s",
+  "version": "0.1.0",
+  "description": "ComputeSDK sandbox adapter for the SporeVM Kubernetes API",
+  "type": "module",
+  "exports": "./provider.mjs",
+  "types": "./provider.d.ts",
+  "files": [
+    "provider.mjs",
+    "provider.d.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sporevm/k8s.git",
+    "directory": "integrations/computesdk"
+  },
+  "scripts": {
+    "test": "node --test provider.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -5,6 +5,7 @@ Kubernetes adapter for running SporeVM fan-out cells.
 This repo owns the public product surface:
 
 - `spore-agent`, `spore-coordinator`, and `sporectl`
+- the `@sporevm/computesdk-k8s` sandbox adapter
 - fleet schemas and examples
 - reusable Kubernetes bases
 - the `sporevm-k8s` Helm chart
@@ -52,6 +53,10 @@ It labels the first automatic template capture separately from later immutable
 template hits and writes ComputeSDK-style JSON under `results/sequential_tti/`. See
 [docs/benchmarks.md](docs/benchmarks.md) for the live cluster command shape and
 scope.
+
+The actual upstream sequential benchmark can use the adapter under
+`integrations/computesdk`; `docs/benchmarks.md` records the checkout and runner
+command.
 
 To test a published SporeVM archive before cutting a Kubernetes runtime release,
 pass its local path to the same probe:

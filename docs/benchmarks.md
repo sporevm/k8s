@@ -1,11 +1,14 @@
 # Benchmarks
 
-This repo has two benchmark paths:
+This repo has three benchmark paths:
 
 - `mise run fleet:benchmark:synthetic` exercises the coordinator with
   deterministic local agents.
 - `scripts/computesdk_sporevm_benchmark.py` runs a live Kubernetes benchmark
   shaped like the ComputeSDK sandbox TTI benchmark.
+- `mise run fleet:benchmark:computesdk-upstream` imports the current upstream
+  ComputeSDK sequential runner and executes it through the SporeVM provider in
+  `integrations/computesdk`.
 
 The live ComputeSDK-shaped path is intentionally narrow. Each API iteration
 posts a digest-pinned Node image and `node -v`, executes the command in one
@@ -37,6 +40,27 @@ sees exactly one compatible agent, because named VM state is local to one agent.
 Sandbox creation waits for SporeVM's named restore to report exec-ready, so
 restore startup is charged to create rather than the first measured caller
 command.
+
+That named lifecycle is also the exact upstream ComputeSDK mapping. The adapter
+implements `sandbox.create()` with `POST /sandboxes`, `runCommand()` with the
+named exec endpoint, and `destroy()` with sandbox delete. Upstream starts TTI
+before create and stops it after the first successful `node -v`; its identity
+probe and destroy run after the timing boundary. This measures sandbox restore
+plus first exec, not the one-shot `/runs` path.
+
+To run the upstream implementation, use a current checkout with its locked npm
+dependencies installed:
+
+```bash
+COMPUTESDK_BENCHMARKS_DIR=/path/to/computesdk-benchmarks \
+SPORE_API_URL=http://spore-api:8081 \
+SPORE_COMPUTESDK_ITERATIONS=100 \
+mise run fleet:benchmark:computesdk-upstream
+```
+
+Run this from a pod or host with direct cluster networking for reportable
+latency. A `kubectl port-forward` is sufficient to prove API compatibility,
+but its transport overhead invalidates the TTI result.
 
 The `--sandbox-pool` mode pre-creates one named sandbox per iteration, executes each
 VM exactly once in the measured loop, and deletes the pool at the end. This is

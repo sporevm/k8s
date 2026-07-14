@@ -121,6 +121,13 @@ completion as exec-ready, and keeps that child alive for
 one execution slot for its lifetime; its filesystem state survives multiple
 exec calls.
 
+The public ComputeSDK adapter maps its sandbox contract directly onto this
+lifecycle: create restores a named child, `runCommand` decodes exec events, and
+destroy deletes the child and releases its slot. The upstream sequential
+benchmark therefore measures sandbox create plus first exec with its own
+identity and cleanup checks unchanged; `/runs` remains the distinct one-shot
+fresh-child contract.
+
 Boot templates are automatic, immutable cache entries. Their identity includes
 the image digest, memory, backend, SporeVM version, host class, and template
 schema version. Mutable image tags are rejected so a cache hit cannot silently
