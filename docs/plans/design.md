@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-16
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
