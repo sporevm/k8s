@@ -25,6 +25,8 @@ const (
 	defaultTemplateRetain     = 16
 	defaultTemplateReconcile  = 15 * time.Minute
 	templateReconcileTimeout  = 2 * time.Minute
+	sporeRuntimeDirEnv        = "SPOREVM_RUNTIME_DIR"
+	sporeRuntimeAuthorityFile = "local-ram-backing.key"
 )
 
 var cgroupMemoryLimitFiles = []string{
@@ -54,6 +56,7 @@ func main() {
 	var allowMetadataOnlyRootFS bool
 	var templateRetain int
 	var templateReconcileInterval time.Duration
+	var resetRuntimeOnStart bool
 
 	flag.StringVar(&listen, "listen", envString("SPORE_AGENT_LISTEN", ":8080"), "HTTP listen address")
 	flag.StringVar(&agentID, "agent-id", envString("SPORE_AGENT_ID", envString("HOSTNAME", "spore-agent-local")), "stable fleet agent id")
@@ -76,11 +79,21 @@ func main() {
 	flag.BoolVar(&allowMetadataOnlyRootFS, "allow-metadata-only-rootfs", envBool("SPORE_ALLOW_METADATA_ONLY_ROOTFS", false), "allow metadata-only rootfs pulls")
 	flag.IntVar(&templateRetain, "template-retain", envInt("SPORE_AGENT_TEMPLATE_RETAIN", defaultTemplateRetain), "newest completed boot templates retained on this agent")
 	flag.DurationVar(&templateReconcileInterval, "template-reconcile-interval", envDuration("SPORE_AGENT_TEMPLATE_RECONCILE_INTERVAL", defaultTemplateReconcile), "interval between boot-template reconciliation passes; 0 disables periodic reconciliation")
+	flag.BoolVar(&resetRuntimeOnStart, "reset-runtime-on-start", envBool("SPORE_AGENT_RESET_RUNTIME_ON_START", false), "remove process-local SporeVM runtime state before serving while retaining local backing authority")
 	flag.Parse()
 
 	for _, root := range []string{resultStoreRoot, workRoot, bundleCacheRoot, rootFSCacheRoot} {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			log.Fatalf("create %s: %v", root, err)
+		}
+	}
+	if resetRuntimeOnStart {
+		runtimeRoot := os.Getenv(sporeRuntimeDirEnv)
+		if runtimeRoot == "" {
+			log.Fatalf("--reset-runtime-on-start requires %s", sporeRuntimeDirEnv)
+		}
+		if err := resetSporeRuntimeDir(workRoot, runtimeRoot); err != nil {
+			log.Fatalf("reset SporeVM runtime directory: %v", err)
 		}
 	}
 
@@ -189,6 +202,61 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("serve HTTP: %v", err)
 	}
+}
+
+func resetSporeRuntimeDir(workRoot, root string) error {
+	absWorkRoot, err := filepath.Abs(workRoot)
+	if err != nil {
+		return err
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(absWorkRoot, absRoot)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("runtime root %s must be beneath work root %s", root, workRoot)
+	}
+	root = absRoot
+
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("runtime root %s is not a directory", root)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == sporeRuntimeAuthorityFile {
+			authorityPath := filepath.Join(root, entry.Name())
+			entryInfo, err := os.Lstat(authorityPath)
+			if err != nil {
+				return err
+			}
+			if !entryInfo.Mode().IsRegular() {
+				return fmt.Errorf("runtime authority %s is not a regular file", authorityPath)
+			}
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func effectiveSlotsForCgroup(requested int, childMemoryBytes int64, reserveBytes int64, files []string) (int, bool, error) {

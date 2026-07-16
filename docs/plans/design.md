@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-16
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -145,6 +145,11 @@ metadata. Operators can set the count and interval with the chart's
 `agent.cache.templateRetain` and `agent.cache.templateReconcileInterval`
 values; a zero interval keeps startup reconciliation but disables the periodic
 pass.
+The agent also keeps SporeVM's local RAM-backing authority under the persistent
+work root so retained template proofs survive pod replacement. Before serving,
+it removes every other entry from that runtime directory: named VM metadata,
+PIDs, sockets, fork batches, and active leases are process-local and must not
+cross pod PID namespaces.
 The current boot-template capture requires `/bin/true` in the selected image; a
 commandless capture primitive is deferred.
 

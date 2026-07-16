@@ -51,12 +51,15 @@ spec:
             - --work-root=/var/lib/sporevm/work
             - --bundle-cache-root=/var/lib/sporevm/bundle-cache
             - --rootfs-cache-root=/var/lib/sporevm/rootfs-cache
+            - --reset-runtime-on-start=true
             - --backend=kvm
           env:
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: SPOREVM_RUNTIME_DIR
+              value: /var/lib/sporevm/work/runtime
             - name: SPOREVM_KERNEL_CACHE_DIR
               value: /var/lib/sporevm/kernels
             - name: SPOREVM_BUNDLE_CACHE_DIR

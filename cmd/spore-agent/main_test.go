@@ -6,6 +6,96 @@ import (
 	"testing"
 )
 
+func TestResetSporeRuntimeDirRetainsAuthorityOnly(t *testing.T) {
+	workRoot := t.TempDir()
+	runtimeRoot := filepath.Join(workRoot, "runtime")
+	if err := os.MkdirAll(filepath.Join(runtimeRoot, "vms", "stale-sandbox"), 0o700); err != nil {
+		t.Fatalf("create stale VM state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(runtimeRoot, "forks", "stale-batch"), 0o700); err != nil {
+		t.Fatalf("create stale fork state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(runtimeRoot, "leases"), 0o700); err != nil {
+		t.Fatalf("create stale lease state: %v", err)
+	}
+	keyPath := filepath.Join(runtimeRoot, sporeRuntimeAuthorityFile)
+	key := []byte("retained authority")
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatalf("write authority: %v", err)
+	}
+
+	if err := resetSporeRuntimeDir(workRoot, runtimeRoot); err != nil {
+		t.Fatalf("resetSporeRuntimeDir: %v", err)
+	}
+	entries, err := os.ReadDir(runtimeRoot)
+	if err != nil {
+		t.Fatalf("read runtime root: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != sporeRuntimeAuthorityFile {
+		t.Fatalf("runtime entries = %v, want only %s", entries, sporeRuntimeAuthorityFile)
+	}
+	got, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read retained authority: %v", err)
+	}
+	if string(got) != string(key) {
+		t.Fatalf("retained authority = %q, want %q", got, key)
+	}
+}
+
+func TestResetSporeRuntimeDirRejectsNonRegularAuthority(t *testing.T) {
+	workRoot := t.TempDir()
+	runtimeRoot := filepath.Join(workRoot, "runtime")
+	invalidAuthority := filepath.Join(runtimeRoot, sporeRuntimeAuthorityFile)
+	if err := os.MkdirAll(invalidAuthority, 0o700); err != nil {
+		t.Fatalf("create invalid authority: %v", err)
+	}
+
+	if err := resetSporeRuntimeDir(workRoot, runtimeRoot); err == nil {
+		t.Fatal("resetSporeRuntimeDir succeeded with directory authority")
+	}
+
+	if err := os.RemoveAll(invalidAuthority); err != nil {
+		t.Fatalf("remove invalid authority: %v", err)
+	}
+	target := filepath.Join(runtimeRoot, "authority-target")
+	if err := os.WriteFile(target, []byte("authority"), 0o600); err != nil {
+		t.Fatalf("write authority target: %v", err)
+	}
+	if err := os.Symlink(target, invalidAuthority); err != nil {
+		t.Fatalf("symlink authority: %v", err)
+	}
+	if err := resetSporeRuntimeDir(workRoot, runtimeRoot); err == nil {
+		t.Fatal("resetSporeRuntimeDir succeeded with symlink authority")
+	}
+}
+
+func TestResetSporeRuntimeDirRejectsWorkRootAndOutsidePath(t *testing.T) {
+	root := t.TempDir()
+	workRoot := filepath.Join(root, "work")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workRoot, 0o755); err != nil {
+		t.Fatalf("create work root: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatalf("create outside root: %v", err)
+	}
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	if err := resetSporeRuntimeDir(workRoot, workRoot); err == nil {
+		t.Fatal("resetSporeRuntimeDir accepted work root")
+	}
+	if err := resetSporeRuntimeDir(workRoot, outside); err == nil {
+		t.Fatal("resetSporeRuntimeDir accepted outside root")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("outside sentinel was removed: %v", err)
+	}
+}
+
 func TestEffectiveSlotsForCgroupClampsByMemoryLimit(t *testing.T) {
 	limit := filepath.Join(t.TempDir(), "memory.max")
 	if err := os.WriteFile(limit, []byte("2147483648\n"), 0o644); err != nil {
