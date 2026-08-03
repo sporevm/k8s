@@ -51,10 +51,16 @@ def require_successful_events(label: str, events: Any) -> None:
     if not isinstance(events, list):
         raise RuntimeError(f"{label}: response did not contain an event list")
     terminal = next(
-        (event for event in reversed(events) if isinstance(event, dict) and event.get("event") in {"exit", "failure"}),
+        (event for event in reversed(events) if isinstance(event, dict) and event.get("event") == "completion"),
         None,
     )
-    if terminal is None or terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+    if (
+        terminal is None
+        or terminal.get("schema") != "spore.automation.event.v1"
+        or terminal.get("schema_version") != 1
+        or terminal.get("outcome") != "completed"
+        or terminal.get("exit_code") != 0
+    ):
         raise RuntimeError(f"{label}: terminal event was {terminal!r}")
 
 

@@ -1,6 +1,6 @@
 ---
 status: active
-last_reviewed: 2026-07-16
+last_reviewed: 2026-08-03
 spec_refs:
   - https://github.com/sporevm/sporevm
   - https://www.computesdk.com/blog/scale-invitational-2026/
@@ -724,6 +724,13 @@ Done when:
   slots. Multi-agent runs require publishing the prepared bundle first.
 - Public runtime images publish to GHCR; private environments can override the
   image repository from their ops values.
+- Runtime `v0.1.17` pins SporeVM 0.16.0, normalizes ARM host-info v2/v3 into the
+  saved-state `aarch64` fleet contract, and consumes
+  `spore.automation.event.v1` completion outcomes for every streamed command.
+- Keep the released fleet on ARM64 saved-state hosts. SporeVM host-info v3 can
+  describe AMD64, but the adapter rejects that architecture until saved-state
+  restore support reaches parity. Guest memory is an explicit fixed size;
+  removed `memory: auto` requests are rejected rather than silently translated.
 - The public `main` branch requires the `buildkite/sporevm-k8s` status check.
 - `spore-coordinator` treats an aggregate runtime report with
   `state != succeeded` as a failed run even when the container reached the end

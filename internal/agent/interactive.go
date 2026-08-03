@@ -318,7 +318,7 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 	if err != nil {
 		return TemplateStatus{}, "", nil, err
 	}
-	if terminal.Event != "exit" || terminal.ExitCode == nil || *terminal.ExitCode != 0 || !terminal.Captured {
+	if terminal.Outcome != "completed" || terminal.ExitCode == nil || *terminal.ExitCode != 0 || !terminal.Captured {
 		return TemplateStatus{}, "", nil, invalidMachineOutput("boot template capture did not exit successfully")
 	}
 	if !bootTemplateReady(tmpTemplateDir) {

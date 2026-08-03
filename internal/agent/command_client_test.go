@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,14 +19,14 @@ printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "--json" ] && [ "$2" = "host-info" ]; then
   cat <<'JSON'
 {
-  "schema": "spore.host-info.v1",
-  "schema_version": 1,
-  "host_class": "linux-aarch64-kvm",
+  "schema": "spore.host-info.v2",
+  "schema_version": 2,
+  "host_class": "linux-arm64-kvm",
   "platform": {
     "os": "linux",
-    "arch": "aarch64",
-    "cpu_profile": "graviton1",
-    "device_model_version": 0,
+    "arch": "arm64",
+    "cpu_profile": "sporevm-aarch64-v0",
+    "device_model_version": 4,
     "ram_base": 1073741824,
     "gic_dist_base": 134217728,
     "gic_redist_base": 134348800,
@@ -54,7 +56,7 @@ exit 2
 	if err != nil {
 		t.Fatalf("HostInfo: %v", err)
 	}
-	if info.HostClass != "linux-aarch64-kvm" {
+	if info.HostClass != "linux-arm64-kvm" || info.Platform.Arch != "aarch64" {
 		t.Fatalf("host class = %q", info.HostClass)
 	}
 
@@ -62,13 +64,80 @@ exit 2
 	if err != nil {
 		t.Fatalf("FleetHostClass: %v", err)
 	}
-	if hostClass.ID != "linux-aarch64-kvm-graviton1-v0" || hostClass.Backend != "kvm" {
+	if hostClass.ID != "linux-arm64-kvm-sporevm-aarch64-v0-v4" || hostClass.Backend != "kvm" {
 		t.Fatalf("fleet host class = %+v", hostClass)
 	}
 
 	args := readFile(t, argsFile)
 	if strings.TrimSpace(args) != "--json host-info" {
 		t.Fatalf("args = %q", args)
+	}
+}
+
+func TestHostInfoV3NormalizesARM64(t *testing.T) {
+	data := []byte(`{
+  "schema":"spore.host-info.v3",
+  "schema_version":3,
+  "host_class":"linux-arm64-kvm",
+  "architecture":"arm64",
+  "platform":{"arm64":{
+    "os":"linux",
+    "cpu_profile":"sporevm-aarch64-v0",
+    "device_model_version":4,
+    "ram_base":2147483648,
+    "interrupt_controller":{"kind":"gicv3","distributor_base":134217728,"redistributor_base":134348800},
+    "counter":{"source":"cntfrq_el0","frequency_hz":24000000}
+  }},
+  "backends":[{"name":"kvm","supported":true,"available":true,"reason":"available"}],
+  "cache_roots":{}
+}`)
+
+	var info HostInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := info.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if info.Platform.Arch != "aarch64" || info.Platform.GICDistBase != 134217728 || info.Platform.CounterFrequencyHz != 24000000 {
+		t.Fatalf("normalized platform = %+v", info.Platform)
+	}
+	hostClass, err := info.FleetHostClass("kvm")
+	if err != nil {
+		t.Fatalf("FleetHostClass: %v", err)
+	}
+	if hostClass.Architecture != "aarch64" || hostClass.DeviceModel != "sporevm-aarch64-v4" {
+		t.Fatalf("fleet host class = %+v", hostClass)
+	}
+}
+
+func TestHostInfoV3RejectsUnsupportedAMD64FleetClass(t *testing.T) {
+	data := []byte(`{
+  "schema":"spore.host-info.v3",
+  "schema_version":3,
+  "host_class":"linux-amd64-kvm",
+  "architecture":"amd64",
+  "platform":{"amd64":{
+    "os":"linux",
+    "board_profile":"sporevm-x86_64-board-v0",
+    "cpu_profile":"sporevm-x86_64-v0",
+    "cpu_profile_status":"approved_same_host",
+    "device_model_version":1,
+    "ram":{"base":0}
+  }},
+  "backends":[{"name":"kvm","supported":true,"available":true,"reason":"available"}],
+  "cache_roots":{}
+}`)
+
+	var info HostInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if info.Platform.Arch != "x86_64" {
+		t.Fatalf("normalized architecture = %q", info.Platform.Arch)
+	}
+	if _, err := info.FleetHostClass("kvm"); !errors.Is(err, ErrInvalidMachineOutput) {
+		t.Fatalf("FleetHostClass error = %v, want ErrInvalidMachineOutput", err)
 	}
 }
 
@@ -184,10 +253,10 @@ func TestCommandClientRunCaptureSignalsOnReadyMarker(t *testing.T) {
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "run" ]; then
-  trap 'printf "%s\n" "{\"schema\":\"spore.run-events.v1\",\"schema_version\":1,\"event\":\"exit\",\"command\":\"run\",\"backend\":\"kvm\",\"exit_code\":0,\"vcpus\":1,\"memory_bytes\":536870912,\"captured\":true,\"capture_path\":\"/work/parent.spore\",\"timings\":{\"start_ms\":1,\"vsock_connect_ms\":2,\"exec_response_ms\":3,\"probe_duration_ms\":4}}"; exit 0' USR1
+  trap 'printf "%s\n" "{\"schema\":\"spore.automation.event.v1\",\"schema_version\":1,\"event\":\"completion\",\"outcome\":\"completed\",\"command\":\"run\",\"backend\":\"kvm\",\"exit_code\":0,\"vcpus\":1,\"memory_bytes\":536870912,\"max_memory_bytes\":536870912,\"captured\":true,\"capture_path\":\"/work/parent.spore\",\"timings\":{\"start_ms\":1,\"vsock_connect_ms\":2,\"exec_response_ms\":3,\"probe_duration_ms\":4}}"; exit 0' USR1
   cat <<'JSONL'
-{"schema":"spore.run-events.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"output","command":"run","backend":"kvm","data_base64":"U1BPUkVWTV9SQUlMU19SRUFEWQ=="}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"stdout","command":"run","backend":"kvm","data_base64":"U1BPUkVWTV9SQUlMU19SRUFEWQ=="}
 JSONL
   while :; do sleep 1; done
 fi
@@ -253,7 +322,7 @@ func TestCommandClientRunCaptureOnGuestExit(t *testing.T) {
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "run" ]; then
-  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"run","backend":"kvm","exit_code":0,"captured":true,"capture_path":"/work/template.spore"}'
+  printf '%s\n' '{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"run","backend":"kvm","exit_code":0,"captured":true,"capture_path":"/work/template.spore"}'
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -317,9 +386,9 @@ func TestCommandClientResumeTreatsGuestExitAsResult(t *testing.T) {
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "attach" ]; then
   cat <<'JSONL'
-{"schema":"spore.run-events.v1","schema_version":1,"event":"start","command":"attach","requested_backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"ready","command":"attach","backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"start","command":"attach","requested_backend":"kvm"}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"ready","command":"attach","backend":"kvm"}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"max_memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
 JSONL
   exit 7
 fi
@@ -407,9 +476,9 @@ func TestCommandClientRunFromTreatsGuestExitAsResult(t *testing.T) {
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "run" ]; then
   cat <<'JSONL'
-{"schema":"spore.run-events.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"ready","command":"run","backend":"kvm"}
-{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"run","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"ready","command":"run","backend":"kvm"}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"run","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"max_memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
 JSONL
   exit 7
 fi
@@ -446,7 +515,7 @@ func TestCommandClientRunFromWithoutGeneration(t *testing.T) {
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "run" ]; then
-  printf '%s\n' '{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"run","backend":"kvm","exit_code":0}'
+  printf '%s\n' '{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"run","backend":"kvm","exit_code":0}'
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -473,8 +542,11 @@ func TestCommandClientExecTreatsGuestExitAsResult(t *testing.T) {
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "exec" ]; then
-  printf 'hello\n'
-  printf 'warn\n' >&2
+  cat <<'JSONL'
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"stdout","command":"exec","backend":"kvm","offset":0,"byte_count":6,"data_base64":"aGVsbG8K"}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"stderr","command":"exec","backend":"kvm","offset":0,"byte_count":5,"data_base64":"d2Fybgo="}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"exec","backend":"kvm","exit_code":7}
+JSONL
   exit 7
 fi
 echo unexpected "$*" >&2
@@ -501,7 +573,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "exec sporevm-child-42 -- /bin/sh -c exit 7" {
+	if args != "exec --events=jsonl sporevm-child-42 -- /bin/sh -c exit 7" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -557,7 +629,7 @@ exit 2
 func TestCommandClientRemoveVMIgnoresMissingVM(t *testing.T) {
 	spore := fakeSpore(t, `
 if [ "$1" = "--json" ] && [ "$2" = "rm" ]; then
-  printf '%s\n' '{"schema":"spore.error.v1","schema_version":1,"error":{"code":"object.not_found","message":"VM not found","retryable":false,"scope":"object","exit_code":1,"source":"rm"}}' >&2
+  printf '%s\n' '{"schema":"spore.error.v1","schema_version":1,"error":{"code":"object.not_found","message":"VM not found","retry":"after_fix","retryable":false,"scope":"object","exit_code":22,"source":"rm"}}' >&2
   exit 1
 fi
 exit 2
@@ -574,7 +646,7 @@ func TestCommandClientRemoveSavedSpore(t *testing.T) {
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "--json" ] && [ "$2" = "rm" ] && [ "$3" = "--spore" ]; then
-  printf '%s\n' '{"action":"removed_spore","spore_dir":"/work/template.spore","pin_id":"pin-1","pin_removed":true}'
+  printf '%s\n' '{"schema":"spore.saved.remove.result.v1","schema_version":1,"action":"removed_spore","spore_dir":"/work/template.spore","pin_id":"pin-1","pin_removed":true}'
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -596,7 +668,7 @@ func TestCommandClientResumeRejectsExitMismatch(t *testing.T) {
 	spore := fakeSpore(t, `
 if [ "$1" = "attach" ]; then
   cat <<'JSONL'
-{"schema":"spore.run-events.v1","schema_version":1,"event":"exit","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
+{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"max_memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
 JSONL
   exit 0
 fi
@@ -607,6 +679,55 @@ exit 2
 	_, err := client.Resume(context.Background(), ResumeRequest{SporeDir: "/work/child-42.spore"})
 	if !errors.Is(err, ErrInvalidMachineOutput) {
 		t.Fatalf("Resume error = %v, want ErrInvalidMachineOutput", err)
+	}
+}
+
+func TestCommandClientPreservesFailedAndCanceledCompletion(t *testing.T) {
+	tests := []struct {
+		name     string
+		outcome  string
+		code     string
+		retry    string
+		exitCode int
+	}{
+		{name: "failed", outcome: "failed", code: "runtime.execution_failed", retry: "unknown", exitCode: 1},
+		{name: "canceled", outcome: "canceled", code: "operation.canceled", retry: "unknown", exitCode: 130},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			completion := `{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"` + tt.outcome + `","command":"run","backend":"kvm","exit_code":` + fmt.Sprint(tt.exitCode) + `,"error":{"code":"` + tt.code + `","message":"classified failure","retry":"` + tt.retry + `","retryable":false,"scope":"runtime","exit_code":` + fmt.Sprint(tt.exitCode) + `,"source":"test"}}`
+			spore := fakeSpore(t, "printf '%s\\n' '"+completion+"'\nexit "+fmt.Sprint(tt.exitCode)+"\n", "")
+			client := CommandClient{Path: spore}
+			events, err := client.RunFrom(context.Background(), RunFromRequest{
+				SporeDir: "/work/child.spore",
+				Command:  []string{"/bin/true"},
+			})
+			terminal, terminalErr := TerminalEvent(events)
+			if terminalErr != nil {
+				t.Fatalf("TerminalEvent: %v", terminalErr)
+			}
+			if len(events) != 1 || terminal.Outcome != tt.outcome {
+				t.Fatalf("events = %+v, terminal = %+v", events, terminal)
+			}
+			var machineErr *MachineError
+			if !errors.As(err, &machineErr) {
+				t.Fatalf("error = %T %v, want MachineError", err, err)
+			}
+			if machineErr.Envelope.Error.Code != tt.code || machineErr.Envelope.Error.Retry != tt.retry {
+				t.Fatalf("machine error = %+v", machineErr.Envelope.Error)
+			}
+		})
+	}
+}
+
+func TestTerminalEventRejectsInterruptedAndTrailingStreams(t *testing.T) {
+	start := RunEvent{Schema: runEventsSchema, SchemaVersion: schemaVersion, Event: "start", Command: "run"}
+	if _, err := TerminalEvent([]RunEvent{start}); !errors.Is(err, ErrNoTerminalEvent) {
+		t.Fatalf("interrupted stream error = %v, want ErrNoTerminalEvent", err)
+	}
+	completion := exitEvent(0)
+	if _, err := TerminalEvent([]RunEvent{completion, start}); !errors.Is(err, ErrInvalidMachineOutput) {
+		t.Fatalf("trailing stream error = %v, want ErrInvalidMachineOutput", err)
 	}
 }
 
@@ -636,6 +757,7 @@ cat >&2 <<'JSON'
   "error": {
     "code": "host.unsupported",
     "message": "The host lacks a required capability.",
+    "retry": "after_fix",
     "retryable": false,
     "scope": "host",
     "exit_code": 69,

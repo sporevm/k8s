@@ -269,10 +269,20 @@ cache_hits = []
 for path in reports:
     report = json.loads(path.read_text(encoding="utf-8"))
     terminal = next(
-        (event for event in reversed(report.get("events", [])) if event.get("event") in {"exit", "failure"}),
+        (
+            event
+            for event in reversed(report.get("events", []))
+            if isinstance(event, dict) and event.get("event") == "completion"
+        ),
         None,
     )
-    if terminal is None or terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+    if (
+        terminal is None
+        or terminal.get("schema") != "spore.automation.event.v1"
+        or terminal.get("schema_version") != 1
+        or terminal.get("outcome") != "completed"
+        or terminal.get("exit_code") != 0
+    ):
         raise SystemExit(f"{path.name}: terminal={terminal!r}")
     template = report.get("template", {})
     if not template.get("id"):

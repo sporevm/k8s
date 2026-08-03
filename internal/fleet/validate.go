@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,7 +15,7 @@ import (
 var (
 	idPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,127}$`)
 	digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	memoryPattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+	memoryPattern = regexp.MustCompile(`^([0-9]+)(b|kb|kib|mb|mib|gb|gib)$`)
 
 	// ErrInvalidContract identifies invalid fleet contract documents.
 	ErrInvalidContract = errors.New("invalid fleet contract")
@@ -129,8 +130,8 @@ func (p PrepareSpec) Validate(path string) error {
 	if err := (CommandSpec{Command: p.Command}).Validate(path); err != nil {
 		return err
 	}
-	if p.Memory != "" && !memoryPattern.MatchString(p.Memory) {
-		return contractError("%s.memory must be a SporeVM memory value like 512mb, 2gb, or auto", path)
+	if p.Memory != "" && !validMemoryValue(p.Memory) {
+		return contractError("%s.memory must be a SporeVM memory value like 512mb or 2gb", path)
 	}
 	if p.CaptureSignal == "" && p.ReadyMarker == "" {
 		return nil
@@ -145,6 +146,30 @@ func (p PrepareSpec) Validate(path string) error {
 		return contractError("%s.captureSignal must be USR1", path)
 	}
 	return nil
+}
+
+func validMemoryValue(value string) bool {
+	match := memoryPattern.FindStringSubmatch(value)
+	if match == nil {
+		return false
+	}
+	amount, err := strconv.ParseUint(match[1], 10, 64)
+	if err != nil || amount == 0 {
+		return false
+	}
+	multiplier := uint64(1)
+	switch match[2] {
+	case "kb", "kib":
+		multiplier = 1024
+	case "mb", "mib":
+		multiplier = 1024 * 1024
+	case "gb", "gib":
+		multiplier = 1024 * 1024 * 1024
+	}
+	if amount > math.MaxUint64/multiplier {
+		return false
+	}
+	return amount*multiplier%4096 == 0
 }
 
 // Compile turns a prepared source run into the existing immutable bundle run.
@@ -409,6 +434,31 @@ func (r AttemptResult) Validate(run BundleRun) error {
 		if r.Error == nil || r.Error.Code == "" || r.Error.Message == "" {
 			return contractError("attemptResult.error requires code and message")
 		}
+	}
+	if r.Error != nil {
+		if err := r.Error.Validate("attemptResult.error"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Validate checks a compact attempt error and its optional SporeVM retry classification.
+func (e AttemptError) Validate(path string) error {
+	if e.Code == "" || e.Message == "" {
+		return contractError("%s requires code and message", path)
+	}
+	if e.Scope == "" && e.Retry == "" && !e.Retryable {
+		return nil
+	}
+	if e.Scope == "" || e.Retry == "" {
+		return contractError("%s SporeVM classification requires scope and retry", path)
+	}
+	if e.Retry != "after_fix" && e.Retry != "transient" && e.Retry != "unknown" {
+		return contractError("%s.retry has unsupported value", path)
+	}
+	if e.Retryable != (e.Retry == "transient") {
+		return contractError("%s.retryable does not match retry", path)
 	}
 	return nil
 }

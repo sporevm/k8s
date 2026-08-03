@@ -5,7 +5,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from scripts.runtime_acceptance import run_acceptance
+from scripts.computesdk_sporevm_benchmark import run_response_error
+from scripts.runtime_acceptance import require_successful_events, run_acceptance
 
 
 class AcceptanceHandler(BaseHTTPRequestHandler):
@@ -75,7 +76,13 @@ class AcceptanceHandler(BaseHTTPRequestHandler):
 
 
 def terminal_event() -> dict[str, object]:
-    return {"event": "exit", "exit_code": 0}
+    return {
+        "schema": "spore.automation.event.v1",
+        "schema_version": 1,
+        "event": "completion",
+        "outcome": "completed",
+        "exit_code": 0,
+    }
 
 
 class RuntimeAcceptanceTest(unittest.TestCase):
@@ -107,6 +114,21 @@ class RuntimeAcceptanceTest(unittest.TestCase):
         self.assertEqual(report["templateID"], "sha256:template")
         self.assertEqual(report["cleanup"], {"availableSlots": 1, "totalSlots": 1})
         self.assertTrue(AcceptanceHandler.sandbox_deleted)
+
+    def test_event_consumers_require_successful_completion(self) -> None:
+        self.assertEqual("", run_response_error({"events": [terminal_event()]}))
+
+        failed = terminal_event()
+        failed["outcome"] = "failed"
+        failed["exit_code"] = 1
+        with self.assertRaisesRegex(RuntimeError, "terminal event"):
+            require_successful_events("test", [failed])
+        self.assertIn("run terminal", run_response_error({"events": [failed]}))
+
+        legacy = {"event": "exit", "exit_code": 0}
+        with self.assertRaisesRegex(RuntimeError, "terminal event"):
+            require_successful_events("test", [legacy])
+        self.assertIn("no terminal event", run_response_error({"events": [legacy]}))
 
 
 if __name__ == "__main__":

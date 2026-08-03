@@ -158,6 +158,21 @@
         "message": {
           "type": "string",
           "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry": {
+          "type": "string",
+          "enum": [
+            "after_fix",
+            "transient",
+            "unknown"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
         }
       }
     }

@@ -68,6 +68,13 @@ class FleetContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "captureSignal"):
             validate_run(run)
 
+    def test_run_rejects_removed_automatic_memory(self) -> None:
+        run = copy.deepcopy(self.run)
+        run["prepare"]["memory"] = "auto"
+
+        with self.assertRaisesRegex(ContractError, "prepare.memory"):
+            validate_run(run)
+
     def test_1000_child_run_derives_non_overlapping_shards(self) -> None:
         ranges = derive_shard_ranges(self.bundle_run)
 

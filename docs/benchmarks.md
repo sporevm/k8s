@@ -23,7 +23,7 @@ It includes automatic boot-template capture. Later requests are labeled
 `template-hit` and execute with `spore run --from` against the immutable cached
 template. Do not combine those samples with warmed sandbox-pool results.
 Automatic boot-template capture currently requires `/bin/true` in the workload
-image. SporeVM 0.13.0 makes successful named restore completion the sandbox
+image. SporeVM 0.16.0 makes successful named restore completion the sandbox
 exec-readiness boundary and uses proof-gated local RAM backing, so sandbox
 creation neither runs a synthetic no-op nor eagerly reconstructs RAM when the
 same-host backing remains valid.

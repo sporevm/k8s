@@ -235,8 +235,11 @@ type AttemptTimings struct {
 
 // AttemptError is the compact error body stored with failed attempts.
 type AttemptError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Scope     string `json:"scope,omitempty"`
+	Retry     string `json:"retry,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
 }
 
 // AttemptOutput records a bounded inline preview plus complete output byte counts.

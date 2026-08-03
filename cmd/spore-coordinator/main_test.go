@@ -501,14 +501,14 @@ type fakeSporeClient struct {
 }
 
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
-	return "spore 0.13.0 (ReleaseSafe)", nil
+	return "spore 0.16.0 (ReleaseSafe)", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	return agent.HostInfo{
-		Schema:        "spore.host-info.v1",
-		SchemaVersion: 1,
-		HostClass:     "linux-aarch64-kvm",
+		Schema:        "spore.host-info.v2",
+		SchemaVersion: 2,
+		HostClass:     "linux-arm64-kvm",
 		Platform: agent.PlatformFacts{
 			OS:                 "linux",
 			Arch:               "aarch64",
@@ -552,9 +552,10 @@ func (c *fakeSporeClient) RunCapture(_ context.Context, req agent.RunCaptureRequ
 	exitCode := 0
 	path := req.CaptureDir
 	return []agent.RunEvent{{
-		Schema:        "spore.run-events.v1",
+		Schema:        "spore.automation.event.v1",
 		SchemaVersion: 1,
-		Event:         "exit",
+		Event:         "completion",
+		Outcome:       "completed",
 		Command:       "run",
 		ExitCode:      &exitCode,
 		Captured:      true,
@@ -598,9 +599,10 @@ func (c *fakeSporeClient) Pull(_ context.Context, req agent.PullRequest) (agent.
 func (c *fakeSporeClient) Resume(context.Context, agent.ResumeRequest) ([]agent.RunEvent, error) {
 	exitCode := c.resumeExitCode
 	return []agent.RunEvent{{
-		Schema:        "spore.run-events.v1",
+		Schema:        "spore.automation.event.v1",
 		SchemaVersion: 1,
-		Event:         "exit",
+		Event:         "completion",
+		Outcome:       "completed",
 		Command:       "resume",
 		ExitCode:      &exitCode,
 		Timings:       &agent.RunEventTimings{ExecResponseMS: 7},
@@ -621,9 +623,10 @@ func (c *fakeSporeClient) RestoreNamed(_ context.Context, req agent.RestoreNamed
 func (c *fakeSporeClient) RunFrom(context.Context, agent.RunFromRequest) ([]agent.RunEvent, error) {
 	exitCode := c.execExitCode
 	return []agent.RunEvent{{
-		Schema:        "spore.run-events.v1",
+		Schema:        "spore.automation.event.v1",
 		SchemaVersion: 1,
-		Event:         "exit",
+		Event:         "completion",
+		Outcome:       "completed",
 		Command:       "run",
 		ExitCode:      &exitCode,
 		Timings:       &agent.RunEventTimings{ExecResponseMS: 7},
@@ -633,9 +636,10 @@ func (c *fakeSporeClient) RunFrom(context.Context, agent.RunFromRequest) ([]agen
 func (c *fakeSporeClient) Exec(context.Context, agent.ExecRequest) ([]agent.RunEvent, error) {
 	exitCode := c.execExitCode
 	return []agent.RunEvent{{
-		Schema:        "spore.run-events.v1",
+		Schema:        "spore.automation.event.v1",
 		SchemaVersion: 1,
-		Event:         "exit",
+		Event:         "completion",
+		Outcome:       "completed",
 		Command:       "exec",
 		ExitCode:      &exitCode,
 	}}, nil

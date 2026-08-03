@@ -31,7 +31,7 @@ description = "Verify a deployed runtime image through an isolated in-cluster AP
 run = "scripts/release_acceptance.sh"
 
 [tasks."runtime:image:build"]
-description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.13.0"
+description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.16.0"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:dev ."
 
 [tasks."runtime:image:push"]

@@ -696,8 +696,8 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	result.Output = output
 
 	commitTerminal := false
-	switch terminal.Event {
-	case "exit":
+	switch terminal.Outcome {
+	case "completed":
 		result.Terminal = true
 		result.ResultURI = TerminalResultURI(req.Run, req.ChildID)
 		commitTerminal = true
@@ -714,19 +714,20 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 				Message: "guest exited with code " + strconv.Itoa(exitCode),
 			}
 		}
-	case "failure":
+	case "failed", "canceled":
 		result.Status = fleet.AttemptFailed
 		if terminal.Error != nil {
-			result.Error = &fleet.AttemptError{
-				Code:    terminal.Error.Code,
-				Message: terminal.Error.Message,
-			}
+			result.Error = attemptError(&MachineError{Envelope: MachineErrorEnvelope{
+				Schema:        errorSchema,
+				SchemaVersion: schemaVersion,
+				Error:         *terminal.Error,
+			}})
 			if machineErrorIsPlatformMismatch(*terminal.Error) {
 				result.Status = fleet.AttemptPlatformMismatch
 			}
 		}
 	default:
-		return r.failAttempt(ctx, req.Run, result, "runtime.invalid_terminal_event", "unsupported terminal event "+terminal.Event, false)
+		return r.failAttempt(ctx, req.Run, result, "runtime.invalid_terminal_event", "unsupported terminal outcome "+terminal.Outcome, false)
 	}
 	if resumeErr != nil && result.Error == nil {
 		result.Status = fleet.AttemptFailed
@@ -835,6 +836,10 @@ func (r *Runner) failAttemptWithCause(ctx context.Context, run fleet.BundleRun, 
 	result.Error = &fleet.AttemptError{
 		Code:    code,
 		Message: message,
+	}
+	var machineErr *MachineError
+	if errors.As(cause, &machineErr) {
+		result.Error = attemptError(machineErr)
 	}
 	if terminal {
 		result.ResultURI = TerminalResultURI(run, result.ChildID)
@@ -1044,7 +1049,13 @@ func attemptError(err error) *fleet.AttemptError {
 		if message == "" {
 			message = machineErr.Error()
 		}
-		return &fleet.AttemptError{Code: code, Message: message}
+		return &fleet.AttemptError{
+			Code:      code,
+			Message:   message,
+			Scope:     body.Scope,
+			Retry:     body.Retry,
+			Retryable: body.Retryable,
+		}
 	}
 	code := "agent.error"
 	if errors.Is(err, context.Canceled) {
@@ -1058,7 +1069,8 @@ func attemptError(err error) *fleet.AttemptError {
 }
 
 func machineErrorIsPlatformMismatch(body MachineErrorBody) bool {
-	return strings.HasPrefix(body.Code, "host.")
+	return strings.HasPrefix(body.Code, "host.") ||
+		(body.Code == "object.invalid" && body.Source == "PlatformMismatch")
 }
 
 func (r *Runner) observeAttempt(result fleet.AttemptResult, pull PullResult, terminalCommitAttempted bool, terminalCommitSuccessful bool) {

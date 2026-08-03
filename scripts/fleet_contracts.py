@@ -13,7 +13,7 @@ class ContractError(ValueError):
 
 DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
-MEMORY_RE = re.compile(r"^[A-Za-z0-9]+$")
+MEMORY_RE = re.compile(r"^([0-9]+)(b|kb|kib|mb|mib|gb|gib)$")
 HOST_CLASS_FIELDS = {
     "id",
     "sporePlatformVersion",
@@ -182,8 +182,8 @@ def validate_command_spec(command_spec: Any, path: str, allow_capture: bool = Fa
     if not allow_capture:
         return
     memory = spec.get("memory")
-    if memory is not None and (not isinstance(memory, str) or not MEMORY_RE.fullmatch(memory)):
-        raise ContractError(f"{path}.memory must be a SporeVM memory value like 512mb, 2gb, or auto")
+    if memory is not None and (not isinstance(memory, str) or not valid_memory_value(memory)):
+        raise ContractError(f"{path}.memory must be a SporeVM memory value like 512mb or 2gb")
     capture_signal = spec.get("captureSignal")
     ready_marker = spec.get("readyMarker")
     if capture_signal is None and ready_marker is None:
@@ -192,6 +192,24 @@ def validate_command_spec(command_spec: Any, path: str, allow_capture: bool = Fa
         raise ContractError(f"{path}.captureSignal must be USR1")
     if not isinstance(ready_marker, str) or not ready_marker:
         raise ContractError(f"{path}.readyMarker must not be empty")
+
+
+def valid_memory_value(value: str) -> bool:
+    match = MEMORY_RE.fullmatch(value)
+    if match is None:
+        return False
+    amount = int(match.group(1))
+    multiplier = {
+        "b": 1,
+        "kb": 1024,
+        "kib": 1024,
+        "mb": 1024 * 1024,
+        "mib": 1024 * 1024,
+        "gb": 1024 * 1024 * 1024,
+        "gib": 1024 * 1024 * 1024,
+    }[match.group(2)]
+    size = amount * multiplier
+    return 0 < size <= (2**64 - 1) and size % 4096 == 0
 
 
 def validate_run(run: Any) -> None:
@@ -461,6 +479,8 @@ def validate_attempt_result(result: Any, lease: dict[str, Any] | None = None) ->
         validate_s3_json_uri(result["resultURI"], "attemptResult.resultURI")
     if result["status"] in {"failed", "platform-mismatch"} and "error" not in result:
         raise ContractError("failed attemptResult requires error")
+    if "error" in result:
+        validate_attempt_error(result["error"])
 
     timings = require_object(result["timingsMs"], "attemptResult.timingsMs")
     require_keys(timings, TIMING_FIELDS, "attemptResult.timingsMs")
@@ -483,6 +503,30 @@ def validate_attempt_result(result: Any, lease: dict[str, Any] | None = None) ->
         start, end = child_range(lease, "childStart", "childCount")
         if child_id < start or child_id >= end:
             raise ContractError("attemptResult.childID is outside the shard lease")
+
+
+def validate_attempt_error(error: Any) -> None:
+    error = require_object(error, "attemptResult.error")
+    allowed = {"code", "message", "scope", "retry", "retryable"}
+    for key in error:
+        if key not in allowed:
+            raise ContractError(f"attemptResult.error has unknown field {key}")
+    for key in ("code", "message"):
+        if not isinstance(error.get(key), str) or not error[key]:
+            raise ContractError(f"attemptResult.error.{key} must be a non-empty string")
+    classified = any(key in error for key in ("scope", "retry"))
+    if not classified:
+        if error.get("retryable") is True:
+            raise ContractError("attemptResult.error.retryable requires retry classification")
+        return
+    if not isinstance(error.get("scope"), str) or not error["scope"]:
+        raise ContractError("attemptResult.error.scope must be a non-empty string")
+    if error.get("retry") not in {"after_fix", "transient", "unknown"}:
+        raise ContractError("attemptResult.error.retry has unsupported value")
+    if "retryable" in error and not isinstance(error["retryable"], bool):
+        raise ContractError("attemptResult.error.retryable must be boolean")
+    if error.get("retryable", False) != (error["retry"] == "transient"):
+        raise ContractError("attemptResult.error.retryable does not match retry")
 
 
 def validate_attempt_output(output: Any) -> None:

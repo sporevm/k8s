@@ -142,7 +142,7 @@ func TestRunnerStatusReportsHostClassAndSlots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if status.HostClass.ID != "linux-aarch64-kvm-graviton1-v0" {
+	if status.HostClass.ID != "linux-arm64-kvm-graviton1-v0" {
 		t.Fatalf("host class = %q", status.HostClass.ID)
 	}
 	if status.ExecutionSlots.Total != 100 || status.ExecutionSlots.Available != 100 {
@@ -730,12 +730,13 @@ func TestRunnerRunChildPlatformMismatchIsNonTerminalAttempt(t *testing.T) {
 		},
 		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
 			body := MachineErrorBody{
-				Code:      "host.unsupported",
-				Message:   "host backend is unavailable",
+				Code:      "object.invalid",
+				Message:   "saved-state platform does not match this host",
+				Retry:     "after_fix",
 				Retryable: false,
-				Scope:     "host",
-				ExitCode:  69,
-				Source:    "UnsupportedHost",
+				Scope:     "object",
+				ExitCode:  22,
+				Source:    "PlatformMismatch",
 			}
 			return []RunEvent{failureEvent(body)}, &MachineError{
 				Envelope: MachineErrorEnvelope{
@@ -761,6 +762,9 @@ func TestRunnerRunChildPlatformMismatchIsNonTerminalAttempt(t *testing.T) {
 	}
 	if result.Status != fleet.AttemptPlatformMismatch || result.Terminal {
 		t.Fatalf("result = %+v", result)
+	}
+	if result.Error == nil || result.Error.Code != "object.invalid" || result.Error.Scope != "object" || result.Error.Retry != "after_fix" || result.Error.Retryable {
+		t.Fatalf("classified attempt error = %+v", result.Error)
 	}
 	if _, ok, err := store.TerminalResult(context.Background(), run, 44); err != nil || ok {
 		t.Fatalf("terminal ok=%v err=%v", ok, err)
@@ -1067,7 +1071,7 @@ func (c *fakeSporeClient) Version(context.Context) (string, error) {
 	if c.version != "" {
 		return c.version, nil
 	}
-	return "spore 0.13.0 (ReleaseSafe)", nil
+	return "spore 0.16.0 (ReleaseSafe)", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {
@@ -1401,9 +1405,9 @@ func validHostInfo() HostInfo {
 	bundlePath := "/cache/bundles"
 	runtimePath := "/run/sporevm"
 	return HostInfo{
-		Schema:        hostInfoSchema,
-		SchemaVersion: schemaVersion,
-		HostClass:     "linux-aarch64-kvm",
+		Schema:        hostInfoV2Schema,
+		SchemaVersion: 2,
+		HostClass:     "linux-arm64-kvm",
 		Platform: PlatformFacts{
 			OS:                 "linux",
 			Arch:               "aarch64",
@@ -1486,7 +1490,8 @@ func exitEvent(code int) RunEvent {
 	return RunEvent{
 		Schema:        runEventsSchema,
 		SchemaVersion: schemaVersion,
-		Event:         "exit",
+		Event:         "completion",
+		Outcome:       "completed",
 		Command:       "resume",
 		Backend:       &backend,
 		ExitCode:      &code,
@@ -1515,7 +1520,8 @@ func captureExitEvent(path string) RunEvent {
 	return RunEvent{
 		Schema:        runEventsSchema,
 		SchemaVersion: schemaVersion,
-		Event:         "exit",
+		Event:         "completion",
+		Outcome:       "completed",
 		Command:       "run",
 		Backend:       &backend,
 		ExitCode:      &exitCode,
@@ -1529,9 +1535,11 @@ func failureEvent(body MachineErrorBody) RunEvent {
 	return RunEvent{
 		Schema:        runEventsSchema,
 		SchemaVersion: schemaVersion,
-		Event:         "failure",
+		Event:         "completion",
+		Outcome:       "failed",
 		Command:       "resume",
 		Backend:       &backend,
+		ExitCode:      &body.ExitCode,
 		Error:         &body,
 	}
 }
@@ -1544,6 +1552,7 @@ func machineError(code, message string) error {
 			Error: MachineErrorBody{
 				Code:      code,
 				Message:   message,
+				Retry:     "after_fix",
 				Retryable: false,
 				Scope:     "host",
 				ExitCode:  69,
