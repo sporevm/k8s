@@ -11,12 +11,14 @@ import (
 )
 
 const (
-	hostInfoSchema      = "spore.host-info.v1"
+	hostInfoV2Schema    = "spore.host-info.v2"
+	hostInfoV3Schema    = "spore.host-info.v3"
 	lifecycleSchema     = "spore.lifecycle.v1"
 	inspectBundleSchema = "spore.bundle.inspect.v1"
 	pullResultSchema    = "spore.pull.result.v1"
+	removeSavedSchema   = "spore.saved.remove.result.v1"
 	errorSchema         = "spore.error.v1"
-	runEventsSchema     = "spore.run-events.v1"
+	runEventsSchema     = "spore.automation.event.v1"
 	schemaVersion       = 1
 )
 
@@ -75,6 +77,127 @@ type PathFact struct {
 	Source   string  `json:"source"`
 }
 
+// UnmarshalJSON accepts both SporeVM host-info schemas and normalizes their
+// architecture-specific platform facts into the fleet adapter's shared view.
+func (h *HostInfo) UnmarshalJSON(data []byte) error {
+	var header struct {
+		Schema        string `json:"schema"`
+		SchemaVersion int    `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return err
+	}
+
+	switch {
+	case header.Schema == hostInfoV2Schema && header.SchemaVersion == 2:
+		type hostInfoV2 HostInfo
+		var decoded hostInfoV2
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+		decoded.Platform.Arch = normalizeMachineArchitecture(decoded.Platform.Arch)
+		*h = HostInfo(decoded)
+		return nil
+	case header.Schema == hostInfoV3Schema && header.SchemaVersion == 3:
+		var decoded struct {
+			Schema        string                `json:"schema"`
+			SchemaVersion int                   `json:"schema_version"`
+			HostClass     string                `json:"host_class"`
+			Architecture  string                `json:"architecture"`
+			Platform      hostInfoV3Platform    `json:"platform"`
+			Backends      []BackendAvailability `json:"backends"`
+			CacheRoots    CacheRoots            `json:"cache_roots"`
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+		platform, err := decoded.Platform.normalize(decoded.Architecture)
+		if err != nil {
+			return err
+		}
+		*h = HostInfo{
+			Schema:        decoded.Schema,
+			SchemaVersion: decoded.SchemaVersion,
+			HostClass:     decoded.HostClass,
+			Platform:      platform,
+			Backends:      decoded.Backends,
+			CacheRoots:    decoded.CacheRoots,
+		}
+		return nil
+	default:
+		return invalidMachineOutput("host-info schema = %q v%d", header.Schema, header.SchemaVersion)
+	}
+}
+
+type hostInfoV3Platform struct {
+	ARM64 *struct {
+		OS                  string `json:"os"`
+		CPUProfile          string `json:"cpu_profile"`
+		DeviceModelVersion  uint32 `json:"device_model_version"`
+		RAMBase             uint64 `json:"ram_base"`
+		InterruptController struct {
+			DistributorBase   uint64 `json:"distributor_base"`
+			RedistributorBase uint64 `json:"redistributor_base"`
+		} `json:"interrupt_controller"`
+		Counter struct {
+			Source      string `json:"source"`
+			FrequencyHz uint64 `json:"frequency_hz"`
+		} `json:"counter"`
+	} `json:"arm64"`
+	AMD64 *struct {
+		OS                 string `json:"os"`
+		CPUProfile         string `json:"cpu_profile"`
+		DeviceModelVersion uint32 `json:"device_model_version"`
+		RAM                struct {
+			Base uint64 `json:"base"`
+		} `json:"ram"`
+	} `json:"amd64"`
+}
+
+func (p hostInfoV3Platform) normalize(architecture string) (PlatformFacts, error) {
+	switch architecture {
+	case "arm64":
+		if p.ARM64 == nil || p.AMD64 != nil {
+			return PlatformFacts{}, invalidMachineOutput("host-info v3 arm64 platform variant is invalid")
+		}
+		return PlatformFacts{
+			OS:                     p.ARM64.OS,
+			Arch:                   "aarch64",
+			CPUProfile:             p.ARM64.CPUProfile,
+			DeviceModelVersion:     p.ARM64.DeviceModelVersion,
+			RAMBase:                p.ARM64.RAMBase,
+			GICDistBase:            p.ARM64.InterruptController.DistributorBase,
+			GICRedistBase:          p.ARM64.InterruptController.RedistributorBase,
+			CounterFrequencySource: p.ARM64.Counter.Source,
+			CounterFrequencyHz:     p.ARM64.Counter.FrequencyHz,
+		}, nil
+	case "amd64":
+		if p.AMD64 == nil || p.ARM64 != nil {
+			return PlatformFacts{}, invalidMachineOutput("host-info v3 amd64 platform variant is invalid")
+		}
+		return PlatformFacts{
+			OS:                 p.AMD64.OS,
+			Arch:               "x86_64",
+			CPUProfile:         p.AMD64.CPUProfile,
+			DeviceModelVersion: p.AMD64.DeviceModelVersion,
+			RAMBase:            p.AMD64.RAM.Base,
+		}, nil
+	default:
+		return PlatformFacts{}, invalidMachineOutput("host-info v3 architecture = %q", architecture)
+	}
+}
+
+func normalizeMachineArchitecture(architecture string) string {
+	switch architecture {
+	case "arm64":
+		return "aarch64"
+	case "amd64":
+		return "x86_64"
+	default:
+		return architecture
+	}
+}
+
 // AvailableBackend returns a supported and available backend by name.
 func (h HostInfo) AvailableBackend(name string) (BackendAvailability, bool) {
 	for _, backend := range h.Backends {
@@ -93,19 +216,24 @@ func (h HostInfo) FleetHostClass(backend string) (fleet.HostClass, error) {
 	if _, ok := h.AvailableBackend(backend); !ok {
 		return fleet.HostClass{}, fmt.Errorf("%w: backend %q is not available", ErrInvalidMachineOutput, backend)
 	}
-	return fleet.HostClass{
+	hostClass := fleet.HostClass{
 		ID:                   fmt.Sprintf("%s-%s-v%d", h.HostClass, h.Platform.CPUProfile, h.Platform.DeviceModelVersion),
 		SporePlatformVersion: "v0",
 		Architecture:         h.Platform.Arch,
 		Backend:              backend,
 		CPUProfile:           h.Platform.CPUProfile,
 		DeviceModel:          fmt.Sprintf("sporevm-%s-v%d", h.Platform.Arch, h.Platform.DeviceModelVersion),
-	}, nil
+	}
+	if err := hostClass.Validate("hostClass"); err != nil {
+		return fleet.HostClass{}, fmt.Errorf("%w: unsupported fleet host class: %v", ErrInvalidMachineOutput, err)
+	}
+	return hostClass, nil
 }
 
 // Validate checks the host-info schema identity.
 func (h HostInfo) Validate() error {
-	if h.Schema != hostInfoSchema || h.SchemaVersion != schemaVersion {
+	if (h.Schema != hostInfoV2Schema || h.SchemaVersion != 2) &&
+		(h.Schema != hostInfoV3Schema || h.SchemaVersion != 3) {
 		return invalidMachineOutput("host-info schema = %q v%d", h.Schema, h.SchemaVersion)
 	}
 	if h.HostClass == "" {
@@ -519,7 +647,19 @@ func (r RemoveSavedSporeRequest) validate() error {
 }
 
 type removedSavedSporeResult struct {
-	Action string `json:"action"`
+	Schema        string `json:"schema"`
+	SchemaVersion int    `json:"schema_version"`
+	Action        string `json:"action"`
+}
+
+func (r removedSavedSporeResult) Validate() error {
+	if r.Schema != removeSavedSchema || r.SchemaVersion != schemaVersion {
+		return invalidMachineOutput("remove saved spore schema = %q v%d", r.Schema, r.SchemaVersion)
+	}
+	if r.Action != "removed_spore" {
+		return invalidMachineOutput("remove saved spore action = %q", r.Action)
+	}
+	return nil
 }
 
 // RunEvent is one SporeVM JSONL lifecycle event.
@@ -527,6 +667,7 @@ type RunEvent struct {
 	Schema           string            `json:"schema"`
 	SchemaVersion    int               `json:"schema_version"`
 	Event            string            `json:"event"`
+	Outcome          string            `json:"outcome,omitempty"`
 	Command          string            `json:"command"`
 	RequestedBackend string            `json:"requested_backend,omitempty"`
 	Backend          *string           `json:"backend,omitempty"`
@@ -536,6 +677,7 @@ type RunEvent struct {
 	ExitCode         *int              `json:"exit_code,omitempty"`
 	VCPUs            uint32            `json:"vcpus,omitempty"`
 	MemoryBytes      uint64            `json:"memory_bytes,omitempty"`
+	MaxMemoryBytes   uint64            `json:"max_memory_bytes,omitempty"`
 	Captured         bool              `json:"captured,omitempty"`
 	CapturePath      *string           `json:"capture_path,omitempty"`
 	Timings          *RunEventTimings  `json:"timings,omitempty"`
@@ -552,7 +694,7 @@ type RunEventTimings struct {
 
 // Terminal reports whether the event ends a JSONL stream.
 func (e RunEvent) Terminal() bool {
-	return e.Event == "exit" || e.Event == "failure"
+	return e.Event == "completion"
 }
 
 // Validate checks one run/resume event.
@@ -563,11 +705,34 @@ func (e RunEvent) Validate() error {
 	if e.Event == "" || e.Command == "" {
 		return invalidMachineOutput("run event is missing event or command")
 	}
-	if e.Event == "failure" && e.Error == nil {
-		return invalidMachineOutput("failure event is missing error")
+	if !e.Terminal() {
+		if e.Outcome != "" || e.Error != nil {
+			return invalidMachineOutput("non-terminal run event contains terminal outcome fields")
+		}
+		return nil
 	}
-	if e.Event == "exit" && e.ExitCode == nil {
-		return invalidMachineOutput("exit event is missing exit_code")
+	if e.ExitCode == nil {
+		return invalidMachineOutput("completion event is missing exit_code")
+	}
+	switch e.Outcome {
+	case "completed":
+		if e.Error != nil {
+			return invalidMachineOutput("completed event contains error")
+		}
+	case "failed", "canceled":
+		if e.Error == nil {
+			return invalidMachineOutput("%s completion event is missing error", e.Outcome)
+		}
+		if err := e.Error.Validate(); err != nil {
+			return err
+		}
+		if e.Error.ExitCode != *e.ExitCode {
+			return invalidMachineOutput("completion exit_code does not match error exit_code")
+		}
+	case "":
+		return invalidMachineOutput("completion event is missing outcome")
+	default:
+		return invalidMachineOutput("completion event outcome = %q", e.Outcome)
 	}
 	return nil
 }
@@ -583,6 +748,9 @@ func TerminalEvent(events []RunEvent) (RunEvent, error) {
 			return RunEvent{}, invalidMachineOutput("run event stream has multiple terminal events")
 		}
 		terminal = &events[i]
+		if i != len(events)-1 {
+			return RunEvent{}, invalidMachineOutput("run event stream continues after completion")
+		}
 	}
 	if terminal == nil {
 		return RunEvent{}, ErrNoTerminalEvent
@@ -621,10 +789,25 @@ type MachineErrorEnvelope struct {
 type MachineErrorBody struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
+	Retry     string `json:"retry"`
 	Retryable bool   `json:"retryable"`
 	Scope     string `json:"scope"`
 	ExitCode  int    `json:"exit_code"`
 	Source    string `json:"source"`
+}
+
+// Validate checks the stable machine error classification.
+func (e MachineErrorBody) Validate() error {
+	if e.Code == "" || e.Scope == "" || e.Retry == "" {
+		return invalidMachineOutput("machine error is missing code, scope, or retry classification")
+	}
+	if e.Retry != "after_fix" && e.Retry != "transient" && e.Retry != "unknown" {
+		return invalidMachineOutput("machine error retry = %q", e.Retry)
+	}
+	if e.Retryable != (e.Retry == "transient") {
+		return invalidMachineOutput("machine error retryable does not match retry classification")
+	}
+	return nil
 }
 
 // MachineError wraps a SporeVM-originated machine error.
@@ -657,10 +840,7 @@ func (e MachineErrorEnvelope) Validate() error {
 	if e.Schema != errorSchema || e.SchemaVersion != schemaVersion {
 		return invalidMachineOutput("error schema = %q v%d", e.Schema, e.SchemaVersion)
 	}
-	if e.Error.Code == "" || e.Error.Scope == "" {
-		return invalidMachineOutput("machine error is missing code or scope")
-	}
-	return nil
+	return e.Error.Validate()
 }
 
 func invalidMachineOutput(format string, args ...any) error {

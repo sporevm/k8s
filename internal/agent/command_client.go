@@ -222,27 +222,18 @@ func (c CommandClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, e
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"exec", req.Name, "--"}
+	args := []string{"exec", "--events=jsonl", req.Name, "--"}
 	args = append(args, req.Command...)
 
 	stdout, stderr, err := c.run(ctx, args...)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr
 	}
-	if err != nil {
-		if machineErr := machineErrorFromStderr(stderr); machineErr != nil {
-			return nil, machineErr
-		}
-		if strings.HasPrefix(string(bytes.TrimSpace(stderr)), "spore exec:") {
-			return nil, commandError(err, stderr)
-		}
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			return nil, commandError(err, stderr)
-		}
-		return commandRunEvents("exec", stdout, stderr, exitErr.ExitCode()), nil
+	events, _, decodeErr := decodeRunEventsAfterCommand("spore exec", stdout, stderr, err, false)
+	if decodeErr != nil {
+		return events, decodeErr
 	}
-	return commandRunEvents("exec", stdout, stderr, 0), nil
+	return events, nil
 }
 
 // RemoveVM runs `spore rm` against a named VM.
@@ -270,10 +261,7 @@ func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSpor
 	if err := c.runJSON(ctx, &result, "--json", "rm", "--spore", req.SporeDir); err != nil {
 		return err
 	}
-	if result.Action != "removed_spore" {
-		return invalidMachineOutput("remove saved spore action = %q", result.Action)
-	}
-	return nil
+	return result.Validate()
 }
 
 func (c CommandClient) runJSON(ctx context.Context, out any, args ...string) error {
@@ -456,35 +444,6 @@ func machineErrorFromStderr(stderr []byte) error {
 	return nil
 }
 
-func commandRunEvents(command string, stdout []byte, stderr []byte, exitCode int) []RunEvent {
-	events := make([]RunEvent, 0, 3)
-	if len(stdout) > 0 {
-		events = append(events, commandOutputEvent(command, "stdout", stdout))
-	}
-	if len(stderr) > 0 {
-		events = append(events, commandOutputEvent(command, "stderr", stderr))
-	}
-	events = append(events, RunEvent{
-		Schema:        runEventsSchema,
-		SchemaVersion: schemaVersion,
-		Event:         "exit",
-		Command:       command,
-		ExitCode:      &exitCode,
-	})
-	return events
-}
-
-func commandOutputEvent(command string, event string, data []byte) RunEvent {
-	return RunEvent{
-		Schema:        runEventsSchema,
-		SchemaVersion: schemaVersion,
-		Event:         event,
-		Command:       command,
-		ByteCount:     len(data),
-		DataBase64:    base64.StdEncoding.EncodeToString(data),
-	}
-}
-
 func decodeRunEventsAfterCommand(name string, stdout []byte, stderr []byte, runErr error, guestExitIsError bool) ([]RunEvent, RunEvent, error) {
 	events, decodeErr := DecodeRunEvents(bytes.NewReader(stdout))
 	if decodeErr != nil {
@@ -501,7 +460,10 @@ func decodeRunEventsAfterCommand(name string, stdout []byte, stderr []byte, runE
 		}
 		return nil, RunEvent{}, terminalErr
 	}
-	if terminal.Event == "failure" {
+	if err := validateRunEventExitStatus(name, runErr, terminal); err != nil {
+		return events, terminal, err
+	}
+	if terminal.Outcome == "failed" || terminal.Outcome == "canceled" {
 		envelope := MachineErrorEnvelope{
 			Schema:        errorSchema,
 			SchemaVersion: schemaVersion,
@@ -512,9 +474,6 @@ func decodeRunEventsAfterCommand(name string, stdout []byte, stderr []byte, runE
 		}
 		return events, terminal, &MachineError{Envelope: envelope, Stderr: string(stderr)}
 	}
-	if err := validateRunEventExitStatus(name, runErr, terminal); err != nil {
-		return events, terminal, err
-	}
 	if guestExitIsError && terminal.ExitCode != nil && *terminal.ExitCode != 0 {
 		return events, terminal, fmt.Errorf("%s guest exited with code %d", name, *terminal.ExitCode)
 	}
@@ -522,24 +481,21 @@ func decodeRunEventsAfterCommand(name string, stdout []byte, stderr []byte, runE
 }
 
 func validateRunEventExitStatus(name string, runErr error, terminal RunEvent) error {
-	if terminal.Event != "exit" || terminal.ExitCode == nil {
-		if runErr != nil {
-			return runErr
-		}
-		return nil
+	if terminal.Event != "completion" || terminal.ExitCode == nil {
+		return invalidMachineOutput("%s terminal event is not a completion", name)
 	}
 	if runErr == nil {
 		if *terminal.ExitCode == 0 {
 			return nil
 		}
-		return invalidMachineOutput("%s exited 0 but terminal event reported guest exit %d", name, *terminal.ExitCode)
+		return invalidMachineOutput("%s exited 0 but completion reported exit %d", name, *terminal.ExitCode)
 	}
 	var exitErr *exec.ExitError
 	if errors.As(runErr, &exitErr) {
 		if exitErr.ExitCode() == *terminal.ExitCode {
 			return nil
 		}
-		return invalidMachineOutput("%s exit status %d does not match terminal event %d", name, exitErr.ExitCode(), *terminal.ExitCode)
+		return invalidMachineOutput("%s exit status %d does not match completion %d", name, exitErr.ExitCode(), *terminal.ExitCode)
 	}
 	return runErr
 }

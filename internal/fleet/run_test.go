@@ -125,6 +125,19 @@ func TestRunRejectsInvalidPrepareMemory(t *testing.T) {
 	}
 }
 
+func TestRunRejectsRemovedAutomaticMemory(t *testing.T) {
+	run := loadRunExample(t)
+	run.Prepare.Memory = "auto"
+
+	err := run.Validate()
+	if err == nil {
+		t.Fatal("Validate succeeded with removed automatic memory")
+	}
+	if !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("Validate error = %v, want ErrInvalidContract", err)
+	}
+}
+
 func TestRunRejectsMissingResultStore(t *testing.T) {
 	run := loadRunExample(t)
 	run.ResultStore = ""
