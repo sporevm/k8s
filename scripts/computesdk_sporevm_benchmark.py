@@ -359,10 +359,18 @@ def run_sandbox_exec(args: argparse.Namespace, name: str) -> str:
         return error
     if not isinstance(events, list):
         return "sandbox exec response was not an event list"
-    terminal = next((event for event in reversed(events) if isinstance(event, dict) and event.get("event") in {"exit", "failure"}), None)
+    terminal = next(
+        (event for event in reversed(events) if isinstance(event, dict) and event.get("event") == "completion"),
+        None,
+    )
     if terminal is None:
         return "sandbox exec response had no terminal event"
-    if terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+    if (
+        terminal.get("schema") != "spore.automation.event.v1"
+        or terminal.get("schema_version") != 1
+        or terminal.get("outcome") != "completed"
+        or terminal.get("exit_code") != 0
+    ):
         return f"sandbox exec terminal={terminal!r}"
     return ""
 
@@ -372,12 +380,17 @@ def run_response_error(response: dict[str, Any]) -> str:
     if not isinstance(events, list):
         return "run response had no event list"
     terminal = next(
-        (event for event in reversed(events) if isinstance(event, dict) and event.get("event") in {"exit", "failure"}),
+        (event for event in reversed(events) if isinstance(event, dict) and event.get("event") == "completion"),
         None,
     )
     if terminal is None:
         return "run response had no terminal event"
-    if terminal.get("event") != "exit" or terminal.get("exit_code") != 0:
+    if (
+        terminal.get("schema") != "spore.automation.event.v1"
+        or terminal.get("schema_version") != 1
+        or terminal.get("outcome") != "completed"
+        or terminal.get("exit_code") != 0
+    ):
         return f"run terminal={terminal!r}"
     return ""
 
