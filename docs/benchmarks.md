@@ -397,3 +397,33 @@ post-upgrade sample as migration or cache-rebuild evidence rather than
 steady-state cold-parent TTI. Temporary captures are removed through
 `spore rm --spore`; raw directory deletion is unsafe because v0.13.0
 disk-backed saves own durable host-cache pins.
+
+On 2026-08-04 UTC, public runtime `0.1.17` with SporeVM 0.16.0 completed the
+repeatable release benchmark from harness revision
+`de82e8500efd74f0ad679c0907475648660acacf`. The isolated in-cluster run
+recorded 100 template-hit fresh-child requests and 100 warm execs in one named
+sandbox:
+
+```text
+metric                                  p50       p95       p99
+template-hit external wall          126.115   127.073   232.505 ms
+template-hit node execution         125.135   126.129   126.291 ms
+template-hit node total             125.161   126.160   126.319 ms
+warm sandbox exec external wall       6.272     6.861     8.583 ms
+```
+
+The external-wall p99 includes a client/API scheduling outlier that does not
+appear in node execution: node-total p99 remained 126.319ms. Keep both values;
+discarding the external observation would overstate tail stability. The cold
+parent was 351.815ms externally and 350.535ms on-node, including 219.914ms of
+template capture. Sandbox creation was 73.946ms, and its application-cold first
+exec was 103.434ms. The complete helper and task took 89.947 seconds.
+
+The report bound those samples to chart OCI digest
+`sha256:cc7c4a0ce8926b2365a35c9e2df7f86f73f4f668543d9a248ac9f2b0c804a9aa`,
+chart package SHA-256
+`0e521bdd5ad399a909bcfa663b8f4a9bff4a3eab78a12754db4650a031d02fcf`, and
+runtime image ID
+`ghcr.io/sporevm/k8s-runtime@sha256:1e97f772f88d74cbe38bcb87336b85005d7cc682d5afbce96b2598625ecb3370`.
+All requests completed, execution slots recovered to 1/1, and the task left no
+benchmark pods, saved-state pins, or per-run host paths.
