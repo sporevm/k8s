@@ -14,6 +14,7 @@ probe_id="$(date -u +%Y%m%d%H%M%S)-$$"
 runtime_pod="spore-release-acceptance-${probe_id}"
 client_pod="${runtime_pod}-client"
 sandbox_name="acceptance-${probe_id}"
+acceptance_root="/var/lib/sporevm/release-acceptance-${probe_id}"
 agent_port=18080
 api_port=18081
 tmpdir="$(mktemp -d)"
@@ -41,12 +42,13 @@ kube() {
 
 release_templates() {
   kube -n "${namespace}" exec "${runtime_pod}" -c runtime -- /bin/sh -ec '
-    for template in /acceptance/work/templates/*/parent.spore /acceptance/work/templates/.build-*/parent.spore; do
+    root="$1"
+    for template in "${root}"/work/templates/*/parent.spore "${root}"/work/templates/.build-*/parent.spore; do
       [ -d "${template}" ] || continue
       /usr/local/bin/spore --json rm --spore "${template}"
     done
-    rm -rf /acceptance/work /acceptance/agent-results /acceptance/coordinator-results
-  '
+    rm -rf "${root}"
+  ' sh "${acceptance_root}"
 }
 
 cleanup() {
@@ -97,15 +99,15 @@ spec:
       command: ["/bin/sh", "-ec"]
       args:
         - |
-          mkdir -p /acceptance/work /acceptance/agent-results /acceptance/coordinator-results
+          mkdir -p ${acceptance_root}/work ${acceptance_root}/agent-results ${acceptance_root}/coordinator-results
           /usr/local/bin/spore-agent \
             --listen=:${agent_port} \
             --agent-id=release-acceptance \
             --cell-id=release-acceptance \
             --slots=1 \
             --spore-path=/usr/local/bin/spore \
-            --result-store-root=/acceptance/agent-results \
-            --work-root=/acceptance/work \
+            --result-store-root=${acceptance_root}/agent-results \
+            --work-root=${acceptance_root}/work \
             --bundle-cache-root=/var/lib/sporevm/bundle-cache \
             --rootfs-cache-root=/var/lib/sporevm/rootfs-cache \
             --backend=kvm \
@@ -128,8 +130,6 @@ spec:
           mountPath: /dev/kvm
         - name: sporevm-var
           mountPath: /var/lib/sporevm
-        - name: acceptance
-          mountPath: /acceptance
   volumes:
     - name: kvm
       hostPath:
@@ -139,8 +139,6 @@ spec:
       hostPath:
         path: /var/lib/sporevm
         type: DirectoryOrCreate
-    - name: acceptance
-      emptyDir: {}
 YAML
 kube -n "${namespace}" wait --for=condition=Ready "pod/${runtime_pod}" --timeout=5m
 
