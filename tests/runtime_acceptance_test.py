@@ -6,11 +6,12 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scripts.computesdk_sporevm_benchmark import run_response_error
-from scripts.runtime_acceptance import require_successful_events, run_acceptance
+from scripts.runtime_acceptance import percentile_summary, require_successful_events, run_acceptance
 
 
 class AcceptanceHandler(BaseHTTPRequestHandler):
     run_count = 0
+    exec_count = 0
     sandbox_created = False
     sandbox_deleted = False
 
@@ -29,10 +30,11 @@ class AcceptanceHandler(BaseHTTPRequestHandler):
         self.read_json()
         if self.path == "/runs":
             type(self).run_count += 1
+            count = self.run_count
             self.reply(
                 {
-                    "template": {"id": "sha256:template", "cacheHit": self.run_count > 1},
-                    "timingsMs": {"templateMs": 1, "executionMs": 2, "totalMs": 3},
+                    "template": {"id": "sha256:template", "cacheHit": count > 1},
+                    "timingsMs": {"templateMs": count, "executionMs": count * 2, "totalMs": count * 3},
                     "events": [terminal_event()],
                 }
             )
@@ -48,6 +50,7 @@ class AcceptanceHandler(BaseHTTPRequestHandler):
             )
             return
         if self.path.endswith("/exec"):
+            type(self).exec_count += 1
             self.reply([terminal_event()])
             return
         self.send_error(404)
@@ -88,6 +91,7 @@ def terminal_event() -> dict[str, object]:
 class RuntimeAcceptanceTest(unittest.TestCase):
     def setUp(self) -> None:
         AcceptanceHandler.run_count = 0
+        AcceptanceHandler.exec_count = 0
         AcceptanceHandler.sandbox_created = False
         AcceptanceHandler.sandbox_deleted = False
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), AcceptanceHandler)
@@ -109,11 +113,25 @@ class RuntimeAcceptanceTest(unittest.TestCase):
             "acceptance",
             2,
             {"runtimeImage": "example.com/runtime:1"},
+            warm_run_iterations=3,
+            sandbox_exec_iterations=4,
         )
 
         self.assertEqual(report["templateID"], "sha256:template")
         self.assertEqual(report["cleanup"], {"availableSlots": 1, "totalSlots": 1})
+        self.assertEqual(report["benchmark"]["sampleCounts"], {"templateHits": 3, "warmSandboxExecs": 3})
+        self.assertEqual(
+            report["benchmark"]["percentilesMs"]["templateHitNode"]["totalMs"],
+            {"p50": 9.0, "p95": 12.0, "p99": 12.0},
+        )
+        self.assertEqual(len(report["benchmark"]["samples"]["templateHitWallMs"]), 3)
+        self.assertEqual(len(report["benchmark"]["samples"]["warmSandboxExecWallMs"]), 3)
+        self.assertEqual(AcceptanceHandler.run_count, 4)
+        self.assertEqual(AcceptanceHandler.exec_count, 4)
         self.assertTrue(AcceptanceHandler.sandbox_deleted)
+
+    def test_percentiles_use_nearest_rank(self) -> None:
+        self.assertEqual(percentile_summary([4, 1, 3, 2]), {"p50": 2, "p95": 4, "p99": 4})
 
     def test_event_consumers_require_successful_completion(self) -> None:
         self.assertEqual("", run_response_error({"events": [terminal_event()]}))

@@ -10,6 +10,9 @@ workload_image="${SPORE_ACCEPTANCE_WORKLOAD_IMAGE:-docker.io/library/node@sha256
 memory="${SPORE_ACCEPTANCE_MEMORY:-1024mb}"
 timeout_seconds="${SPORE_ACCEPTANCE_TIMEOUT_SECONDS:-180}"
 report_path="${SPORE_ACCEPTANCE_REPORT:-results/runtime-acceptance/latest.json}"
+benchmark_iterations="${SPORE_ACCEPTANCE_BENCHMARK_ITERATIONS:-}"
+helm_release="${SPORE_ACCEPTANCE_HELM_RELEASE:-sporevm-k8s}"
+chart_ref="${SPORE_ACCEPTANCE_CHART_REF:-oci://ghcr.io/sporevm/charts/sporevm-k8s}"
 probe_id="$(date -u +%Y%m%d%H%M%S)-$$"
 runtime_pod="spore-release-acceptance-${probe_id}"
 client_pod="${runtime_pod}-client"
@@ -26,10 +29,21 @@ die() {
 
 command -v "${kubectl_bin}" >/dev/null 2>&1 || die "missing required command: ${kubectl_bin}"
 command -v python3 >/dev/null 2>&1 || die "missing required command: python3"
+if [[ -n "${benchmark_iterations}" ]]; then
+  [[ "${benchmark_iterations}" =~ ^[1-9][0-9]*$ ]] ||
+    die "SPORE_ACCEPTANCE_BENCHMARK_ITERATIONS must be a positive integer"
+  command -v helm >/dev/null 2>&1 || die "missing required command: helm"
+  command -v sha256sum >/dev/null 2>&1 || die "missing required command: sha256sum"
+  command -v git >/dev/null 2>&1 || die "missing required command: git"
+fi
 
 kubectl_args=()
 if [[ -n "${context}" ]]; then
   kubectl_args+=(--context "${context}")
+fi
+helm_args=(-n "${namespace}")
+if [[ -n "${context}" ]]; then
+  helm_args+=(--kube-context "${context}")
 fi
 
 kube() {
@@ -63,6 +77,73 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+
+benchmark_args=()
+provenance_args=()
+if [[ -n "${benchmark_iterations}" ]]; then
+  source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
+  [[ "${source_revision}" =~ ^[0-9a-f]{40}$ ]] || die "could not resolve the source revision"
+  [[ -z "$(git -C "${repo_root}" status --porcelain --untracked-files=no)" ]] ||
+    die "release benchmark source must be clean"
+
+  helm_releases_file="${tmpdir}/helm-releases.json"
+  helm "${helm_args[@]}" list --all -o json >"${helm_releases_file}"
+  read -r release_status helm_revision chart_name chart_version chart_app_version < <(
+    python3 - "${helm_releases_file}" "${helm_release}" "${chart_ref##*/}" <<'PY'
+import json
+import sys
+
+releases = [release for release in json.load(open(sys.argv[1], encoding="utf-8")) if release.get("name") == sys.argv[2]]
+if len(releases) != 1:
+    raise SystemExit(f"expected one Helm release named {sys.argv[2]!r}, found {len(releases)}")
+release = releases[0]
+chart_name = sys.argv[3]
+chart = release.get("chart", "")
+prefix = f"{chart_name}-"
+chart_version = chart[len(prefix):] if chart.startswith(prefix) else ""
+print(
+    release.get("status", ""),
+    release.get("revision", ""),
+    chart_name if chart_version else "",
+    chart_version,
+    release.get("app_version", ""),
+)
+PY
+  )
+  [[ "${release_status}" == "deployed" ]] || die "Helm release is not deployed"
+  [[ "${helm_revision}" =~ ^[1-9][0-9]*$ ]] || die "Helm revision was invalid"
+  [[ -n "${chart_name}" && -n "${chart_version}" && -n "${chart_app_version}" ]] ||
+    die "Helm chart provenance was incomplete"
+
+  helm_pull_log="${tmpdir}/helm-pull.log"
+  helm pull "${chart_ref}" --version "${chart_version}" --destination "${tmpdir}" \
+    >"${helm_pull_log}" 2>&1
+  chart_digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' "${helm_pull_log}" | tail -n 1)"
+  [[ "${chart_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "could not verify the chart digest"
+  chart_package="${tmpdir}/${chart_name}-${chart_version}.tgz"
+  [[ -f "${chart_package}" ]] || die "Helm chart package was missing"
+  chart_package_sha256="$(sha256sum "${chart_package}" | awk '{print $1}')"
+  [[ "${chart_package_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "chart package checksum was invalid"
+  if [[ -n "${SPORE_ACCEPTANCE_EXPECT_CHART_DIGEST:-}" && "${chart_digest}" != "${SPORE_ACCEPTANCE_EXPECT_CHART_DIGEST}" ]]; then
+    die "chart digest did not match the expected digest"
+  fi
+
+  benchmark_args=(
+    --warm-run-iterations "${benchmark_iterations}"
+    --sandbox-exec-iterations "$((benchmark_iterations + 1))"
+  )
+  provenance_args=(
+    --source-revision "${source_revision}"
+    --helm-release "${helm_release}"
+    --helm-revision "${helm_revision}"
+    --chart-ref "${chart_ref}"
+    --chart-version "${chart_version}"
+    --chart-app-version "${chart_app_version}"
+    --chart-digest "${chart_digest}"
+    --chart-package-sha256 "${chart_package_sha256}"
+  )
+  echo "release_acceptance: benchmark provenance verified; samples=${benchmark_iterations}" >&2
+fi
 
 agent_pod="$(kube -n "${namespace}" get pod -l app.kubernetes.io/name=spore-agent -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "${agent_pod}" ]] || die "no spore-agent pod found in namespace ${namespace}"
@@ -115,7 +196,7 @@ spec:
           /usr/local/bin/spore-coordinator \
             --listen=:${api_port} \
             --agent-url=http://127.0.0.1:${agent_port} \
-            --result-store-root=/acceptance/coordinator-results \
+            --result-store-root=${acceptance_root}/coordinator-results \
             --timeout=5m >/tmp/spore-coordinator-acceptance.log 2>&1 &
           wait
       env:
@@ -147,6 +228,9 @@ spore_version="$(kube -n "${namespace}" exec "${runtime_pod}" -c runtime -- /usr
 [[ -n "${runtime_image_id}" && -n "${spore_version}" ]] || die "could not read runtime provenance"
 if [[ -n "${SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE:-}" && "${runtime_image}" != "${SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE}" ]]; then
   die "runtime image ${runtime_image} did not match ${SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE}"
+fi
+if [[ -n "${SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE_ID:-}" && "${runtime_image_id}" != "${SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE_ID}" ]]; then
+  die "runtime image ID did not match the expected digest"
 fi
 if [[ -n "${SPORE_ACCEPTANCE_EXPECT_SPORE_VERSION:-}" && "${spore_version}" != *"${SPORE_ACCEPTANCE_EXPECT_SPORE_VERSION}"* ]]; then
   die "SporeVM version ${spore_version} did not contain ${SPORE_ACCEPTANCE_EXPECT_SPORE_VERSION}"
@@ -193,7 +277,9 @@ report="$(kube -n "${namespace}" exec "${client_pod}" -c client -- \
     --timeout-seconds "${timeout_seconds}" \
     --runtime-image "${runtime_image}" \
     --runtime-image-id "${runtime_image_id}" \
-    --spore-version "${spore_version}")"
+    --spore-version "${spore_version}" \
+    ${benchmark_args[@]+"${benchmark_args[@]}"} \
+    ${provenance_args[@]+"${provenance_args[@]}"})"
 printf '%s\n' "${report}"
 
 echo "release_acceptance: releasing durable template pins" >&2

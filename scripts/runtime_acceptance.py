@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -91,6 +92,35 @@ def execution_slots(status: Any) -> tuple[int, int]:
     return total, available
 
 
+def percentile_summary(values: list[float]) -> dict[str, float]:
+    if not values:
+        raise ValueError("percentile sample must not be empty")
+    ordered = sorted(values)
+
+    def nearest_rank(percentile: float) -> float:
+        index = max(0, int(percentile * len(ordered) + 0.999999999) - 1)
+        return round(ordered[min(index, len(ordered) - 1)], 3)
+
+    return {
+        "p50": nearest_rank(0.50),
+        "p95": nearest_rank(0.95),
+        "p99": nearest_rank(0.99),
+    }
+
+
+def timing_percentiles(samples: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    if not samples:
+        raise ValueError("timing sample must not be empty")
+    keys = set(samples[0])
+    for sample in samples[1:]:
+        keys.intersection_update(sample)
+    return {
+        key: percentile_summary([float(sample[key]) for sample in samples])
+        for key in sorted(keys)
+        if all(isinstance(sample[key], (int, float)) for sample in samples)
+    }
+
+
 def run_acceptance(
     api_url: str,
     agent_url: str,
@@ -99,7 +129,14 @@ def run_acceptance(
     sandbox_name: str,
     timeout: float,
     provenance: dict[str, str],
+    warm_run_iterations: int = 1,
+    sandbox_exec_iterations: int = 2,
 ) -> dict[str, Any]:
+    if warm_run_iterations < 1:
+        raise ValueError("warm_run_iterations must be >= 1")
+    if sandbox_exec_iterations < 2:
+        raise ValueError("sandbox_exec_iterations must be >= 2")
+
     wait_ready(api_url, timeout)
     total, available = execution_slots(request_json(agent_url, "GET", "/status", None, timeout))
     if total < 1 or available != total:
@@ -110,14 +147,24 @@ def run_acceptance(
         "memory": memory,
         "command": ["/bin/sh", "-lc", "node -v"],
     }
+    started = time.perf_counter()
     cold = require_run("cold run", request_json(api_url, "POST", "/runs", run_request, timeout))
-    warm = require_run("template-hit run", request_json(api_url, "POST", "/runs", run_request, timeout))
+    cold_wall_ms = round((time.perf_counter() - started) * 1000, 3)
     if cold["template"].get("cacheHit") is not False:
         raise RuntimeError(f"first run did not capture a cold parent: {cold['template']!r}")
-    if warm["template"].get("cacheHit") is not True:
-        raise RuntimeError(f"second run did not hit the template cache: {warm['template']!r}")
-    if warm["template"]["id"] != cold["template"]["id"]:
-        raise RuntimeError("cold and warm runs selected different templates")
+
+    warm_runs = []
+    warm_run_wall_ms = []
+    for index in range(warm_run_iterations):
+        label = f"template-hit run {index + 1}"
+        started = time.perf_counter()
+        warm = require_run(label, request_json(api_url, "POST", "/runs", run_request, timeout))
+        warm_run_wall_ms.append(round((time.perf_counter() - started) * 1000, 3))
+        if warm["template"].get("cacheHit") is not True:
+            raise RuntimeError(f"{label} did not hit the template cache: {warm['template']!r}")
+        if warm["template"]["id"] != cold["template"]["id"]:
+            raise RuntimeError(f"{label} selected a different template")
+        warm_runs.append(warm)
 
     encoded_name = urllib.parse.quote(sandbox_name, safe="")
     created = False
@@ -139,7 +186,8 @@ def run_acceptance(
             raise RuntimeError(f"sandbox did not reuse the run template: {sandbox!r}")
 
         exec_wall_ms = []
-        for label in ("first sandbox exec", "warm sandbox exec"):
+        for index in range(sandbox_exec_iterations):
+            label = "first sandbox exec" if index == 0 else f"warm sandbox exec {index}"
             started = time.perf_counter()
             events = request_json(
                 api_url,
@@ -165,16 +213,39 @@ def run_acceptance(
 
     return {
         "schema": "sporevm-k8s.runtime-acceptance.v1",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "provenance": provenance,
+        "config": {
+            "workloadImage": image,
+            "memory": memory,
+            "command": run_request["command"],
+        },
         "templateID": cold["template"]["id"],
         "runs": {
             "coldParentTimingsMs": cold["timingsMs"],
-            "templateHitTimingsMs": warm["timingsMs"],
+            "coldParentWallMs": cold_wall_ms,
+            "templateHitTimingsMs": warm_runs[0]["timingsMs"],
         },
         "sandbox": {
             "createTimingsMs": sandbox.get("timingsMs", {}),
             "firstExecWallMs": exec_wall_ms[0],
             "warmExecWallMs": exec_wall_ms[1],
+        },
+        "benchmark": {
+            "sampleCounts": {
+                "templateHits": len(warm_runs),
+                "warmSandboxExecs": len(exec_wall_ms) - 1,
+            },
+            "samples": {
+                "templateHitWallMs": warm_run_wall_ms,
+                "templateHitNodeTimingsMs": [warm["timingsMs"] for warm in warm_runs],
+                "warmSandboxExecWallMs": exec_wall_ms[1:],
+            },
+            "percentilesMs": {
+                "templateHitWall": percentile_summary(warm_run_wall_ms),
+                "templateHitNode": timing_percentiles([warm["timingsMs"] for warm in warm_runs]),
+                "warmSandboxExecWall": percentile_summary(exec_wall_ms[1:]),
+            },
         },
         "cleanup": {"availableSlots": available, "totalSlots": total},
     }
@@ -191,11 +262,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-image", required=True)
     parser.add_argument("--runtime-image-id", required=True)
     parser.add_argument("--spore-version", required=True)
-    return parser.parse_args()
+    parser.add_argument("--warm-run-iterations", type=int, default=1)
+    parser.add_argument("--sandbox-exec-iterations", type=int, default=2)
+    parser.add_argument("--source-revision", default="")
+    parser.add_argument("--helm-release", default="")
+    parser.add_argument("--helm-revision", default="")
+    parser.add_argument("--chart-ref", default="")
+    parser.add_argument("--chart-version", default="")
+    parser.add_argument("--chart-app-version", default="")
+    parser.add_argument("--chart-digest", default="")
+    parser.add_argument("--chart-package-sha256", default="")
+    args = parser.parse_args()
+    if args.warm_run_iterations < 1:
+        parser.error("--warm-run-iterations must be >= 1")
+    if args.sandbox_exec_iterations < 2:
+        parser.error("--sandbox-exec-iterations must be >= 2")
+    return args
 
 
 def main() -> None:
     args = parse_args()
+    provenance = {
+        "runtimeImage": args.runtime_image,
+        "runtimeImageID": args.runtime_image_id,
+        "sporeVersion": args.spore_version,
+    }
+    optional_provenance = {
+        "sourceRevision": args.source_revision,
+        "helmRelease": args.helm_release,
+        "helmRevision": args.helm_revision,
+        "chartRef": args.chart_ref,
+        "chartVersion": args.chart_version,
+        "chartAppVersion": args.chart_app_version,
+        "chartDigest": args.chart_digest,
+        "chartPackageSHA256": args.chart_package_sha256,
+    }
+    provenance.update({key: value for key, value in optional_provenance.items() if value})
     report = run_acceptance(
         args.api_url,
         args.agent_url,
@@ -203,11 +305,9 @@ def main() -> None:
         args.memory,
         args.sandbox_name,
         args.timeout_seconds,
-        {
-            "runtimeImage": args.runtime_image,
-            "runtimeImageID": args.runtime_image_id,
-            "sporeVersion": args.spore_version,
-        },
+        provenance,
+        args.warm_run_iterations,
+        args.sandbox_exec_iterations,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 

@@ -60,6 +60,11 @@ template hits and writes ComputeSDK-style JSON under `results/sequential_tti/`. 
 [docs/benchmarks.md](docs/benchmarks.md) for the live cluster command shape and
 scope.
 
+For published releases, `mise run release:benchmark` runs an isolated
+in-cluster sample, records p50/p95/p99 for template-hit requests and warm
+sandbox execs, and binds the evidence to the live Helm revision, pulled chart
+digest, runtime image ID, SporeVM version, and benchmark source revision.
+
 The actual upstream sequential benchmark can use the adapter under
 `integrations/computesdk`; `docs/benchmarks.md` records the checkout and runner
 command.
