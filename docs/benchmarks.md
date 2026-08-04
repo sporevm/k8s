@@ -119,6 +119,34 @@ written to `results/runtime-acceptance/latest.json` by default. Use
 `SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE` and
 `SPORE_ACCEPTANCE_EXPECT_SPORE_VERSION` to make provenance mismatches fatal.
 
+For repeatable release evidence, run the same isolated lifecycle with a larger
+sample:
+
+```bash
+SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE=ghcr.io/sporevm/k8s-runtime:<version> \
+SPORE_ACCEPTANCE_EXPECT_RUNTIME_IMAGE_ID=ghcr.io/sporevm/k8s-runtime@sha256:<digest> \
+SPORE_ACCEPTANCE_EXPECT_CHART_DIGEST=sha256:<digest> \
+SPORE_ACCEPTANCE_EXPECT_SPORE_VERSION=<version> \
+SPORE_ACCEPTANCE_BENCHMARK_ITERATIONS=100 \
+mise run release:benchmark
+```
+
+This task reads the deployed Helm revision and chart/app versions, pulls that
+exact public chart version to verify its OCI digest and package checksum, then
+records 100 template-hit request samples and 100 warm sandbox-exec samples.
+The report includes raw samples and nearest-rank p50/p95/p99 values, together
+with the benchmark source revision, chart provenance, runtime image ID, and
+SporeVM version. It writes to `results/runtime-benchmark/latest.json` by
+default. The cold parent and first sandbox exec remain separate because they
+have different cache and application-warmth semantics.
+
+Run this task through the environment's normal cluster-access wrapper from a
+host that can reach the Kubernetes API. The benchmark client itself runs on the
+runtime node and calls the temporary API over cluster networking, so tunnel or
+port-forward latency is not included. The acceptance root is unique per run;
+the task releases durable template pins and removes its pods and host path on
+both success and failure.
+
 For coordinator-only functional checks, another short loop is to run the
 coordinator API locally and port-forward to the in-cluster agent:
 
