@@ -86,21 +86,27 @@ if [[ -n "${benchmark_iterations}" ]]; then
   [[ -z "$(git -C "${repo_root}" status --porcelain --untracked-files=no)" ]] ||
     die "release benchmark source must be clean"
 
-  helm_status_file="${tmpdir}/helm-status.json"
-  helm "${helm_args[@]}" status "${helm_release}" -o json >"${helm_status_file}"
+  helm_releases_file="${tmpdir}/helm-releases.json"
+  helm "${helm_args[@]}" list --all -o json >"${helm_releases_file}"
   read -r release_status helm_revision chart_name chart_version chart_app_version < <(
-    python3 - "${helm_status_file}" <<'PY'
+    python3 - "${helm_releases_file}" "${helm_release}" "${chart_ref##*/}" <<'PY'
 import json
 import sys
 
-status = json.load(open(sys.argv[1], encoding="utf-8"))
-metadata = status.get("chart", {}).get("metadata", {})
+releases = [release for release in json.load(open(sys.argv[1], encoding="utf-8")) if release.get("name") == sys.argv[2]]
+if len(releases) != 1:
+    raise SystemExit(f"expected one Helm release named {sys.argv[2]!r}, found {len(releases)}")
+release = releases[0]
+chart_name = sys.argv[3]
+chart = release.get("chart", "")
+prefix = f"{chart_name}-"
+chart_version = chart[len(prefix):] if chart.startswith(prefix) else ""
 print(
-    status.get("info", {}).get("status", ""),
-    status.get("version", ""),
-    metadata.get("name", ""),
-    metadata.get("version", ""),
-    metadata.get("appVersion", ""),
+    release.get("status", ""),
+    release.get("revision", ""),
+    chart_name if chart_version else "",
+    chart_version,
+    release.get("app_version", ""),
 )
 PY
   )
