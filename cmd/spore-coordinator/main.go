@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	defaultRunPath       = "/etc/sporevm/run/run.json"
-	defaultBundleRunPath = "/etc/sporevm/run/bundle-run.json"
+	defaultRunPath         = "/etc/sporevm/run/run.json"
+	defaultBundleRunPath   = "/etc/sporevm/run/bundle-run.json"
+	preparedCleanupTimeout = 2 * time.Minute
 )
 
 type agentURLsFlag []string
@@ -497,7 +498,7 @@ func runBundleWithInspectorAndExecutorOverrides(ctx context.Context, run fleet.B
 	return coordinator.Run(ctx, run)
 }
 
-func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
+func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResultReader, endpoints []agentEndpoint) (report fleet.RuntimeReport, err error) {
 	endpoint, err := selectPrepareEndpoint(source, endpoints)
 	if err != nil {
 		return fleet.RuntimeReport{}, err
@@ -508,6 +509,16 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 		prepareMode = "bundle"
 	}
 	log.Printf("run prepare selected run_id=%s agent_id=%s url=%s mode=%s", source.RunID, endpoint.Status.AgentID, endpoint.URL, prepareMode)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preparedCleanupTimeout)
+		defer cancel()
+		cleanup, cleanupErr := endpoint.Client.ReleasePrepared(cleanupCtx, source)
+		if cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("release prepared run %s: %w", source.RunID, cleanupErr))
+			return
+		}
+		log.Printf("run prepare released run_id=%s agent_id=%s children=%d", source.RunID, endpoint.Status.AgentID, cleanup.RemovedChildren)
+	}()
 
 	var prepared fleet.PreparedBundle
 	if localPrepare {
@@ -534,7 +545,7 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 	if localPrepare {
 		inspector = preparedLocalInspector{Prepared: prepared}
 	}
-	report, err := runBundleWithInspectorAndExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
+	report, err = runBundleWithInspectorAndExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
 		PlanBuilder: fleet.BuildSingleAgentSequentialPlan,
 	}, inspector, executors)
 	if report.Summary.RunID != "" {

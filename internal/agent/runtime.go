@@ -23,6 +23,8 @@ import (
 // ponytail: inline previews keep terminal results useful; move to log object URIs when output size matters.
 const attemptOutputPreviewLimit = 16 * 1024
 
+const preparedCleanupRetryInterval = 50 * time.Millisecond
+
 var (
 	// ErrOversubscribed means the agent cannot reserve the requested slots.
 	ErrOversubscribed = errors.New("agent execution slots oversubscribed")
@@ -266,6 +268,12 @@ type PrepareBundleRequest struct {
 	Backend string
 }
 
+// PreparedRunCleanup reports the prepared run state released by an agent.
+type PreparedRunCleanup struct {
+	RunID           string `json:"runID"`
+	RemovedChildren int    `json:"removedChildren"`
+}
+
 type localPreparation struct {
 	HostClass   fleet.HostClass
 	ParentDir   string
@@ -327,12 +335,15 @@ func (r *Runner) hostClass(ctx context.Context, backend string) (fleet.HostClass
 }
 
 // PrepareLocal prepares and forks a source run without building a portable bundle.
-func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (fleet.PreparedBundle, error) {
+func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
 	prepared, err := r.prepareChildren(ctx, req)
 	if err != nil {
 		return fleet.PreparedBundle{}, err
 	}
-	result := fleet.PreparedBundle{
+	defer func() {
+		err = r.releasePreparedAfterError(ctx, req.Run, err)
+	}()
+	result = fleet.PreparedBundle{
 		Bundle: fleet.Bundle{
 			URI:    "local://prepared/" + req.Run.RunID,
 			Digest: localPreparedDigest(req.Run, prepared.HostClass),
@@ -352,11 +363,14 @@ func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (fl
 }
 
 // PrepareBundle prepares, forks, packs, and inspects a source run bundle locally.
-func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (fleet.PreparedBundle, error) {
+func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
 	prepared, err := r.prepareChildren(ctx, req)
 	if err != nil {
 		return fleet.PreparedBundle{}, err
 	}
+	defer func() {
+		err = r.releasePreparedAfterError(ctx, req.Run, err)
+	}()
 
 	packStart := r.now()
 	if err := r.client.Pack(ctx, PackRequest{
@@ -384,7 +398,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	if err != nil {
 		return fleet.PreparedBundle{}, err
 	}
-	result := fleet.PreparedBundle{
+	result = fleet.PreparedBundle{
 		Bundle: fleet.Bundle{
 			URI:    bundleURI,
 			Digest: inspection.BundleDigest.String(),
@@ -404,7 +418,7 @@ func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (f
 	return result, nil
 }
 
-func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) (localPreparation, error) {
+func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) (prepared localPreparation, err error) {
 	if r.client == nil {
 		return localPreparation{}, ErrSporeClientNotConfigured
 	}
@@ -428,12 +442,15 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 	parentDir := filepath.Join(root, "parent.spore")
 	childrenDir := filepath.Join(root, "children")
 	bundleDir := filepath.Join(root, "bundle")
-	if err := os.RemoveAll(root); err != nil {
+	if _, err := r.ReleasePreparedRun(ctx, req.Run); err != nil {
 		return localPreparation{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return localPreparation{}, err
 	}
+	defer func() {
+		err = r.releasePreparedAfterError(ctx, req.Run, err)
+	}()
 
 	var timings fleet.PrepareTimings
 	runSaveStart := r.now()
@@ -474,6 +491,105 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 		BundleDir:   bundleDir,
 		TimingsMS:   timings,
 	}, nil
+}
+
+// ReleasePreparedRun removes a prepared source run through SporeVM so cache
+// pins are released before the agent work directory is deleted.
+func (r *Runner) ReleasePreparedRun(ctx context.Context, run fleet.Run) (PreparedRunCleanup, error) {
+	result := PreparedRunCleanup{RunID: run.RunID}
+	if r.client == nil {
+		return result, ErrSporeClientNotConfigured
+	}
+	if r.workRoot == "" {
+		return result, ErrWorkRootNotConfigured
+	}
+	if err := run.Validate(); err != nil {
+		return result, err
+	}
+
+	root := r.prepareWorkDir(run)
+	if err := validatePathWithin(r.workRoot, root); err != nil {
+		return result, err
+	}
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	} else if err != nil {
+		return result, err
+	}
+
+	childrenDir := filepath.Join(root, "children")
+	entries, err := os.ReadDir(childrenDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return result, err
+	}
+	var cleanupErrors []error
+	for _, entry := range entries {
+		if !entry.IsDir() || !isPreparedChildDir(entry.Name()) {
+			continue
+		}
+		childDir := filepath.Join(childrenDir, entry.Name())
+		if err := r.removePreparedSpore(ctx, childDir); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove prepared child %s: %w", entry.Name(), err))
+			continue
+		}
+		result.RemovedChildren++
+	}
+
+	parentDir := filepath.Join(root, "parent.spore")
+	if info, statErr := os.Stat(parentDir); statErr == nil && info.IsDir() {
+		if err := r.removePreparedSpore(ctx, parentDir); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove prepared parent: %w", err))
+		}
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		cleanupErrors = append(cleanupErrors, statErr)
+	}
+	if err := errors.Join(cleanupErrors...); err != nil {
+		return result, err
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (r *Runner) releasePreparedAfterError(ctx context.Context, run fleet.Run, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleCleanupTimeout)
+	defer cancel()
+	if _, cleanupErr := r.ReleasePreparedRun(cleanupCtx, run); cleanupErr != nil {
+		return errors.Join(cause, fmt.Errorf("release failed preparation: %w", cleanupErr))
+	}
+	return cause
+}
+
+func (r *Runner) removePreparedSpore(ctx context.Context, path string) error {
+	for {
+		err := r.client.RemoveSavedSpore(ctx, RemoveSavedSporeRequest{SporeDir: path})
+		if err == nil || !savedSporeInUse(err) {
+			return err
+		}
+		timer := time.NewTimer(preparedCleanupRetryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func savedSporeInUse(err error) bool {
+	var machineErr *MachineError
+	return errors.As(err, &machineErr) && machineErr.Envelope.Error.Source == "SavedSporeInUse"
+}
+
+func isPreparedChildDir(name string) bool {
+	childID, err := strconv.Atoi(name)
+	return err == nil && childID >= 0 && name == fmt.Sprintf("%06d", childID)
 }
 
 // RunChildRequest describes one child execution attempt inside a shard lease.

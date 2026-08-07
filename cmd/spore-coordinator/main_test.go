@@ -73,6 +73,9 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	if pulls := spore.pullRequests(); len(pulls) != 0 {
 		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
 	}
+	if got := len(spore.removeSavedRequests()); got != 2 {
+		t.Fatalf("remove saved requests = %d, want child and parent", got)
+	}
 }
 
 func TestCoordinatorAPIExecutesRun(t *testing.T) {
@@ -290,6 +293,81 @@ func TestRunCoordinatorRunReturnsErrorForFailedRuntimeReport(t *testing.T) {
 	if report.Summary.State != "failed" || report.Summary.FailedChildren != 1 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
+	if got := len(spore.removeSavedRequests()); got != 2 {
+		t.Fatalf("remove saved requests = %d, want cleanup after failed child", got)
+	}
+}
+
+func TestRunCoordinatorRunReturnsErrorWhenPreparedCleanupFails(t *testing.T) {
+	source := testRun()
+	runPath := writeJSONFile(t, source)
+	spore := &fakeSporeClient{
+		digest:         testBundleDigest,
+		childCount:     1,
+		removeSavedErr: errors.New("pin release failed"),
+	}
+	server := newTestAgentServer(t, spore, 1)
+
+	var stdout bytes.Buffer
+	err := runCoordinator(context.Background(), coordinatorConfig{
+		RunPath:         runPath,
+		ResultStoreRoot: t.TempDir(),
+		Timeout:         time.Minute,
+		AgentURLs:       agentURLsFlag{server.URL},
+		HTTPClient:      server.Client(),
+	}, &stdout)
+	if err == nil || !strings.Contains(err.Error(), "release prepared run") || !strings.Contains(err.Error(), "pin release failed") {
+		t.Fatalf("runCoordinator error = %v", err)
+	}
+	var report fleet.RuntimeReport
+	if decodeErr := json.Unmarshal(stdout.Bytes(), &report); decodeErr != nil {
+		t.Fatalf("decode report: %v\n%s", decodeErr, stdout.String())
+	}
+	if report.Summary.State != "succeeded" {
+		t.Fatalf("summary = %+v, want successful workload with failed cleanup", report.Summary)
+	}
+}
+
+func TestRunSourceAttemptsCleanupWhenPrepareResponseFails(t *testing.T) {
+	source := testRun()
+	releaseCalled := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/prepare-local":
+			w.Header().Set("content-type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"prepare response lost"}`))
+		case "/release-prepared":
+			releaseCalled <- struct{}{}
+			w.Header().Set("content-type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"runID":%q,"removedChildren":0}`, source.RunID)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	store, err := agent.NewLocalResultStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalResultStore: %v", err)
+	}
+	endpoint := agentEndpoint{
+		URL: server.URL,
+		Client: agenthttp.Client{
+			BaseURL:    server.URL,
+			HTTPClient: server.Client(),
+		},
+		Status: testAgentStatus(),
+	}
+
+	_, err = runSource(context.Background(), source, store, []agentEndpoint{endpoint})
+	if err == nil || !strings.Contains(err.Error(), "prepare response lost") {
+		t.Fatalf("runSource error = %v", err)
+	}
+	select {
+	case <-releaseCalled:
+	default:
+		t.Fatal("release-prepared was not called after uncertain prepare failure")
+	}
 }
 
 func TestRunCoordinatorRunCapacityErrorDoesNotWriteEmptyReport(t *testing.T) {
@@ -494,8 +572,10 @@ type fakeSporeClient struct {
 	childCount     int
 	resumeExitCode int
 	execExitCode   int
+	removeSavedErr error
 	runCaptures    []agent.RunCaptureRequest
 	pulls          []agent.PullRequest
+	removeSaveds   []agent.RemoveSavedSporeRequest
 	inspects       int
 	packs          int
 }
@@ -649,8 +729,11 @@ func (c *fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error
 	return nil
 }
 
-func (c *fakeSporeClient) RemoveSavedSpore(context.Context, agent.RemoveSavedSporeRequest) error {
-	return nil
+func (c *fakeSporeClient) RemoveSavedSpore(_ context.Context, req agent.RemoveSavedSporeRequest) error {
+	c.mu.Lock()
+	c.removeSaveds = append(c.removeSaveds, req)
+	c.mu.Unlock()
+	return c.removeSavedErr
 }
 
 func (c *fakeSporeClient) runCaptureCount() int {
@@ -675,6 +758,12 @@ func (c *fakeSporeClient) packCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.packs
+}
+
+func (c *fakeSporeClient) removeSavedRequests() []agent.RemoveSavedSporeRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]agent.RemoveSavedSporeRequest(nil), c.removeSaveds...)
 }
 
 func testDigest(raw string) agent.DigestRef {

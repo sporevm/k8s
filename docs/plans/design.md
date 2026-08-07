@@ -440,6 +440,12 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
+- Source runs release every prepared child and parent through SporeVM's saved
+  checkpoint removal contract after successful or failed execution. Partial
+  preparation rolls back the same way, cancellation retries only the structured
+  `SavedSporeInUse` race, and raw work-directory removal happens only after pin
+  release succeeds; the batch-owned `shared-chunks` directory is not treated as
+  a checkpoint.
 - The live resident API now runs in-cluster through the public chart. With
   runtime `0.1.7` and SporeVM 0.9.1, direct named VM cleanup dropped from about
   5s to 22ms, and a one-child Node `POST /runs` completed in about 10.4s.
@@ -735,6 +741,9 @@ Done when:
 - `spore-coordinator` treats an aggregate runtime report with
   `state != succeeded` as a failed run even when the container reached the end
   of its process.
+- Prepared source-run state is agent-owned. Coordinators request idempotent
+  release even when the prepare response is uncertain, and cleanup failures
+  fail the run rather than hiding durable cache-pin leaks.
 - Do not add `sporectl ci` yet. CI uses `sporectl submit RUN.json`; helper
   scripts or flags can render CI metadata until a separate subcommand earns its
   keep.

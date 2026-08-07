@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -253,6 +254,113 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	}
 }
 
+func TestRunnerPrepareBundleReleasesPreparedStateAfterPackFailure(t *testing.T) {
+	source := testRun()
+	source.Fork.Count = 2
+	source.Children.Count = 2
+	source.Execution.ChildrenPerShard = 2
+	source.Execution.MaxInFlightPerAgent = 2
+	workRoot := t.TempDir()
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		forkFunc: func(_ context.Context, req ForkRequest) error {
+			for i := 0; i < req.Count; i++ {
+				if err := os.MkdirAll(filepath.Join(req.OutDir, fmt.Sprintf("%06d", i)), 0o755); err != nil {
+					return err
+				}
+			}
+			return os.MkdirAll(filepath.Join(req.OutDir, "shared-chunks"), 0o755)
+		},
+		packFunc: func(context.Context, PackRequest) error {
+			return errors.New("pack failed")
+		},
+	}
+	runner, err := NewRunner(2, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	if err == nil || !strings.Contains(err.Error(), "pack failed") {
+		t.Fatalf("PrepareBundle error = %v", err)
+	}
+	if got := len(client.removeSavedSporeRequests()); got != 3 {
+		t.Fatalf("remove saved requests = %d, want two children and parent", got)
+	}
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepare root still exists: %v", err)
+	}
+}
+
+func TestRunnerPrepareBundleReleasesPreparedStateAfterInspectFailure(t *testing.T) {
+	source := testRun()
+	source.Fork.Count = 1
+	source.Children.Count = 1
+	source.Execution.ChildrenPerShard = 1
+	source.Execution.MaxInFlightPerAgent = 1
+	workRoot := t.TempDir()
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		forkFunc: func(_ context.Context, req ForkRequest) error {
+			return os.MkdirAll(filepath.Join(req.OutDir, "000000"), 0o755)
+		},
+		inspectFunc: func(context.Context, InspectBundleRequest) (InspectBundleResult, error) {
+			return InspectBundleResult{}, errors.New("inspect failed")
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	if err == nil || !strings.Contains(err.Error(), "inspect failed") {
+		t.Fatalf("PrepareBundle error = %v", err)
+	}
+	if got := len(client.removeSavedSporeRequests()); got != 2 {
+		t.Fatalf("remove saved requests = %d, want child and parent", got)
+	}
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepare root still exists: %v", err)
+	}
+}
+
+func TestRunnerPrepareBundlePreservesStateWhenRollbackFails(t *testing.T) {
+	source := testRun()
+	source.Fork.Count = 1
+	source.Children.Count = 1
+	source.Execution.ChildrenPerShard = 1
+	source.Execution.MaxInFlightPerAgent = 1
+	workRoot := t.TempDir()
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		forkFunc: func(_ context.Context, req ForkRequest) error {
+			return os.MkdirAll(filepath.Join(req.OutDir, "000000"), 0o755)
+		},
+		packFunc: func(context.Context, PackRequest) error {
+			return errors.New("pack failed")
+		},
+		removeSavedFunc: func(context.Context, RemoveSavedSporeRequest) error {
+			return errors.New("pin release failed")
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	if err == nil || !strings.Contains(err.Error(), "pack failed") || !strings.Contains(err.Error(), "pin release failed") {
+		t.Fatalf("PrepareBundle error = %v", err)
+	}
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	if _, err := os.Stat(prepareRoot); err != nil {
+		t.Fatalf("prepare root was not retained: %v", err)
+	}
+}
+
 func TestRunnerPrepareLocalCapturesAndForksWithoutPacking(t *testing.T) {
 	source := testRun()
 	source.Fork.Count = 3
@@ -311,6 +419,175 @@ func TestRunnerPrepareLocalCapturesAndForksWithoutPacking(t *testing.T) {
 	}
 	if got := len(client.packRequests()); got != 0 {
 		t.Fatalf("pack requests = %d, want 0", got)
+	}
+}
+
+func TestRunnerReleasePreparedRunRemovesChildrenAndParent(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	for _, path := range []string{
+		filepath.Join(prepareRoot, "children", "000000"),
+		filepath.Join(prepareRoot, "children", "000001"),
+		filepath.Join(prepareRoot, "children", "shared-chunks"),
+		filepath.Join(prepareRoot, "parent.spore"),
+		filepath.Join(prepareRoot, "bundle"),
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("create prepared path: %v", err)
+		}
+	}
+	client := &fakeSporeClient{}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	result, err := runner.ReleasePreparedRun(context.Background(), source)
+	if err != nil {
+		t.Fatalf("ReleasePreparedRun: %v", err)
+	}
+	if result.RunID != source.RunID || result.RemovedChildren != 2 {
+		t.Fatalf("cleanup result = %+v", result)
+	}
+	requests := client.removeSavedSporeRequests()
+	want := []string{
+		filepath.Join(prepareRoot, "children", "000000"),
+		filepath.Join(prepareRoot, "children", "000001"),
+		filepath.Join(prepareRoot, "parent.spore"),
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("remove saved requests = %+v, want %v", requests, want)
+	}
+	for i := range want {
+		if requests[i].SporeDir != want[i] {
+			t.Fatalf("remove saved request %d = %q, want %q", i, requests[i].SporeDir, want[i])
+		}
+	}
+	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepare root still exists: %v", err)
+	}
+}
+
+func TestRunnerReleasePreparedRunRetriesCheckpointStillInUse(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	parentDir := filepath.Join(prepareRoot, "parent.spore")
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	attempts := 0
+	client := &fakeSporeClient{
+		removeSavedFunc: func(_ context.Context, req RemoveSavedSporeRequest) error {
+			attempts++
+			if attempts == 1 {
+				return &MachineError{Envelope: MachineErrorEnvelope{
+					Schema:        errorSchema,
+					SchemaVersion: schemaVersion,
+					Error: MachineErrorBody{
+						Code:      "object.invalid",
+						Message:   "checkpoint in use",
+						Retry:     "after_fix",
+						Retryable: false,
+						Scope:     "object",
+						ExitCode:  22,
+						Source:    "SavedSporeInUse",
+					},
+				}}
+			}
+			return os.RemoveAll(req.SporeDir)
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	if _, err := runner.ReleasePreparedRun(context.Background(), source); err != nil {
+		t.Fatalf("ReleasePreparedRun: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("remove attempts = %d, want 2", attempts)
+	}
+	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepare root still exists: %v", err)
+	}
+}
+
+func TestRunnerReleasePreparedRunKeepsFailedStateForRetry(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	failedChild := filepath.Join(prepareRoot, "children", "000001")
+	for _, path := range []string{
+		filepath.Join(prepareRoot, "children", "000000"),
+		failedChild,
+		filepath.Join(prepareRoot, "parent.spore"),
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("create prepared path: %v", err)
+		}
+	}
+	client := &fakeSporeClient{
+		removeSavedFunc: func(_ context.Context, req RemoveSavedSporeRequest) error {
+			if req.SporeDir == failedChild {
+				return errors.New("pin release failed")
+			}
+			return os.RemoveAll(req.SporeDir)
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	result, err := runner.ReleasePreparedRun(context.Background(), source)
+	if err == nil || !strings.Contains(err.Error(), "pin release failed") {
+		t.Fatalf("ReleasePreparedRun error = %v", err)
+	}
+	if result.RemovedChildren != 1 {
+		t.Fatalf("removed children = %d, want 1", result.RemovedChildren)
+	}
+	if _, err := os.Stat(failedChild); err != nil {
+		t.Fatalf("failed child was not retained: %v", err)
+	}
+	if _, err := os.Stat(prepareRoot); err != nil {
+		t.Fatalf("prepare root was not retained: %v", err)
+	}
+	if got := len(client.removeSavedSporeRequests()); got != 3 {
+		t.Fatalf("remove saved requests = %d, want all children and parent attempted", got)
+	}
+}
+
+func TestRunnerPrepareLocalReleasesPartialStateOnFailure(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		runFunc: func(_ context.Context, req RunCaptureRequest) ([]RunEvent, error) {
+			if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+				return nil, err
+			}
+			return nil, errors.New("capture failed")
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+	if err == nil || !strings.Contains(err.Error(), "capture failed") {
+		t.Fatalf("PrepareLocal error = %v", err)
+	}
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial prepare root still exists: %v", err)
+	}
+	requests := client.removeSavedSporeRequests()
+	if len(requests) != 1 || requests[0].SporeDir != filepath.Join(prepareRoot, "parent.spore") {
+		t.Fatalf("remove saved requests = %+v", requests)
 	}
 }
 
