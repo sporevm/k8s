@@ -64,6 +64,18 @@ func (c Client) PrepareLocal(ctx context.Context, run fleet.Run) (fleet.Prepared
 	return prepared, nil
 }
 
+// ReleasePrepared removes a prepared source run and releases its SporeVM pins.
+func (c Client) ReleasePrepared(ctx context.Context, run fleet.Run) (agent.PreparedRunCleanup, error) {
+	var result agent.PreparedRunCleanup
+	if err := c.postJSON(ctx, "/release-prepared", run, &result); err != nil {
+		return agent.PreparedRunCleanup{}, err
+	}
+	if result.RunID != run.RunID {
+		return agent.PreparedRunCleanup{}, errors.New("released prepared run ID did not match request")
+	}
+	return result, nil
+}
+
 // Run executes one command in a fresh ephemeral child on the agent.
 func (c Client) Run(ctx context.Context, req agent.RunRequest) (agent.RunResponse, error) {
 	var response agent.RunResponse

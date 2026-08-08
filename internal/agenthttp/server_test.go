@@ -3,6 +3,7 @@ package agenthttp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -147,6 +148,14 @@ func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	}
 	if _, err := source.Compile(prepared); err != nil {
 		t.Fatalf("Compile prepared bundle: %v", err)
+	}
+
+	cleanup, err := client.ReleasePrepared(context.Background(), source)
+	if err != nil {
+		t.Fatalf("ReleasePrepared: %v", err)
+	}
+	if cleanup.RunID != source.RunID || cleanup.RemovedChildren != 1 {
+		t.Fatalf("cleanup = %+v", cleanup)
 	}
 }
 
@@ -365,8 +374,13 @@ func (c fakeSporeClient) RunCapture(_ context.Context, req agent.RunCaptureReque
 	}}, nil
 }
 
-func (c fakeSporeClient) Fork(context.Context, agent.ForkRequest) error {
-	return nil
+func (c fakeSporeClient) Fork(_ context.Context, req agent.ForkRequest) error {
+	for i := 0; i < req.Count; i++ {
+		if err := os.MkdirAll(filepath.Join(req.OutDir, fmt.Sprintf("%06d", i)), 0o755); err != nil {
+			return err
+		}
+	}
+	return os.MkdirAll(filepath.Join(req.OutDir, "shared-chunks"), 0o755)
 }
 
 func (c fakeSporeClient) Pack(context.Context, agent.PackRequest) error {
@@ -441,8 +455,8 @@ func (c fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error 
 	return nil
 }
 
-func (c fakeSporeClient) RemoveSavedSpore(context.Context, agent.RemoveSavedSporeRequest) error {
-	return nil
+func (c fakeSporeClient) RemoveSavedSpore(_ context.Context, req agent.RemoveSavedSporeRequest) error {
+	return os.RemoveAll(req.SporeDir)
 }
 
 func testDigest(raw string) agent.DigestRef {

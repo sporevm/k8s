@@ -171,27 +171,44 @@ func unsafeLocalPathSegment(part string) bool {
 }
 
 func writeJSONCreateOnly(path string, value any) (bool, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	var payload strings.Builder
+	encoder := json.NewEncoder(&payload)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
 		return false, err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if errors.Is(err, os.ErrExist) {
-		return false, nil
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, err
 	}
+	file, err := os.CreateTemp(dir, ".sporevm-result-*.tmp")
 	if err != nil {
 		return false, err
 	}
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
+	tempPath := file.Name()
+	defer os.Remove(tempPath)
+	if err := file.Chmod(0o644); err != nil {
 		_ = file.Close()
-		_ = os.Remove(path)
+		return false, err
+	}
+	if _, err := file.WriteString(payload.String()); err != nil {
+		_ = file.Close()
+		return false, err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
 		return false, err
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
 		return false, err
+	}
+	if err := os.Link(tempPath, path); errors.Is(err, os.ErrExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if err := syncDirectory(dir); err != nil {
+		return true, err
 	}
 	return true, nil
 }

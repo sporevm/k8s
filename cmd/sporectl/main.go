@@ -479,9 +479,10 @@ func coordinatorJob(names resourceNames, labels map[string]string, opts submitOp
 			Template: podTemplate{
 				Metadata: metadata{Labels: labels},
 				Spec: podSpec{
-					RestartPolicy:                "Never",
-					AutomountServiceAccountToken: boolPtr(false),
-					ServiceAccountName:           opts.ServiceAccountName,
+					RestartPolicy:                 "Never",
+					TerminationGracePeriodSeconds: int64Ptr(150),
+					AutomountServiceAccountToken:  boolPtr(false),
+					ServiceAccountName:            opts.ServiceAccountName,
 					NodeSelector: map[string]string{
 						"kubernetes.io/arch": "arm64",
 						"sporevm.io/agent":   "true",
@@ -706,14 +707,17 @@ type podTemplate struct {
 }
 
 type podSpec struct {
-	RestartPolicy                string            `json:"restartPolicy"`
-	AutomountServiceAccountToken *bool             `json:"automountServiceAccountToken,omitempty"`
-	ServiceAccountName           string            `json:"serviceAccountName,omitempty"`
-	NodeSelector                 map[string]string `json:"nodeSelector,omitempty"`
-	Tolerations                  []toleration      `json:"tolerations,omitempty"`
-	Containers                   []container       `json:"containers"`
-	Volumes                      []volume          `json:"volumes,omitempty"`
+	RestartPolicy                 string            `json:"restartPolicy"`
+	TerminationGracePeriodSeconds *int64            `json:"terminationGracePeriodSeconds,omitempty"`
+	AutomountServiceAccountToken  *bool             `json:"automountServiceAccountToken,omitempty"`
+	ServiceAccountName            string            `json:"serviceAccountName,omitempty"`
+	NodeSelector                  map[string]string `json:"nodeSelector,omitempty"`
+	Tolerations                   []toleration      `json:"tolerations,omitempty"`
+	Containers                    []container       `json:"containers"`
+	Volumes                       []volume          `json:"volumes,omitempty"`
 }
+
+func int64Ptr(value int64) *int64 { return &value }
 
 type toleration struct {
 	Key      string `json:"key"`
