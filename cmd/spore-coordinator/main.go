@@ -11,8 +11,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sporevm/k8s/internal/agent"
@@ -89,11 +91,14 @@ func main() {
 	if cfg.RunPath == "" && cfg.BundleRunPath == "" {
 		cfg.RunPath = defaultRunPath
 	}
-	if err := runCoordinator(context.Background(), cfg, os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runCoordinator(ctx, cfg, os.Stdout); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			log.Fatalf("coordinator timed out after %s: %v", cfg.Timeout, err)
+			_, _ = fmt.Fprintf(os.Stderr, "coordinator timed out after %s: %v\n", cfg.Timeout, err)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "coordinator failed: %v\n", err)
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "coordinator failed: %v\n", err)
 		os.Exit(1)
 	}
 }

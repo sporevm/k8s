@@ -47,6 +47,7 @@ func TestBuildSubmitResourcesUsesPerRunObjects(t *testing.T) {
 		`"--run=/etc/sporevm/run/run.json"`,
 		`"--agent-url=http://spore-agent.sporevm-system.svc.cluster.local:8080"`,
 		`"emptyDir":{}`,
+		`"terminationGracePeriodSeconds":150`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resource JSON missing %s:\n%s", want, body)

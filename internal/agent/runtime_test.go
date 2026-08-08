@@ -555,8 +555,224 @@ func TestRunnerReleasePreparedRunKeepsFailedStateForRetry(t *testing.T) {
 	if _, err := os.Stat(prepareRoot); err != nil {
 		t.Fatalf("prepare root was not retained: %v", err)
 	}
-	if got := len(client.removeSavedSporeRequests()); got != 3 {
-		t.Fatalf("remove saved requests = %d, want all children and parent attempted", got)
+	if got := len(client.removeSavedSporeRequests()); got != 2 {
+		t.Fatalf("remove saved requests = %d, want cleanup to stop at ambiguous failure", got)
+	}
+}
+
+func TestRunnerReleasePreparedRunSerializesWithPrepare(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		runFunc: func(_ context.Context, req RunCaptureRequest) ([]RunEvent, error) {
+			if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+				return nil, err
+			}
+			close(started)
+			<-proceed
+			return []RunEvent{captureExitEvent(req.CaptureDir)}, nil
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareDone := make(chan error, 1)
+	go func() {
+		_, err := runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+		prepareDone <- err
+	}()
+	<-started
+	releaseDone := make(chan error, 1)
+	go func() { _, err := runner.ReleasePreparedRun(context.Background(), source); releaseDone <- err }()
+	select {
+	case err := <-releaseDone:
+		t.Fatalf("release passed active prepare barrier: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(proceed)
+	if err := <-prepareDone; err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	if err := <-releaseDone; err != nil {
+		t.Fatalf("ReleasePreparedRun: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workRoot, source.RunID, "prepare")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepared state remains: %v", err)
+	}
+	runner.prepareOpsMu.Lock()
+	defer runner.prepareOpsMu.Unlock()
+	if len(runner.prepareOps) != 0 {
+		t.Fatalf("prepare operation gates retained after completion: %d", len(runner.prepareOps))
+	}
+}
+
+func TestRunnerReleasePreparedRunGateHonorsCancellation(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	client := &fakeSporeClient{
+		hostInfo: validHostInfo(),
+		runFunc: func(_ context.Context, req RunCaptureRequest) ([]RunEvent, error) {
+			if err := os.MkdirAll(req.CaptureDir, 0o755); err != nil {
+				return nil, err
+			}
+			close(started)
+			<-proceed
+			return []RunEvent{captureExitEvent(req.CaptureDir)}, nil
+		},
+	}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareDone := make(chan error, 1)
+	go func() {
+		_, err := runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+		prepareDone <- err
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := runner.ReleasePreparedRun(ctx, source); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReleasePreparedRun error = %v, want deadline exceeded", err)
+	}
+	runner.prepareOpsMu.Lock()
+	if gate := runner.prepareOps[source.RunID]; gate == nil || gate.refs != 1 {
+		runner.prepareOpsMu.Unlock()
+		t.Fatalf("active prepare gate after canceled waiter = %+v", gate)
+	}
+	runner.prepareOpsMu.Unlock()
+	close(proceed)
+	if err := <-prepareDone; err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	runner.prepareOpsMu.Lock()
+	defer runner.prepareOpsMu.Unlock()
+	if len(runner.prepareOps) != 0 {
+		t.Fatalf("prepare operation gates retained after cancellation: %d", len(runner.prepareOps))
+	}
+}
+
+func TestRunnerReleasePreparedRunFailsClosedOnSymlink(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	outside := t.TempDir()
+	runDir := filepath.Join(workRoot, source.RunID)
+	if err := os.Symlink(outside, runDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(outside, "prepare", "parent.spore"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeSporeClient{}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.ReleasePreparedRun(context.Background(), source); err == nil {
+		t.Fatal("ReleasePreparedRun succeeded through symlink")
+	}
+	if got := len(client.removeSavedSporeRequests()); got != 0 {
+		t.Fatalf("outside removal requests = %d", got)
+	}
+}
+
+func TestRunnerReleasePreparedRunRetriesSupportedRemovalAfterAmbiguousDelete(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	parent := filepath.Join(workRoot, source.RunID, "prepare", "parent.spore")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	client := &fakeSporeClient{removeSavedFunc: func(_ context.Context, req RemoveSavedSporeRequest) error {
+		attempts++
+		if attempts == 1 {
+			if err := os.RemoveAll(req.SporeDir); err != nil {
+				return err
+			}
+			return errors.New("ambiguous response")
+		}
+		return nil
+	}}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.ReleasePreparedRun(context.Background(), source); err == nil {
+		t.Fatal("first release succeeded")
+	}
+	if _, err := runner.ReleasePreparedRun(context.Background(), source); err != nil {
+		t.Fatalf("repeated release: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workRoot, source.RunID, "prepare")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepare root remains: %v", err)
+	}
+	if got := len(client.removeSavedSporeRequests()); got != 2 {
+		t.Fatalf("removal calls = %d, want 2", got)
+	}
+}
+
+func TestRunnerReleasePreparedRunRetainsLedgerWhenMissingRemovalCannotResume(t *testing.T) {
+	source := testRun()
+	workRoot := t.TempDir()
+	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+	parent := filepath.Join(prepareRoot, "parent.spore")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	client := &fakeSporeClient{removeSavedFunc: func(_ context.Context, req RemoveSavedSporeRequest) error {
+		attempts++
+		if attempts == 1 {
+			if err := os.RemoveAll(req.SporeDir); err != nil {
+				return err
+			}
+			return errors.New("ambiguous response")
+		}
+		return os.ErrNotExist
+	}}
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.ReleasePreparedRun(context.Background(), source); err == nil {
+		t.Fatal("first release succeeded")
+	}
+	if _, err := runner.ReleasePreparedRun(context.Background(), source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repeated release error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(prepareRoot, preparedCleanupLedgerName)); err != nil {
+		t.Fatalf("cleanup ledger not retained: %v", err)
+	}
+	if got := len(client.removeSavedSporeRequests()); got != 2 {
+		t.Fatalf("removal calls = %d, want 2", got)
+	}
+}
+
+func TestValidateCleanupLedgerPathsRequiresChildBeforeParentOrder(t *testing.T) {
+	for _, pending := range [][]string{
+		{"parent.spore", "children/000001"},
+		{"children/000001", "children/000001"},
+		{"children/000002", "children/000001", "parent.spore"},
+	} {
+		if err := validateCleanupLedgerPaths(pending); err == nil {
+			t.Fatalf("validateCleanupLedgerPaths(%v) succeeded", pending)
+		}
+	}
+	for _, pending := range [][]string{
+		nil,
+		{"parent.spore"},
+		{"children/000001", "children/000003", "parent.spore"},
+	} {
+		if err := validateCleanupLedgerPaths(pending); err != nil {
+			t.Fatalf("validateCleanupLedgerPaths(%v): %v", pending, err)
+		}
 	}
 }
 

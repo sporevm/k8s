@@ -440,12 +440,22 @@ help later with coarse admission, but cache posture belongs to SporeVM agents.
 - The coordinator now maps aggregate report state to process exit status, so a
   failed child result fails the coordinator process instead of producing a
   successful Kubernetes Job.
-- Source runs release every prepared child and parent through SporeVM's saved
-  checkpoint removal contract after successful or failed execution. Partial
-  preparation rolls back the same way, cancellation retries only the structured
+- Source runs release every fully published prepared child and parent through
+  SporeVM's saved checkpoint removal contract after successful or failed
+  execution. A preparation root that fails before publishing a valid supported
+  checkpoint is retained for diagnosis/operator recovery rather than removed
+  raw. One-shot coordinators propagate interruption into the run, then perform
+  detached, bounded cleanup. Agent
+  prepare and release operations are serialized per unique active run ID, so a
+  release following an ambiguous prepare response waits for preparation to
+  unwind. Cancellation retries only the structured
   `SavedSporeInUse` race, and raw work-directory removal happens only after pin
   release succeeds; the batch-owned `shared-chunks` directory is not treated as
-  a checkpoint.
+  a checkpoint. Cleanup first persists a pending-path ledger and only advances
+  it after confirmed removals. Missing pending paths are sent through SporeVM
+  and succeed only when its exact durable removal journal authorizes resumption;
+  arbitrary missing paths and unsafe filesystem types fail closed and retain
+  the ledger and prepare root for diagnosis.
 - The live resident API now runs in-cluster through the public chart. With
   runtime `0.1.7` and SporeVM 0.9.1, direct named VM cleanup dropped from about
   5s to 22ms, and a one-child Node `POST /runs` completed in about 10.4s.

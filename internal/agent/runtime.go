@@ -25,6 +25,9 @@ const attemptOutputPreviewLimit = 16 * 1024
 
 const preparedCleanupRetryInterval = 50 * time.Millisecond
 
+const preparedCleanupLedgerName = ".cleanup-pending.json"
+const preparedCleanupLedgerTempName = preparedCleanupLedgerName + ".tmp"
+
 var (
 	// ErrOversubscribed means the agent cannot reserve the requested slots.
 	ErrOversubscribed = errors.New("agent execution slots oversubscribed")
@@ -206,6 +209,13 @@ type Runner struct {
 	templateUses     map[string]int
 	sandboxMu        sync.Mutex
 	sandboxes        map[string]func()
+	prepareOpsMu     sync.Mutex
+	prepareOps       map[string]*prepareOperation
+}
+
+type prepareOperation struct {
+	token chan struct{}
+	refs  int
 }
 
 // NewRunner creates a Runner with totalSlots local child execution slots.
@@ -222,6 +232,7 @@ func NewRunner(totalSlots int, opts ...RunnerOption) (*Runner, error) {
 		hostClasses:  make(map[string]fleet.HostClass),
 		templateUses: make(map[string]int),
 		sandboxes:    make(map[string]func()),
+		prepareOps:   make(map[string]*prepareOperation),
 	}
 	for _, opt := range opts {
 		opt(runner)
@@ -336,6 +347,15 @@ func (r *Runner) hostClass(ctx context.Context, backend string) (fleet.HostClass
 
 // PrepareLocal prepares and forks a source run without building a portable bundle.
 func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
+	unlock, err := r.lockPrepareOperation(ctx, req.Run.RunID)
+	if err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	defer unlock()
+	return r.prepareLocal(ctx, req)
+}
+
+func (r *Runner) prepareLocal(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
 	prepared, err := r.prepareChildren(ctx, req)
 	if err != nil {
 		return fleet.PreparedBundle{}, err
@@ -364,6 +384,15 @@ func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (re
 
 // PrepareBundle prepares, forks, packs, and inspects a source run bundle locally.
 func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
+	unlock, err := r.lockPrepareOperation(ctx, req.Run.RunID)
+	if err != nil {
+		return fleet.PreparedBundle{}, err
+	}
+	defer unlock()
+	return r.prepareBundle(ctx, req)
+}
+
+func (r *Runner) prepareBundle(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
 	prepared, err := r.prepareChildren(ctx, req)
 	if err != nil {
 		return fleet.PreparedBundle{}, err
@@ -442,7 +471,7 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 	parentDir := filepath.Join(root, "parent.spore")
 	childrenDir := filepath.Join(root, "children")
 	bundleDir := filepath.Join(root, "bundle")
-	if _, err := r.ReleasePreparedRun(ctx, req.Run); err != nil {
+	if _, err := r.releasePreparedRun(ctx, req.Run); err != nil {
 		return localPreparation{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -496,6 +525,15 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 // ReleasePreparedRun removes a prepared source run through SporeVM so cache
 // pins are released before the agent work directory is deleted.
 func (r *Runner) ReleasePreparedRun(ctx context.Context, run fleet.Run) (PreparedRunCleanup, error) {
+	unlock, err := r.lockPrepareOperation(ctx, run.RunID)
+	if err != nil {
+		return PreparedRunCleanup{RunID: run.RunID}, err
+	}
+	defer unlock()
+	return r.releasePreparedRun(ctx, run)
+}
+
+func (r *Runner) releasePreparedRun(ctx context.Context, run fleet.Run) (PreparedRunCleanup, error) {
 	result := PreparedRunCleanup{RunID: run.RunID}
 	if r.client == nil {
 		return result, ErrSporeClientNotConfigured
@@ -511,37 +549,42 @@ func (r *Runner) ReleasePreparedRun(ctx context.Context, run fleet.Run) (Prepare
 	if err := validatePathWithin(r.workRoot, root); err != nil {
 		return result, err
 	}
-	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+	if err := validateNoSymlinkPath(r.workRoot, root); err != nil {
+		return result, err
+	}
+	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
 		return result, nil
 	} else if err != nil {
 		return result, err
 	}
-
-	childrenDir := filepath.Join(root, "children")
-	entries, err := os.ReadDir(childrenDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	pending, err := loadOrCreateCleanupLedger(root)
+	if err != nil {
 		return result, err
 	}
 	var cleanupErrors []error
-	for _, entry := range entries {
-		if !entry.IsDir() || !isPreparedChildDir(entry.Name()) {
-			continue
+	for len(pending) > 0 {
+		rel := pending[0]
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		info, statErr := os.Lstat(path)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("pending prepared spore %s is unavailable: %w", rel, statErr))
+			break
 		}
-		childDir := filepath.Join(childrenDir, entry.Name())
-		if err := r.removePreparedSpore(ctx, childDir); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove prepared child %s: %w", entry.Name(), err))
-			continue
+		if statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("pending prepared spore %s is not a directory", rel))
+			break
 		}
-		result.RemovedChildren++
-	}
-
-	parentDir := filepath.Join(root, "parent.spore")
-	if info, statErr := os.Stat(parentDir); statErr == nil && info.IsDir() {
-		if err := r.removePreparedSpore(ctx, parentDir); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove prepared parent: %w", err))
+		if err := r.removePreparedSpore(ctx, path); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove prepared spore %s: %w", rel, err))
+			break
 		}
-	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		cleanupErrors = append(cleanupErrors, statErr)
+		if strings.HasPrefix(rel, "children/") {
+			result.RemovedChildren++
+		}
+		pending = pending[1:]
+		if err := writeCleanupLedger(root, pending); err != nil {
+			return result, err
+		}
 	}
 	if err := errors.Join(cleanupErrors...); err != nil {
 		return result, err
@@ -558,10 +601,225 @@ func (r *Runner) releasePreparedAfterError(ctx context.Context, run fleet.Run, c
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleCleanupTimeout)
 	defer cancel()
-	if _, cleanupErr := r.ReleasePreparedRun(cleanupCtx, run); cleanupErr != nil {
+	if _, cleanupErr := r.releasePreparedRun(cleanupCtx, run); cleanupErr != nil {
 		return errors.Join(cause, fmt.Errorf("release failed preparation: %w", cleanupErr))
 	}
 	return cause
+}
+
+func (r *Runner) lockPrepareOperation(ctx context.Context, runID string) (func(), error) {
+	r.prepareOpsMu.Lock()
+	gate := r.prepareOps[runID]
+	if gate == nil {
+		gate = &prepareOperation{token: make(chan struct{}, 1)}
+		gate.token <- struct{}{}
+		r.prepareOps[runID] = gate
+	}
+	gate.refs++
+	r.prepareOpsMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		r.releasePrepareOperationRef(runID, gate)
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		r.releasePrepareOperationRef(runID, gate)
+		return nil, ctx.Err()
+	case <-gate.token:
+	}
+	return func() {
+		gate.token <- struct{}{}
+		r.releasePrepareOperationRef(runID, gate)
+	}, nil
+}
+
+func (r *Runner) releasePrepareOperationRef(runID string, gate *prepareOperation) {
+	r.prepareOpsMu.Lock()
+	defer r.prepareOpsMu.Unlock()
+	gate.refs--
+	if gate.refs == 0 && r.prepareOps[runID] == gate {
+		delete(r.prepareOps, runID)
+	}
+}
+
+func loadOrCreateCleanupLedger(root string) ([]string, error) {
+	if err := validatePreparedTree(root); err != nil {
+		return nil, err
+	}
+	ledger := filepath.Join(root, preparedCleanupLedgerName)
+	data, err := os.ReadFile(ledger)
+	if err == nil {
+		var pending []string
+		if err := json.Unmarshal(data, &pending); err != nil {
+			return nil, fmt.Errorf("read prepared cleanup ledger: %w", err)
+		}
+		if err := validateCleanupLedgerPaths(pending); err != nil {
+			return nil, err
+		}
+		return pending, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	tempLedger := filepath.Join(root, preparedCleanupLedgerTempName)
+	if data, err := os.ReadFile(tempLedger); err == nil {
+		var pending []string
+		if err := json.Unmarshal(data, &pending); err != nil {
+			return nil, fmt.Errorf("read interrupted prepared cleanup ledger: %w", err)
+		}
+		if err := validateCleanupLedgerPaths(pending); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(tempLedger, ledger); err != nil {
+			return nil, err
+		}
+		if err := syncDirectory(root); err != nil {
+			return nil, err
+		}
+		return pending, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	var pending []string
+	children := filepath.Join(root, "children")
+	entries, err := os.ReadDir(children)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if isPreparedChildDir(entry.Name()) {
+			pending = append(pending, filepath.ToSlash(filepath.Join("children", entry.Name())))
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, "parent.spore")); err == nil {
+		pending = append(pending, "parent.spore")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := writeCleanupLedger(root, pending); err != nil {
+		return nil, err
+	}
+	return pending, nil
+}
+
+func writeCleanupLedger(root string, pending []string) error {
+	data, err := json.Marshal(pending)
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(root, preparedCleanupLedgerTempName)
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(root, preparedCleanupLedgerName)); err != nil {
+		return err
+	}
+	return syncDirectory(root)
+}
+
+func validateCleanupLedgerPaths(pending []string) error {
+	previousChild := -1
+	for index, rel := range pending {
+		if rel == "parent.spore" {
+			if index != len(pending)-1 {
+				return errors.New("prepared cleanup ledger parent must be last")
+			}
+			continue
+		}
+		name := strings.TrimPrefix(rel, "children/")
+		if !strings.HasPrefix(rel, "children/") || !isPreparedChildDir(name) {
+			return fmt.Errorf("unsafe prepared cleanup ledger path %q", rel)
+		}
+		childID, _ := strconv.Atoi(name)
+		if childID <= previousChild {
+			return errors.New("prepared cleanup ledger children must be strictly ordered")
+		}
+		previousChild = childID
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+func validatePreparedTree(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("prepared root is not a directory: %s", root)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != "children" && entry.Name() != "parent.spore" && entry.Name() != "bundle" && entry.Name() != preparedCleanupLedgerName && entry.Name() != preparedCleanupLedgerTempName {
+			return fmt.Errorf("unexpected prepared entry %s", entry.Name())
+		}
+		ledgerFile := entry.Name() == preparedCleanupLedgerName || entry.Name() == preparedCleanupLedgerTempName
+		if entry.Type()&os.ModeSymlink != 0 || (!entry.IsDir() && !ledgerFile) || (entry.IsDir() && ledgerFile) {
+			return fmt.Errorf("unsafe prepared entry %s", entry.Name())
+		}
+	}
+	children := filepath.Join(root, "children")
+	childEntries, err := os.ReadDir(children)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range childEntries {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() || (!isPreparedChildDir(entry.Name()) && entry.Name() != "shared-chunks") {
+			return fmt.Errorf("unsafe prepared child entry %s", entry.Name())
+		}
+	}
+	return nil
+}
+
+func validateNoSymlinkPath(base, path string) error {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return err
+	}
+	current := base
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("prepared path contains symlink: %s", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("prepared path component is not a directory: %s", current)
+		}
+	}
+	return nil
 }
 
 func (r *Runner) removePreparedSpore(ctx context.Context, path string) error {
