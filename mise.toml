@@ -35,7 +35,7 @@ description = "Capture repeatable in-cluster release latency percentiles with ex
 run = "SPORE_ACCEPTANCE_BENCHMARK_ITERATIONS=\"${SPORE_ACCEPTANCE_BENCHMARK_ITERATIONS:-100}\" SPORE_ACCEPTANCE_REPORT=\"${SPORE_ACCEPTANCE_REPORT:-results/runtime-benchmark/latest.json}\" scripts/release_acceptance.sh"
 
 [tasks."runtime:image:build"]
-description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.16.0"
+description = "Build the arm64 SporeVM Kubernetes runtime image with SporeVM 0.17.0"
 run = "docker buildx build --platform linux/arm64 -t sporevm-k8s-runtime:dev ."
 
 [tasks."runtime:image:push"]
