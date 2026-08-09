@@ -832,7 +832,10 @@ func (e *MachineError) Error() string {
 	if body.Code == "" {
 		return message
 	}
-	return body.Code + ": " + message
+	if body.Source == "" {
+		return body.Code + ": " + message
+	}
+	return fmt.Sprintf("%s: %s (source=%q)", body.Code, message, body.Source)
 }
 
 // Validate checks the shared error envelope.
