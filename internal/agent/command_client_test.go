@@ -777,6 +777,9 @@ exit 69
 	if machineErr.Envelope.Error.Code != "host.unsupported" {
 		t.Fatalf("error code = %q", machineErr.Envelope.Error.Code)
 	}
+	if got, want := err.Error(), `host.unsupported: The host lacks a required capability. (source="UnsupportedHost")`; got != want {
+		t.Fatalf("HostInfo error = %q, want %q", got, want)
+	}
 }
 
 func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
