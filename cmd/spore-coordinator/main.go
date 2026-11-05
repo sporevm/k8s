@@ -550,9 +550,7 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 	if localPrepare {
 		inspector = preparedLocalInspector{Prepared: prepared}
 	}
-	report, err = runBundleWithInspectorAndExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
-		PlanBuilder: fleet.BuildSingleAgentSequentialPlan,
-	}, inspector, executors)
+	report, err = runBundleWithInspectorAndExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{}, inspector, executors)
 	if report.Summary.RunID != "" {
 		report.Prepare = &fleet.RuntimePrepareSummary{
 			AgentID:      endpoint.Status.AgentID,

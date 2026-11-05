@@ -46,45 +46,6 @@ func TestDecodeBundleRunRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
-func TestBuildDryRunPlanAssigns1000Children(t *testing.T) {
-	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
-	now := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
-
-	plan, err := BuildDryRunPlan(run, agents, DryRunOptions{
-		Now:      now,
-		LeaseTTL: 10 * time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("BuildDryRunPlan: %v", err)
-	}
-
-	if plan.Summary.ChildCount != 1000 {
-		t.Fatalf("child count = %d, want 1000", plan.Summary.ChildCount)
-	}
-	if plan.Summary.ShardCount != 10 || len(plan.Leases) != 10 {
-		t.Fatalf("shards = summary %d leases %d, want 10", plan.Summary.ShardCount, len(plan.Leases))
-	}
-	if plan.Summary.AssignedChildren != 1000 {
-		t.Fatalf("assigned children = %d, want 1000", plan.Summary.AssignedChildren)
-	}
-	if err := ValidateCompleteCoverage(run, plan.Leases); err != nil {
-		t.Fatalf("ValidateCompleteCoverage: %v", err)
-	}
-
-	for i, lease := range plan.Leases {
-		if lease.ShardID != fmt.Sprintf("%s-shard-%04d", run.RunID, i) {
-			t.Fatalf("lease %d shard id = %q", i, lease.ShardID)
-		}
-		if !lease.LeaseDeadline.Equal(now.Add(10 * time.Minute)) {
-			t.Fatalf("lease %d deadline = %s", i, lease.LeaseDeadline)
-		}
-		if lease.ChildStart != i*100 || lease.ChildCount != 100 {
-			t.Fatalf("lease %d range = [%d, %d)", i, lease.ChildStart, lease.ChildStart+lease.ChildCount)
-		}
-	}
-}
-
 func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)
@@ -106,9 +67,6 @@ func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 	}
 	if plan.Summary.AssignedChildren != 1000 {
 		t.Fatalf("assigned children = %d, want 1000", plan.Summary.AssignedChildren)
-	}
-	if err := ValidateCompleteCoverage(run, plan.Leases); err != nil {
-		t.Fatalf("ValidateCompleteCoverage: %v", err)
 	}
 
 	lease := plan.Leases[0]
@@ -136,60 +94,18 @@ func TestBuildSingleAgentSequentialPlanRejectsInsufficientInFlightCapacity(t *te
 	}
 }
 
-func TestBuildDryRunPlanRejectsInsufficientCapacity(t *testing.T) {
-	run := loadExampleRun(t)
-	agents := makeAgents(t, 9, 100, run.HostClass)
-
-	plan, err := BuildDryRunPlan(run, agents, DryRunOptions{})
-	if !errors.Is(err, ErrInsufficientCapacity) {
-		t.Fatalf("BuildDryRunPlan error = %v, want ErrInsufficientCapacity", err)
-	}
-	if plan.Summary.State != "refused" {
-		t.Fatalf("summary state = %q, want refused", plan.Summary.State)
-	}
-}
-
-func TestBuildDryRunPlanRejectsHostClassMismatch(t *testing.T) {
+func TestBuildSingleAgentSequentialPlanRejectsHostClassMismatch(t *testing.T) {
 	run := loadExampleRun(t)
 	hostClass := run.HostClass
 	hostClass.CPUProfile = "graviton2"
-	agents := makeAgents(t, 10, 100, hostClass)
+	agents := makeAgents(t, 1, 100, hostClass)
 
-	plan, err := BuildDryRunPlan(run, agents, DryRunOptions{})
+	plan, err := BuildSingleAgentSequentialPlan(run, agents, DryRunOptions{})
 	if !errors.Is(err, ErrNoCompatibleAgents) {
-		t.Fatalf("BuildDryRunPlan error = %v, want ErrNoCompatibleAgents", err)
+		t.Fatalf("BuildSingleAgentSequentialPlan error = %v, want ErrNoCompatibleAgents", err)
 	}
 	if plan.Summary.State != "refused" {
 		t.Fatalf("summary state = %q, want refused", plan.Summary.State)
-	}
-}
-
-func TestBuildDryRunPlanRejectsFragmentedCapacity(t *testing.T) {
-	run := loadExampleRun(t)
-	agents := makeAgents(t, 20, 50, run.HostClass)
-
-	_, err := BuildDryRunPlan(run, agents, DryRunOptions{})
-	if !errors.Is(err, ErrInsufficientCapacity) {
-		t.Fatalf("BuildDryRunPlan error = %v, want ErrInsufficientCapacity", err)
-	}
-}
-
-func TestValidateCompleteCoverageRejectsGaps(t *testing.T) {
-	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
-
-	plan, err := BuildDryRunPlan(run, agents, DryRunOptions{})
-	if err != nil {
-		t.Fatalf("BuildDryRunPlan: %v", err)
-	}
-	plan.Leases[5].ChildStart += 1
-
-	err = ValidateCompleteCoverage(run, plan.Leases)
-	if err == nil {
-		t.Fatal("ValidateCompleteCoverage succeeded with a gap")
-	}
-	if !errors.Is(err, ErrInvalidContract) {
-		t.Fatalf("ValidateCompleteCoverage error = %v, want ErrInvalidContract", err)
 	}
 }
 

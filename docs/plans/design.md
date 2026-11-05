@@ -225,8 +225,8 @@ separate CI subcommand can wait until the same CI-only defaults are repeated
 enough to justify it.
 
 `spore-coordinator` owns one run when invoked as a batch command. It validates
-the run, chooses compatible agents, prepares or references the bundle, leases
-child ranges, tracks compact aggregate state, and exits with a clear run
+the run, chooses one compatible agent, prepares or references the bundle, leases
+the child range, tracks compact aggregate state, and exits with a clear run
 result.
 
 For latency-sensitive callers, the same coordinator binary runs as a resident
@@ -311,10 +311,9 @@ container cgroup memory, CPU policy, and fixed per-child memory budget. Later it
 should use bundle-specific memory once SporeVM exposes it in machine-readable
 inspection output.
 
-For local runs, admission compares the preparing agent against in-flight
-slot demand, not total child count. The prebuilt bundle planner remains stricter
-and still requires enough compatible fleet slots to cover every child
-concurrently.
+Admission compares one compatible agent against in-flight slot demand, not
+total child count. Prebuilt bundle runs use the same single-agent lease until
+multi-agent handoff exists.
 
 ### Results And Retries
 
@@ -610,17 +609,16 @@ Done when:
 
 ### Slice 6: Honest 1,000-Child Scale
 
-Status: implemented for one compatible single-agent cell. Synthetic planning
-covers 1,000 children, and a live 1,000-child busybox run has completed with
-100 in-flight child slots. The next benchmark work is to turn this into
-repeatable cluster measurements instead of one-off smoke evidence.
+Status: implemented for one compatible single-agent cell. A live 1,000-child
+busybox run has completed with 100 in-flight child slots. The next benchmark
+work is to turn this into repeatable cluster measurements instead of one-off
+smoke evidence.
 
 Scale by adding real capacity or reducing verified per-child requirements, not
 by overstating slots.
 
 Done when:
 
-- dry-run planning proves unique coverage for 1,000 children;
 - live capacity can honestly advertise enough slots across one or more agents;
 - a 1,000-child run reports success rate and timing percentiles.
 - a ComputeSDK-shaped sequential TTI benchmark can run against the live cell.
@@ -697,8 +695,8 @@ Done when:
 ## Verification
 
 - Go contract validation for every fleet example.
-- Unit tests for child id derivation, shard overlap rejection, attempt keys, and
-  terminal-result short-circuiting.
+- Unit tests for create-only result commits and terminal-result
+  short-circuiting.
 - Agent tests for prepare, fork, pack, automatic boot-template reuse, sandbox
   slot ownership, slot admission, cancellation, cleanup, and platform mismatch.
 - Coordinator tests for admission, lease assignment, retry behavior, aggregate

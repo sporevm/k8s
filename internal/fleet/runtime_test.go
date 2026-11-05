@@ -9,53 +9,6 @@ import (
 	"time"
 )
 
-func TestCoordinatorRunExecutesSingleCellPlan(t *testing.T) {
-	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
-	store := newFakeTerminalStore()
-	executors := make(map[string]ShardExecutor, len(agents))
-	for _, agent := range agents {
-		executors[agent.AgentID] = &fakeShardExecutor{
-			fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
-				results := make([]AttemptResult, 0, req.Lease.ChildCount)
-				for childID := req.Lease.ChildStart; childID < req.Lease.ChildRange().End(); childID++ {
-					result := runtimeAttemptResult(run, req.Lease, childID, req.Attempt, AttemptSucceeded, true)
-					store.commit(result)
-					results = append(results, result)
-				}
-				return results, nil
-			},
-		}
-	}
-	coordinator := newTestCoordinator(t, run, agents, store, executors, nil)
-
-	report, err := coordinator.Run(context.Background(), run)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if report.Summary.State != "succeeded" {
-		t.Fatalf("state = %q", report.Summary.State)
-	}
-	if report.Summary.CompletedChildren != 1000 || report.Summary.SucceededChildren != 1000 {
-		t.Fatalf("summary = %+v", report.Summary)
-	}
-	if report.Summary.AssignedShards != 10 || report.Summary.AssignedChildren != 1000 {
-		t.Fatalf("assignment summary = %+v", report.Summary)
-	}
-	if report.Summary.AttemptCount != 1000 {
-		t.Fatalf("attempt count = %d", report.Summary.AttemptCount)
-	}
-	if report.Timings == nil {
-		t.Fatal("timings are nil")
-	}
-	if report.Timings.StagePercentilesMS.Resume.P50 != 30 {
-		t.Fatalf("resume p50 = %v, want 30", report.Timings.StagePercentilesMS.Resume.P50)
-	}
-	if err := ValidateCompleteCoverage(run, report.Plan.Leases); err != nil {
-		t.Fatalf("ValidateCompleteCoverage: %v", err)
-	}
-}
-
 func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)
@@ -83,7 +36,7 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 		}},
 		store,
 		map[string]ShardExecutor{agents[0].AgentID: executor},
-		CoordinatorOptions{PlanBuilder: BuildSingleAgentSequentialPlan},
+		CoordinatorOptions{},
 	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -102,14 +55,20 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	if report.Summary.AssignedShards != 1 || report.Summary.AssignedChildren != 1000 {
 		t.Fatalf("assignment summary = %+v", report.Summary)
 	}
-	if err := ValidateCompleteCoverage(run, report.Plan.Leases); err != nil {
-		t.Fatalf("ValidateCompleteCoverage: %v", err)
+	if report.Summary.AttemptCount != 1000 {
+		t.Fatalf("attempt count = %d", report.Summary.AttemptCount)
+	}
+	if report.Timings == nil {
+		t.Fatal("timings are nil")
+	}
+	if report.Timings.StagePercentilesMS.Resume.P50 != 30 {
+		t.Fatalf("resume p50 = %v, want 30", report.Timings.StagePercentilesMS.Resume.P50)
 	}
 }
 
 func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
+	agents := makeAgents(t, 1, 100, run.HostClass)
 	executor := &fakeShardExecutor{}
 	coordinator, err := NewCoordinator(
 		agents,
@@ -137,7 +96,7 @@ func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 
 func TestCoordinatorRejectsInspectedHostClassMismatch(t *testing.T) {
 	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
+	agents := makeAgents(t, 1, 100, run.HostClass)
 	executor := &fakeShardExecutor{}
 	hostClass := run.HostClass
 	hostClass.CPUProfile = "graviton2"

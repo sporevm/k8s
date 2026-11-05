@@ -39,14 +39,10 @@ type ShardExecutor interface {
 	RunShard(context.Context, ShardExecutionRequest) ([]AttemptResult, error)
 }
 
-// PlanBuilder assigns shard leases for a validated run and agent inventory.
-type PlanBuilder func(BundleRun, []AgentStatus, DryRunOptions) (Plan, error)
-
 // CoordinatorOptions configures a single-cell coordinator.
 type CoordinatorOptions struct {
-	Now         func() time.Time
-	LeaseTTL    time.Duration
-	PlanBuilder PlanBuilder
+	Now      func() time.Time
+	LeaseTTL time.Duration
 }
 
 // Coordinator owns run admission and static single-cell shard execution.
@@ -57,7 +53,6 @@ type Coordinator struct {
 	executors map[string]ShardExecutor
 	now       func() time.Time
 	leaseTTL  time.Duration
-	plan      PlanBuilder
 }
 
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
@@ -82,10 +77,6 @@ func NewCoordinator(
 	if leaseTTL <= 0 {
 		leaseTTL = 10 * time.Minute
 	}
-	planBuilder := opts.PlanBuilder
-	if planBuilder == nil {
-		planBuilder = BuildDryRunPlan
-	}
 	copiedAgents := append([]AgentStatus(nil), agents...)
 	copiedExecutors := make(map[string]ShardExecutor, len(executors))
 	for agentID, executor := range executors {
@@ -101,11 +92,10 @@ func NewCoordinator(
 		executors: copiedExecutors,
 		now:       now,
 		leaseTTL:  leaseTTL,
-		plan:      planBuilder,
 	}, nil
 }
 
-// Run admits, plans, and executes one bundle run across the coordinator's static agents.
+// Run admits, plans, and executes one bundle run on one of the coordinator's agents.
 func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, error) {
 	startedAt := c.now()
 	if err := run.Validate(); err != nil {
@@ -119,14 +109,11 @@ func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, er
 		return RuntimeReport{}, err
 	}
 
-	plan, err := c.plan(run, c.agents, DryRunOptions{
+	plan, err := BuildSingleAgentSequentialPlan(run, c.agents, DryRunOptions{
 		Now:      startedAt,
 		LeaseTTL: c.leaseTTL,
 	})
 	if err != nil {
-		return RuntimeReport{Plan: plan}, err
-	}
-	if err := ValidateCompleteCoverage(run, plan.Leases); err != nil {
 		return RuntimeReport{Plan: plan}, err
 	}
 
