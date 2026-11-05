@@ -812,13 +812,7 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 			if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
 				return PullResult{}, err
 			}
-			pull := pullResult(req.OutDir, "42")
-			pull.Timings = &PullTimings{
-				Verify:         1,
-				InstallIndexes: 2,
-				InstallChunks:  3,
-			}
-			return pull, nil
+			return pullResult(req.OutDir, "42"), nil
 		},
 		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
 			if req.GenerationPath == "" {
@@ -868,9 +862,6 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	}
 	if result.TimingsMS.ArtifactPull < 0 || result.TimingsMS.Resume < 0 {
 		t.Fatalf("timings = %+v", result.TimingsMS)
-	}
-	if result.TimingsMS.PullVerify != 1 || result.TimingsMS.PullInstallIndexes != 2 || result.TimingsMS.PullInstallChunks != 3 {
-		t.Fatalf("pull timings = %+v", result.TimingsMS)
 	}
 	if runner.AvailableSlots() != 100 {
 		t.Fatalf("available slots = %d, want 100", runner.AvailableSlots())

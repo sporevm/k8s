@@ -1021,11 +1021,6 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 			AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
 		})
 		result.TimingsMS.ArtifactPull = elapsedMS(pullStart, r.now())
-		if pull.Timings != nil {
-			result.TimingsMS.PullVerify = pull.Timings.Verify
-			result.TimingsMS.PullInstallIndexes = pull.Timings.InstallIndexes
-			result.TimingsMS.PullInstallChunks = pull.Timings.InstallChunks
-		}
 		if err != nil {
 			return r.failAttemptFromError(ctx, req.Run, result, err, false)
 		}
