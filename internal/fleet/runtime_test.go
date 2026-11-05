@@ -9,53 +9,6 @@ import (
 	"time"
 )
 
-func TestCoordinatorRunExecutesSingleCellPlan(t *testing.T) {
-	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
-	store := newFakeTerminalStore()
-	executors := make(map[string]ShardExecutor, len(agents))
-	for _, agent := range agents {
-		executors[agent.AgentID] = &fakeShardExecutor{
-			fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
-				results := make([]AttemptResult, 0, req.Lease.ChildCount)
-				for childID := req.Lease.ChildStart; childID < req.Lease.ChildRange().End(); childID++ {
-					result := runtimeAttemptResult(run, req.Lease, childID, req.Attempt, AttemptSucceeded, true)
-					store.commit(result)
-					results = append(results, result)
-				}
-				return results, nil
-			},
-		}
-	}
-	coordinator := newTestCoordinator(t, run, agents, store, executors, nil)
-
-	report, err := coordinator.Run(context.Background(), run)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if report.Summary.State != "succeeded" {
-		t.Fatalf("state = %q", report.Summary.State)
-	}
-	if report.Summary.CompletedChildren != 1000 || report.Summary.SucceededChildren != 1000 {
-		t.Fatalf("summary = %+v", report.Summary)
-	}
-	if report.Summary.AssignedShards != 10 || report.Summary.AssignedChildren != 1000 {
-		t.Fatalf("assignment summary = %+v", report.Summary)
-	}
-	if report.Summary.AttemptCount != 1000 {
-		t.Fatalf("attempt count = %d", report.Summary.AttemptCount)
-	}
-	if report.Timings == nil {
-		t.Fatal("timings are nil")
-	}
-	if report.Timings.StagePercentilesMS.Resume.P50 != 30 {
-		t.Fatalf("resume p50 = %v, want 30", report.Timings.StagePercentilesMS.Resume.P50)
-	}
-	if err := ValidateCompleteCoverage(run, report.Plan.Leases); err != nil {
-		t.Fatalf("ValidateCompleteCoverage: %v", err)
-	}
-}
-
 func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)
@@ -83,7 +36,7 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 		}},
 		store,
 		map[string]ShardExecutor{agents[0].AgentID: executor},
-		CoordinatorOptions{PlanBuilder: BuildSingleAgentSequentialPlan},
+		CoordinatorOptions{},
 	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -102,14 +55,20 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	if report.Summary.AssignedShards != 1 || report.Summary.AssignedChildren != 1000 {
 		t.Fatalf("assignment summary = %+v", report.Summary)
 	}
-	if err := ValidateCompleteCoverage(run, report.Plan.Leases); err != nil {
-		t.Fatalf("ValidateCompleteCoverage: %v", err)
+	if report.Summary.AttemptCount != 1000 {
+		t.Fatalf("attempt count = %d", report.Summary.AttemptCount)
+	}
+	if report.Timings == nil {
+		t.Fatal("timings are nil")
+	}
+	if report.Timings.StagePercentilesMS.Resume.P50 != 30 {
+		t.Fatalf("resume p50 = %v, want 30", report.Timings.StagePercentilesMS.Resume.P50)
 	}
 }
 
 func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
+	agents := makeAgents(t, 1, 100, run.HostClass)
 	executor := &fakeShardExecutor{}
 	coordinator, err := NewCoordinator(
 		agents,
@@ -137,7 +96,7 @@ func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 
 func TestCoordinatorRejectsInspectedHostClassMismatch(t *testing.T) {
 	run := loadExampleRun(t)
-	agents := makeAgents(t, 10, 100, run.HostClass)
+	agents := makeAgents(t, 1, 100, run.HostClass)
 	executor := &fakeShardExecutor{}
 	hostClass := run.HostClass
 	hostClass.CPUProfile = "graviton2"
@@ -250,26 +209,32 @@ func TestCoordinatorDoesNotRetryPlatformMismatch(t *testing.T) {
 	}
 }
 
-func TestCoordinatorFailsExpiredLeaseBeforeExecution(t *testing.T) {
-	run := smallRuntimeRun(t, 1, 1)
+func TestCoordinatorRetriesAfterLongFirstAttempt(t *testing.T) {
+	run := smallRuntimeRun(t, 1, 2)
 	agents := makeAgents(t, 1, 1, run.HostClass)
-	base := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
-	executor := &fakeShardExecutor{}
-	coordinator := newTestCoordinator(t, run, agents, newFakeTerminalStore(), map[string]ShardExecutor{agents[0].AgentID: executor}, sequenceClock(
-		base,
-		base.Add(11*time.Minute),
-		base.Add(11*time.Minute),
-	))
+	store := newFakeTerminalStore()
+	clock := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
+	executor := &fakeShardExecutor{
+		fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+			if req.Attempt == 1 {
+				clock = clock.Add(11 * time.Minute)
+				return []AttemptResult{
+					runtimeAttemptResult(run, req.Lease, 0, req.Attempt, AttemptFailed, false),
+				}, errors.New("transient runtime failure")
+			}
+			result := runtimeAttemptResult(run, req.Lease, 0, req.Attempt, AttemptSucceeded, true)
+			store.commit(result)
+			return []AttemptResult{result}, nil
+		},
+	}
+	coordinator := newTestCoordinator(t, run, agents, store, map[string]ShardExecutor{agents[0].AgentID: executor}, func() time.Time { return clock })
 
 	report, err := coordinator.Run(context.Background(), run)
-	if !errors.Is(err, ErrLeaseExpired) {
-		t.Fatalf("BundleRun error = %v, want ErrLeaseExpired", err)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if executor.callCount() != 0 {
-		t.Fatalf("executor calls = %d, want 0", executor.callCount())
-	}
-	if report.Summary.State != "failed" || report.Summary.LeaseErrors != 1 {
-		t.Fatalf("summary = %+v", report.Summary)
+	if executor.callCount() != 2 || report.Summary.State != "succeeded" {
+		t.Fatalf("executor calls = %d, summary = %+v", executor.callCount(), report.Summary)
 	}
 }
 
@@ -296,7 +261,6 @@ func smallRuntimeRun(t *testing.T, childCount int, attempts int) BundleRun {
 	t.Helper()
 	run := loadExampleRun(t)
 	run.Children = ChildRange{Start: 0, Count: childCount}
-	run.Execution.ChildrenPerShard = childCount
 	run.Execution.MaxInFlightPerAgent = childCount
 	run.RetryPolicy.MaxAttemptsPerChild = attempts
 	return run
@@ -320,7 +284,7 @@ func newTestCoordinator(
 		}},
 		store,
 		executors,
-		CoordinatorOptions{Now: now, LeaseTTL: 10 * time.Minute},
+		CoordinatorOptions{Now: now},
 	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -412,19 +376,4 @@ func runtimeAttemptResult(run BundleRun, lease ShardLease, childID int, attempt 
 		result.Error = &AttemptError{Code: "runtime.execution_failed", Message: "test failure"}
 	}
 	return result
-}
-
-func sequenceClock(times ...time.Time) func() time.Time {
-	var mu sync.Mutex
-	var index int
-	return func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		if index >= len(times) {
-			return times[len(times)-1]
-		}
-		value := times[index]
-		index++
-		return value
-	}
 }

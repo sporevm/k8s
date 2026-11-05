@@ -35,9 +35,8 @@ func (h HostClass) Equal(other HostClass) bool {
 	return h == other
 }
 
-// Execution describes shard sizing and per-agent concurrency.
+// Execution describes per-agent concurrency.
 type Execution struct {
-	ChildrenPerShard    int `json:"childrenPerShard"`
 	MaxInFlightPerAgent int `json:"maxInFlightPerAgent"`
 }
 
@@ -190,15 +189,14 @@ type AgentStatus struct {
 
 // ShardLease assigns a global child id range to one agent.
 type ShardLease struct {
-	RunID         string    `json:"runID"`
-	BundleDigest  string    `json:"bundleDigest"`
-	ShardID       string    `json:"shardID"`
-	ChildStart    int       `json:"childStart"`
-	ChildCount    int       `json:"childCount"`
-	AttemptBudget int       `json:"attemptBudget"`
-	HostClassID   string    `json:"hostClassID"`
-	AgentID       string    `json:"agentID"`
-	LeaseDeadline time.Time `json:"leaseDeadline"`
+	RunID         string `json:"runID"`
+	BundleDigest  string `json:"bundleDigest"`
+	ShardID       string `json:"shardID"`
+	ChildStart    int    `json:"childStart"`
+	ChildCount    int    `json:"childCount"`
+	AttemptBudget int    `json:"attemptBudget"`
+	HostClassID   string `json:"hostClassID"`
+	AgentID       string `json:"agentID"`
 }
 
 // ChildRange returns the lease's global child id range.
@@ -270,7 +268,7 @@ type AttemptResult struct {
 	Error        *AttemptError  `json:"error,omitempty"`
 }
 
-// PlanSummary is aggregate coordinator state for a dry-run plan.
+// PlanSummary is aggregate coordinator state for a plan.
 type PlanSummary struct {
 	RunID               string `json:"runID"`
 	State               string `json:"state"`
@@ -284,10 +282,10 @@ type PlanSummary struct {
 	AvailableChildSlots int    `json:"availableChildSlots"`
 }
 
-// Plan is the dry-run output for one coordinator admission decision.
+// Plan is the output of one coordinator admission decision.
 type Plan struct {
-	Summary PlanSummary  `json:"summary"`
-	Leases  []ShardLease `json:"leases"`
+	Summary PlanSummary `json:"summary"`
+	Lease   ShardLease  `json:"lease,omitzero"`
 }
 
 // BundleInspection is the coordinator's admission-time view of bundle metadata.

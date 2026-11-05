@@ -338,7 +338,7 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 	if cfg.RunPath != "" {
 		report, runErr = runSource(runCtx, sourceRun, store, endpoints)
 	} else {
-		report, runErr = runBundle(runCtx, run, store, endpoints)
+		report, runErr = runBundle(runCtx, run, store, endpoints, endpoints[0].Client, nil)
 	}
 	if !hasRuntimeReport(report) {
 		if runErr != nil {
@@ -458,26 +458,8 @@ func discoverAgentEndpoints(ctx context.Context, urls []string, httpClient *http
 	return endpoints, nil
 }
 
-func runBundle(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint) (fleet.RuntimeReport, error) {
-	return runBundleWithOptions(ctx, run, store, endpoints, fleet.CoordinatorOptions{})
-}
-
-func runBundleWithOptions(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions) (fleet.RuntimeReport, error) {
-	return runBundleWithExecutorOverrides(ctx, run, store, endpoints, opts, nil)
-}
-
-func runBundleWithExecutorOverrides(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions, overrides map[string]fleet.ShardExecutor) (fleet.RuntimeReport, error) {
-	if len(endpoints) == 0 {
-		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
-	}
-	return runBundleWithInspectorAndExecutorOverrides(ctx, run, store, endpoints, opts, endpoints[0].Client, overrides)
-}
-
-func runBundleWithInspectorAndExecutorOverrides(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, opts fleet.CoordinatorOptions, inspector fleet.BundleInspector, overrides map[string]fleet.ShardExecutor) (fleet.RuntimeReport, error) {
-	if len(endpoints) == 0 {
-		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
-	}
-	if inspector == nil {
+func runBundle(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, inspector fleet.BundleInspector, overrides map[string]fleet.ShardExecutor) (fleet.RuntimeReport, error) {
+	if len(endpoints) == 0 || inspector == nil {
 		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
 	}
 	agents := make([]fleet.AgentStatus, 0, len(endpoints))
@@ -495,7 +477,7 @@ func runBundleWithInspectorAndExecutorOverrides(ctx context.Context, run fleet.B
 		inspector,
 		store,
 		executors,
-		opts,
+		fleet.CoordinatorOptions{},
 	)
 	if err != nil {
 		return fleet.RuntimeReport{}, fmt.Errorf("create coordinator: %w", err)
@@ -550,9 +532,7 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 	if localPrepare {
 		inspector = preparedLocalInspector{Prepared: prepared}
 	}
-	report, err = runBundleWithInspectorAndExecutorOverrides(ctx, run, store, []agentEndpoint{endpoint}, fleet.CoordinatorOptions{
-		PlanBuilder: fleet.BuildSingleAgentSequentialPlan,
-	}, inspector, executors)
+	report, err = runBundle(ctx, run, store, []agentEndpoint{endpoint}, inspector, executors)
 	if report.Summary.RunID != "" {
 		report.Prepare = &fleet.RuntimePrepareSummary{
 			AgentID:      endpoint.Status.AgentID,

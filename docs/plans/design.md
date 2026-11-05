@@ -181,7 +181,6 @@ children:
   start: 0
   count: 1000
 execution:
-  childrenPerShard: 100
   maxInFlightPerAgent: 100
 retryPolicy:
   maxAttemptsPerChild: 2
@@ -205,15 +204,13 @@ childCommand:
   - /usr/local/bin/sporevm-rspec-shard
 ```
 
-The lower-level bundle run remains useful for prebuilt bundles and portable
-multi-agent work. The higher-level batch run is the normal CI entrypoint; its
-`children.command` compiles to the lower-level `childCommand`.
+The lower-level bundle run remains useful for prebuilt bundles. The
+higher-level batch run is the normal CI entrypoint; its `children.command`
+compiles to the lower-level `childCommand`.
 
-When the prepared bundle is still a local `file://` bundle, the preparing agent
-also executes the run through one sequential lease. That lease may cover the
-full child range, but local execution still reserves only the configured
-in-flight child slots. Multi-agent runs require publishing the prepared
-bundle first so other agents can materialize the same immutable input.
+A cell runs one agent until multi-agent bundle handoff exists. That agent gets
+one sequential lease for the full child range and runs at most
+`maxInFlightPerAgent` children at once.
 
 ### Fleet Components
 
@@ -225,8 +222,8 @@ separate CI subcommand can wait until the same CI-only defaults are repeated
 enough to justify it.
 
 `spore-coordinator` owns one run when invoked as a batch command. It validates
-the run, chooses compatible agents, prepares or references the bundle, leases
-child ranges, tracks compact aggregate state, and exits with a clear run
+the run, chooses one compatible agent, prepares or references the bundle, leases
+the child range, tracks compact aggregate state, and exits with a clear run
 result.
 
 For latency-sensitive callers, the same coordinator binary runs as a resident
@@ -269,10 +266,9 @@ Kubernetes owns deployment and coarse lifecycle for a cell:
 1. Resolve the source image, rootfs, existing spore, or prebuilt bundle.
 2. Prepare a parent VM by running the warm command until the capture point.
 3. Capture and fork the parent into `N` children.
-4. Pack the child bundle under immutable digest identity, publishing it before
-   multi-agent handoff or reuse.
-5. Admit the child range against compatible agents with honest slots.
-6. Lease non-overlapping child ranges to agents.
+4. Pack the child bundle under immutable digest identity.
+5. Admit the run against one compatible agent with honest slots.
+6. Lease the child range to that agent.
 7. Agents materialize and resume selected children.
 8. Children run the requested command using SporeVM generation identity.
 9. Agents commit per-child terminal results and logs to object storage.
@@ -311,10 +307,9 @@ container cgroup memory, CPU policy, and fixed per-child memory budget. Later it
 should use bundle-specific memory once SporeVM exposes it in machine-readable
 inspection output.
 
-For local runs, admission compares the preparing agent against in-flight
-slot demand, not total child count. The prebuilt bundle planner remains stricter
-and still requires enough compatible fleet slots to cover every child
-concurrently.
+Admission compares one compatible agent against in-flight slot demand, not
+total child count. Prebuilt bundle runs use the same single-agent lease until
+multi-agent handoff exists.
 
 ### Results And Retries
 
@@ -610,18 +605,17 @@ Done when:
 
 ### Slice 6: Honest 1,000-Child Scale
 
-Status: implemented for one compatible single-agent cell. Synthetic planning
-covers 1,000 children, and a live 1,000-child busybox run has completed with
-100 in-flight child slots. The next benchmark work is to turn this into
-repeatable cluster measurements instead of one-off smoke evidence.
+Status: implemented for one compatible single-agent cell. A live 1,000-child
+busybox run has completed with 100 in-flight child slots. The next benchmark
+work is to turn this into repeatable cluster measurements instead of one-off
+smoke evidence.
 
 Scale by adding real capacity or reducing verified per-child requirements, not
 by overstating slots.
 
 Done when:
 
-- dry-run planning proves unique coverage for 1,000 children;
-- live capacity can honestly advertise enough slots across one or more agents;
+- one agent can honestly advertise enough in-flight slots;
 - a 1,000-child run reports success rate and timing percentiles.
 - a ComputeSDK-shaped sequential TTI benchmark can run against the live cell.
 - the same benchmark can target the resident API path without creating a
@@ -696,9 +690,9 @@ Done when:
 
 ## Verification
 
-- Schema tests for run and compiled bundle run examples.
-- Unit tests for child id derivation, shard overlap rejection, attempt keys, and
-  terminal-result short-circuiting.
+- Go contract validation for every fleet example.
+- Unit tests for create-only result commits and terminal-result
+  short-circuiting.
 - Agent tests for prepare, fork, pack, automatic boot-template reuse, sandbox
   slot ownership, slot admission, cancellation, cleanup, and platform mismatch.
 - Coordinator tests for admission, lease assignment, retry behavior, aggregate
@@ -735,9 +729,8 @@ Done when:
 - Interactive runs and sandboxes share automatic immutable boot templates.
   Caller-defined prepare commands remain a batch fan-out concern.
 - Require digest-pinned images for interactive template reuse.
-- In the first coordinator path, the agent that prepares a local
-  `file://` bundle also executes a single sequential lease bounded by in-flight
-  slots. Multi-agent runs require publishing the prepared bundle first.
+- A cell runs one agent until multi-agent bundle handoff exists; the
+  coordinator gives it one sequential lease bounded by `maxInFlightPerAgent`.
 - Public runtime images publish to GHCR; private environments can override the
   image repository from their ops values.
 - Runtime `v0.1.17` pins SporeVM 0.16.0, normalizes ARM host-info v2/v3 into the

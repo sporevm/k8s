@@ -17,7 +17,6 @@
     "deviceModel": "sporevm-aarch64-v0"
   },
   "execution": {
-    "childrenPerShard": 100,
     "maxInFlightPerAgent": 100
   },
   "retryPolicy": {

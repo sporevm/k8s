@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -16,8 +15,6 @@ var (
 	ErrBundleMetadataMismatch = errors.New("bundle metadata mismatch")
 	// ErrAgentExecutorMissing means no runtime executor is registered for a lease agent.
 	ErrAgentExecutorMissing = errors.New("agent executor missing")
-	// ErrLeaseExpired means a shard lease expired before or during execution.
-	ErrLeaseExpired = errors.New("shard lease expired")
 	// ErrLeaseIncomplete means a shard exhausted attempts without terminal results.
 	ErrLeaseIncomplete = errors.New("shard lease incomplete")
 	// ErrPlatformMismatch means an agent reported an incompatible SporeVM platform.
@@ -39,14 +36,9 @@ type ShardExecutor interface {
 	RunShard(context.Context, ShardExecutionRequest) ([]AttemptResult, error)
 }
 
-// PlanBuilder assigns shard leases for a validated run and agent inventory.
-type PlanBuilder func(BundleRun, []AgentStatus, DryRunOptions) (Plan, error)
-
 // CoordinatorOptions configures a single-cell coordinator.
 type CoordinatorOptions struct {
-	Now         func() time.Time
-	LeaseTTL    time.Duration
-	PlanBuilder PlanBuilder
+	Now func() time.Time
 }
 
 // Coordinator owns run admission and static single-cell shard execution.
@@ -56,8 +48,6 @@ type Coordinator struct {
 	terminal  TerminalResultReader
 	executors map[string]ShardExecutor
 	now       func() time.Time
-	leaseTTL  time.Duration
-	plan      PlanBuilder
 }
 
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
@@ -78,14 +68,6 @@ func NewCoordinator(
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	leaseTTL := opts.LeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = 10 * time.Minute
-	}
-	planBuilder := opts.PlanBuilder
-	if planBuilder == nil {
-		planBuilder = BuildDryRunPlan
-	}
 	copiedAgents := append([]AgentStatus(nil), agents...)
 	copiedExecutors := make(map[string]ShardExecutor, len(executors))
 	for agentID, executor := range executors {
@@ -100,12 +82,10 @@ func NewCoordinator(
 		terminal:  terminal,
 		executors: copiedExecutors,
 		now:       now,
-		leaseTTL:  leaseTTL,
-		plan:      planBuilder,
 	}, nil
 }
 
-// Run admits, plans, and executes one bundle run across the coordinator's static agents.
+// Run admits, plans, and executes one bundle run on one of the coordinator's agents.
 func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, error) {
 	startedAt := c.now()
 	if err := run.Validate(); err != nil {
@@ -119,42 +99,21 @@ func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, er
 		return RuntimeReport{}, err
 	}
 
-	plan, err := c.plan(run, c.agents, DryRunOptions{
-		Now:      startedAt,
-		LeaseTTL: c.leaseTTL,
-	})
+	plan, err := BuildSingleAgentSequentialPlan(run, c.agents)
 	if err != nil {
-		return RuntimeReport{Plan: plan}, err
-	}
-	if err := ValidateCompleteCoverage(run, plan.Leases); err != nil {
 		return RuntimeReport{Plan: plan}, err
 	}
 
 	state := newRuntimeState(run, plan, startedAt)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errs []error
-	for _, lease := range plan.Leases {
-		lease := lease
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.runLease(ctx, run, lease, state); err != nil {
-				state.recordLeaseError()
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-			}
-		}()
+	err = c.runLease(ctx, run, plan.Lease, state)
+	if err != nil {
+		state.leaseErrors++
 	}
-	wg.Wait()
-
-	summary := state.summary(c.now(), errors.Join(errs...))
 	return RuntimeReport{
 		Plan:    plan,
-		Summary: summary,
+		Summary: state.summary(c.now(), err),
 		Timings: state.timingSummary(),
-	}, errors.Join(errs...)
+	}, err
 }
 
 // Validate checks inspected metadata against the submitted run.
@@ -179,9 +138,6 @@ func (c *Coordinator) runLease(ctx context.Context, run BundleRun, lease ShardLe
 	for attempt := 1; attempt <= lease.AttemptBudget; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if c.now().After(lease.LeaseDeadline) {
-			return fmt.Errorf("%w: %s", ErrLeaseExpired, lease.ShardID)
 		}
 		pending, err := c.leaseHasPendingChildren(ctx, run, lease, state)
 		if err != nil {
@@ -246,7 +202,6 @@ func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run BundleRun
 }
 
 type runtimeState struct {
-	mu                  sync.Mutex
 	run                 BundleRun
 	plan                Plan
 	startedAt           time.Time
@@ -267,15 +222,11 @@ func newRuntimeState(run BundleRun, plan Plan, startedAt time.Time) *runtimeStat
 }
 
 func (s *runtimeState) terminalKnown(childID int) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, ok := s.terminal[childID]
 	return ok
 }
 
 func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.terminal[childID]; ok {
 		return
 	}
@@ -286,8 +237,6 @@ func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult)
 }
 
 func (s *runtimeState) recordResults(results []AttemptResult) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, result := range results {
 		if result.AttemptID == "" {
 			continue
@@ -309,16 +258,7 @@ func (s *runtimeState) recordResults(results []AttemptResult) {
 	}
 }
 
-func (s *runtimeState) recordLeaseError() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.leaseErrors++
-}
-
 func (s *runtimeState) summary(finishedAt time.Time, runErr error) RuntimeSummary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	summary := RuntimeSummary{
 		RunID:               s.run.RunID,
 		State:               "succeeded",
@@ -351,9 +291,6 @@ func (s *runtimeState) summary(finishedAt time.Time, runErr error) RuntimeSummar
 }
 
 func (s *runtimeState) timingSummary() *RuntimeTimingSummary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var childReady []float64
 	var artifactPull []float64
 	var materialization []float64

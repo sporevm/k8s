@@ -73,7 +73,6 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 		AttemptBudget: 1,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       status.AgentID,
-		LeaseDeadline: time.Now().Add(time.Minute),
 	}
 	results, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -200,7 +199,6 @@ func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
 		AttemptBudget: 1,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       "spore-agent-other-0001",
-		LeaseDeadline: time.Now().Add(time.Minute),
 	}
 	_, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -227,7 +225,6 @@ func TestServerReturnsShardResultsWhenRunnerReportsChildError(t *testing.T) {
 		AttemptBudget: 1,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       "spore-agent-test-0001",
-		LeaseDeadline: time.Now().Add(time.Minute),
 	}
 	results, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -268,7 +265,7 @@ func testBundleRun() fleet.BundleRun {
 			CPUProfile:           "graviton1",
 			DeviceModel:          "sporevm-aarch64-v0",
 		},
-		Execution:   fleet.Execution{ChildrenPerShard: 1, MaxInFlightPerAgent: 1},
+		Execution:   fleet.Execution{MaxInFlightPerAgent: 1},
 		RetryPolicy: fleet.RetryPolicy{MaxAttemptsPerChild: 1},
 		SideEffects: fleet.SideEffects{IdempotencyRequired: true},
 		ResultStore: "s3://example-sporevm-results/ruby-counter-20260620/",
@@ -484,7 +481,7 @@ func testRun() fleet.Run {
 			Count:   1,
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},
 		},
-		Execution:   fleet.Execution{ChildrenPerShard: 1, MaxInFlightPerAgent: 1},
+		Execution:   fleet.Execution{MaxInFlightPerAgent: 1},
 		RetryPolicy: fleet.RetryPolicy{MaxAttemptsPerChild: 1},
 		SideEffects: fleet.SideEffects{IdempotencyRequired: true},
 		ResultStore: "s3://example-sporevm-results/rails-rspec-20260624/",

@@ -12,8 +12,7 @@
     "childCount",
     "attemptBudget",
     "hostClassID",
-    "agentID",
-    "leaseDeadline"
+    "agentID"
   ],
   "properties": {
     "runID": {
@@ -47,10 +46,6 @@
     "agentID": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
-    },
-    "leaseDeadline": {
-      "type": "string",
-      "format": "date-time"
     }
   }
 }
