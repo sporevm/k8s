@@ -181,7 +181,6 @@ children:
   start: 0
   count: 1000
 execution:
-  childrenPerShard: 100
   maxInFlightPerAgent: 100
 retryPolicy:
   maxAttemptsPerChild: 2

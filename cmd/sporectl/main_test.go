@@ -437,7 +437,6 @@ func testBundleRun(id string) fleet.BundleRun {
 			DeviceModel:          "sporevm-aarch64-v0",
 		},
 		Execution: fleet.Execution{
-			ChildrenPerShard:    100,
 			MaxInFlightPerAgent: 100,
 		},
 		RetryPolicy: fleet.RetryPolicy{
@@ -468,7 +467,6 @@ func testRun(id string) fleet.Run {
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},
 		},
 		Execution: fleet.Execution{
-			ChildrenPerShard:    100,
 			MaxInFlightPerAgent: 100,
 		},
 		RetryPolicy: fleet.RetryPolicy{

@@ -25,7 +25,6 @@
     ]
   },
   "execution": {
-    "childrenPerShard": 100,
     "maxInFlightPerAgent": 100
   },
   "retryPolicy": {

@@ -198,7 +198,6 @@ func TestRunCoordinatorRunExecutesSingleAgentSequentially(t *testing.T) {
 	source := testRun()
 	source.Fork.Count = 2
 	source.Children.Count = 2
-	source.Execution.ChildrenPerShard = 1
 	source.Execution.MaxInFlightPerAgent = 1
 	runPath := writeJSONFile(t, source)
 	spore := &fakeSporeClient{digest: testBundleDigest, childCount: 2}
@@ -374,7 +373,6 @@ func TestRunCoordinatorRunCapacityErrorDoesNotWriteEmptyReport(t *testing.T) {
 	source := testRun()
 	source.Fork.Count = 2
 	source.Children.Count = 2
-	source.Execution.ChildrenPerShard = 2
 	source.Execution.MaxInFlightPerAgent = 2
 	runPath := writeJSONFile(t, source)
 	server := newTestAgentServer(t, &fakeSporeClient{digest: testBundleDigest, childCount: 2}, 1)
@@ -399,7 +397,6 @@ func TestSelectPrepareEndpointRequiresSingleAgentInFlightCapacity(t *testing.T) 
 	source := testRun()
 	source.Children.Count = 2
 	source.Fork.Count = 2
-	source.Execution.ChildrenPerShard = 2
 	source.Execution.MaxInFlightPerAgent = 2
 	endpoint := agentEndpoint{Status: testAgentStatus()}
 	endpoint.Status.ExecutionSlots.Available = 1
@@ -414,7 +411,6 @@ func TestSelectPrepareEndpointAllowsSequentialCapacity(t *testing.T) {
 	source := testRun()
 	source.Children.Count = 2
 	source.Fork.Count = 2
-	source.Execution.ChildrenPerShard = 1
 	source.Execution.MaxInFlightPerAgent = 1
 	endpoint := agentEndpoint{Status: testAgentStatus()}
 	endpoint.Status.ExecutionSlots.Available = 1
@@ -540,7 +536,7 @@ func testRun() fleet.Run {
 			Count:   1,
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},
 		},
-		Execution:   fleet.Execution{ChildrenPerShard: 1, MaxInFlightPerAgent: 1},
+		Execution:   fleet.Execution{MaxInFlightPerAgent: 1},
 		RetryPolicy: fleet.RetryPolicy{MaxAttemptsPerChild: 1},
 		SideEffects: fleet.SideEffects{IdempotencyRequired: true},
 		ResultStore: "s3://example-sporevm-results/rails-rspec-20260624/",

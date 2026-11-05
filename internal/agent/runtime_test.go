@@ -258,7 +258,6 @@ func TestRunnerPrepareBundleReleasesPreparedStateAfterPackFailure(t *testing.T) 
 	source := testRun()
 	source.Fork.Count = 2
 	source.Children.Count = 2
-	source.Execution.ChildrenPerShard = 2
 	source.Execution.MaxInFlightPerAgent = 2
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
@@ -297,7 +296,6 @@ func TestRunnerPrepareBundleReleasesPreparedStateAfterInspectFailure(t *testing.
 	source := testRun()
 	source.Fork.Count = 1
 	source.Children.Count = 1
-	source.Execution.ChildrenPerShard = 1
 	source.Execution.MaxInFlightPerAgent = 1
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
@@ -331,7 +329,6 @@ func TestRunnerPrepareBundlePreservesStateWhenRollbackFails(t *testing.T) {
 	source := testRun()
 	source.Fork.Count = 1
 	source.Children.Count = 1
-	source.Execution.ChildrenPerShard = 1
 	source.Execution.MaxInFlightPerAgent = 1
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
@@ -365,7 +362,6 @@ func TestRunnerPrepareLocalCapturesAndForksWithoutPacking(t *testing.T) {
 	source := testRun()
 	source.Fork.Count = 3
 	source.Children.Count = 3
-	source.Execution.ChildrenPerShard = 3
 	source.Execution.MaxInFlightPerAgent = 3
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
@@ -1387,7 +1383,6 @@ func TestRunnerRunShardExecutesEveryChildAndReleasesSlots(t *testing.T) {
 	runner := newConfiguredRunner(t, client, store)
 	run := testBundleRun()
 	run.Children = fleet.ChildRange{Start: 10, Count: 3}
-	run.Execution.ChildrenPerShard = 3
 	run.Execution.MaxInFlightPerAgent = 3
 	lease := testLease(run)
 	lease.ChildStart = 10
@@ -1442,7 +1437,6 @@ func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
 	}
 	run := testBundleRun()
 	run.Children = fleet.ChildRange{Start: 10, Count: 5}
-	run.Execution.ChildrenPerShard = 2
 	run.Execution.MaxInFlightPerAgent = 2
 	lease := testLease(run)
 	lease.ChildStart = 10
@@ -1824,7 +1818,6 @@ func testBundleRun() fleet.BundleRun {
 			DeviceModel:          "sporevm-aarch64-v0",
 		},
 		Execution: fleet.Execution{
-			ChildrenPerShard:    100,
 			MaxInFlightPerAgent: 100,
 		},
 		RetryPolicy: fleet.RetryPolicy{
@@ -1857,7 +1850,6 @@ func testRun() fleet.Run {
 			Command: []string{"/usr/local/bin/sporevm-rspec-shard"},
 		},
 		Execution: fleet.Execution{
-			ChildrenPerShard:    100,
 			MaxInFlightPerAgent: 100,
 		},
 		RetryPolicy: fleet.RetryPolicy{

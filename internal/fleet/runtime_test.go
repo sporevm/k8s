@@ -255,7 +255,6 @@ func smallRuntimeRun(t *testing.T, childCount int, attempts int) BundleRun {
 	t.Helper()
 	run := loadExampleRun(t)
 	run.Children = ChildRange{Start: 0, Count: childCount}
-	run.Execution.ChildrenPerShard = childCount
 	run.Execution.MaxInFlightPerAgent = childCount
 	run.RetryPolicy.MaxAttemptsPerChild = attempts
 	return run

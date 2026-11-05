@@ -35,9 +35,8 @@ func (h HostClass) Equal(other HostClass) bool {
 	return h == other
 }
 
-// Execution describes shard sizing and per-agent concurrency.
+// Execution describes per-agent concurrency.
 type Execution struct {
-	ChildrenPerShard    int `json:"childrenPerShard"`
 	MaxInFlightPerAgent int `json:"maxInFlightPerAgent"`
 }
 

@@ -280,7 +280,6 @@ def build_submit_run(args: argparse.Namespace, run_id: str) -> dict[str, Any]:
             "command": ["/bin/sh", "-lc", "node -v"],
         },
         "execution": {
-            "childrenPerShard": 1,
             "maxInFlightPerAgent": 1,
         },
         "retryPolicy": {

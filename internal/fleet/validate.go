@@ -88,12 +88,6 @@ func (r Run) Validate() error {
 	if err := (CommandSpec{Command: r.Children.Command}).Validate("children"); err != nil {
 		return err
 	}
-	if r.Execution.ChildrenPerShard < 1 {
-		return contractError("execution.childrenPerShard must be >= 1")
-	}
-	if r.Execution.ChildrenPerShard > r.Children.Count {
-		return contractError("execution.childrenPerShard cannot exceed child count")
-	}
 	if r.Execution.MaxInFlightPerAgent < 1 {
 		return contractError("execution.maxInFlightPerAgent must be >= 1")
 	}
@@ -227,12 +221,6 @@ func (r BundleRun) Validate() error {
 	}
 	if err := r.HostClass.Validate("hostClass"); err != nil {
 		return err
-	}
-	if r.Execution.ChildrenPerShard < 1 {
-		return contractError("execution.childrenPerShard must be >= 1")
-	}
-	if r.Execution.ChildrenPerShard > r.Children.Count {
-		return contractError("execution.childrenPerShard cannot exceed child count")
 	}
 	if r.Execution.MaxInFlightPerAgent < 1 {
 		return contractError("execution.maxInFlightPerAgent must be >= 1")

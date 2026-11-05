@@ -26,9 +26,9 @@ type candidateAgent struct {
 }
 
 // RequiredInFlightSlots returns the child slots needed to run a lease without
-// exceeding the run's shard and per-agent concurrency limits.
+// exceeding the run's per-agent concurrency limit.
 func RequiredInFlightSlots(childCount int, execution Execution) int {
-	return min(childCount, execution.ChildrenPerShard, execution.MaxInFlightPerAgent)
+	return min(childCount, execution.MaxInFlightPerAgent)
 }
 
 // ShardSlotDemand returns the execution slots a lease can consume at once.
