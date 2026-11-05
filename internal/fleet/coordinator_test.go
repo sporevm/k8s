@@ -54,8 +54,8 @@ func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 		t.Fatalf("BuildSingleAgentSequentialPlan: %v", err)
 	}
 
-	if plan.Summary.ShardCount != 1 || len(plan.Leases) != 1 {
-		t.Fatalf("shards = summary %d leases %d, want 1", plan.Summary.ShardCount, len(plan.Leases))
+	if plan.Summary.ShardCount != 1 {
+		t.Fatalf("shards = %d, want 1", plan.Summary.ShardCount)
 	}
 	if plan.Summary.AvailableChildSlots != 100 {
 		t.Fatalf("available slots = %d, want 100", plan.Summary.AvailableChildSlots)
@@ -64,7 +64,7 @@ func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 		t.Fatalf("assigned children = %d, want 1000", plan.Summary.AssignedChildren)
 	}
 
-	lease := plan.Leases[0]
+	lease := plan.Lease
 	if lease.AgentID != agents[0].AgentID {
 		t.Fatalf("lease agent = %q, want %q", lease.AgentID, agents[0].AgentID)
 	}

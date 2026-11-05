@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -106,30 +105,15 @@ func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, er
 	}
 
 	state := newRuntimeState(run, plan, startedAt)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errs []error
-	for _, lease := range plan.Leases {
-		lease := lease
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := c.runLease(ctx, run, lease, state); err != nil {
-				state.recordLeaseError()
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-			}
-		}()
+	err = c.runLease(ctx, run, plan.Lease, state)
+	if err != nil {
+		state.leaseErrors++
 	}
-	wg.Wait()
-
-	summary := state.summary(c.now(), errors.Join(errs...))
 	return RuntimeReport{
 		Plan:    plan,
-		Summary: summary,
+		Summary: state.summary(c.now(), err),
 		Timings: state.timingSummary(),
-	}, errors.Join(errs...)
+	}, err
 }
 
 // Validate checks inspected metadata against the submitted run.
@@ -218,7 +202,6 @@ func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run BundleRun
 }
 
 type runtimeState struct {
-	mu                  sync.Mutex
 	run                 BundleRun
 	plan                Plan
 	startedAt           time.Time
@@ -239,15 +222,11 @@ func newRuntimeState(run BundleRun, plan Plan, startedAt time.Time) *runtimeStat
 }
 
 func (s *runtimeState) terminalKnown(childID int) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, ok := s.terminal[childID]
 	return ok
 }
 
 func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.terminal[childID]; ok {
 		return
 	}
@@ -258,8 +237,6 @@ func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult)
 }
 
 func (s *runtimeState) recordResults(results []AttemptResult) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, result := range results {
 		if result.AttemptID == "" {
 			continue
@@ -281,16 +258,7 @@ func (s *runtimeState) recordResults(results []AttemptResult) {
 	}
 }
 
-func (s *runtimeState) recordLeaseError() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.leaseErrors++
-}
-
 func (s *runtimeState) summary(finishedAt time.Time, runErr error) RuntimeSummary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	summary := RuntimeSummary{
 		RunID:               s.run.RunID,
 		State:               "succeeded",
@@ -323,9 +291,6 @@ func (s *runtimeState) summary(finishedAt time.Time, runErr error) RuntimeSummar
 }
 
 func (s *runtimeState) timingSummary() *RuntimeTimingSummary {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var childReady []float64
 	var artifactPull []float64
 	var materialization []float64

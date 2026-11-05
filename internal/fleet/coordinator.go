@@ -29,11 +29,10 @@ func ShardSlotDemand(run BundleRun, lease ShardLease) int {
 	return RequiredInFlightSlots(lease.ChildCount, run.Execution)
 }
 
-// BuildSingleAgentSequentialPlan assigns an entire run to one compatible agent.
-//
-// This is used for local source runs where the prepared bundle only exists on
-// the preparing agent. The lease may cover more children than the agent can run
-// concurrently; execution remains bounded by RequiredInFlightSlots.
+// BuildSingleAgentSequentialPlan assigns an entire run to one compatible agent,
+// because a cell runs one agent until multi-agent bundle handoff exists. The
+// lease may cover more children than the agent can run concurrently; execution
+// remains bounded by RequiredInFlightSlots.
 func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus) (Plan, error) {
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
@@ -74,7 +73,7 @@ func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus) (Plan, 
 	summary.AssignedShards = 1
 	summary.AssignedChildren = run.Children.Count
 	summary.State = "planned"
-	return Plan{Summary: summary, Leases: []ShardLease{lease}}, nil
+	return Plan{Summary: summary, Lease: lease}, nil
 }
 
 func candidateAgents(run BundleRun, agents []AgentStatus) ([]candidateAgent, PlanSummary, error) {

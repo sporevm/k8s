@@ -50,8 +50,8 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 1 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
-	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].AgentID != "spore-agent-test-0001" {
-		t.Fatalf("leases = %+v", report.Plan.Leases)
+	if report.Plan.Lease.AgentID != "spore-agent-test-0001" {
+		t.Fatalf("lease = %+v", report.Plan.Lease)
 	}
 	if report.Prepare == nil ||
 		report.Prepare.TimingsMS.RunSave < 0 ||
@@ -222,8 +222,8 @@ func TestRunCoordinatorRunExecutesSingleAgentSequentially(t *testing.T) {
 	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 2 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
-	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].ChildCount != 2 {
-		t.Fatalf("leases = %+v", report.Plan.Leases)
+	if report.Plan.Lease.ChildCount != 2 {
+		t.Fatalf("lease = %+v", report.Plan.Lease)
 	}
 	if pulls := spore.pullRequests(); len(pulls) != 0 {
 		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
