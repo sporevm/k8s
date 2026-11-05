@@ -251,7 +251,9 @@ func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error 
 	return nil
 }
 
-// RemoveSavedSpore runs `spore rm --spore` so durable cache pins are released.
+// RemoveSavedSpore runs `spore rm --spore`, which refuses a spore a running VM
+// still uses. SporeVM 0.17 also releases the spore's durable cache pin; newer
+// SporeVM leaves the pin and its storage to `spore cache gc --force`.
 func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSporeRequest) error {
 	if err := req.validate(); err != nil {
 		return err
