@@ -214,7 +214,6 @@ if [ "$1" = "--json" ] && [ "$2" = "inspect-bundle" ]; then
   "source": "file:///bundles/ruby",
   "bundle_dir": "/bundles/ruby",
   "bundle_digest": {"algorithm": "sha256", "hex": "1111111111111111111111111111111111111111111111111111111111111111"},
-  "indexed": true,
   "parent_manifest": "manifests/parent.json",
   "chunkpack_index": "chunkpack.index.json",
   "chunkpack": {"chunk_count": 10, "pack_count": 1, "payload_bytes": 40960},

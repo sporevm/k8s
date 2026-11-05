@@ -316,7 +316,6 @@ type InspectBundleResult struct {
 	Source         string                 `json:"source"`
 	BundleDir      string                 `json:"bundle_dir"`
 	BundleDigest   DigestRef              `json:"bundle_digest"`
-	Indexed        bool                   `json:"indexed"`
 	ParentManifest string                 `json:"parent_manifest"`
 	ChunkpackIndex string                 `json:"chunkpack_index"`
 	Chunkpack      ChunkpackSummary       `json:"chunkpack"`
