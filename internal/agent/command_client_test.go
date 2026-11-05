@@ -648,25 +648,54 @@ exit 2
 }
 
 func TestCommandClientRemoveSavedSpore(t *testing.T) {
-	argsFile := filepath.Join(t.TempDir(), "args")
-	spore := fakeSpore(t, `
+	for _, tc := range []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{
+			name:   "v0.17 result",
+			output: `{"schema":"spore.saved.remove.result.v1","schema_version":1,"resource_type":"checkpoint","action":"removed_spore","spore_dir":"/work/template.spore","ownership":"machine-local-pinned","pin_id":"pin-1","pin_removed":true}`,
+		},
+		{
+			name:   "result without pin fields",
+			output: `{"schema":"spore.saved.remove.result.v2","schema_version":2,"resource_type":"checkpoint","action":"removed_spore","spore_dir":"/work/template.spore"}`,
+		},
+		{
+			name:    "mismatched schema version",
+			output:  `{"schema":"spore.saved.remove.result.v2","schema_version":1,"action":"removed_spore","spore_dir":"/work/template.spore"}`,
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argsFile := filepath.Join(t.TempDir(), "args")
+			spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "--json" ] && [ "$2" = "rm" ] && [ "$3" = "--spore" ]; then
-  printf '%s\n' '{"schema":"spore.saved.remove.result.v1","schema_version":1,"action":"removed_spore","spore_dir":"/work/template.spore","pin_id":"pin-1","pin_removed":true}'
+  printf '%s\n' "$SPORE_RM_OUTPUT"
   exit 0
 fi
 echo unexpected "$*" >&2
 exit 2
 `, argsFile)
 
-	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
-	if err := client.RemoveSavedSpore(context.Background(), RemoveSavedSporeRequest{SporeDir: "/work/template.spore"}); err != nil {
-		t.Fatalf("RemoveSavedSpore: %v", err)
-	}
+			client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile, "SPORE_RM_OUTPUT="+tc.output)}
+			err := client.RemoveSavedSpore(context.Background(), RemoveSavedSporeRequest{SporeDir: "/work/template.spore"})
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidMachineOutput) {
+					t.Fatalf("RemoveSavedSpore error = %v, want ErrInvalidMachineOutput", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RemoveSavedSpore: %v", err)
+			}
 
-	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json rm --spore /work/template.spore" {
-		t.Fatalf("args = %q", args)
+			args := strings.TrimSpace(readFile(t, argsFile))
+			if args != "--json rm --spore /work/template.spore" {
+				t.Fatalf("args = %q", args)
+			}
+		})
 	}
 }
 

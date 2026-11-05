@@ -17,7 +17,8 @@ const (
 	lifecycleSchema     = "spore.lifecycle.v1"
 	inspectBundleSchema = "spore.bundle.inspect.v1"
 	pullResultSchema    = "spore.pull.result.v1"
-	removeSavedSchema   = "spore.saved.remove.result.v1"
+	removeSavedV1Schema = "spore.saved.remove.result.v1"
+	removeSavedV2Schema = "spore.saved.remove.result.v2"
 	errorSchema         = "spore.error.v1"
 	runEventsSchema     = "spore.automation.event.v1"
 	schemaVersion       = 1
@@ -662,8 +663,11 @@ type removedSavedSporeResult struct {
 	Action        string `json:"action"`
 }
 
+// Validate accepts SporeVM 0.17's v1 result and the v2 result that newer
+// SporeVM prints without pin fields.
 func (r removedSavedSporeResult) Validate() error {
-	if r.Schema != removeSavedSchema || r.SchemaVersion != schemaVersion {
+	if (r.Schema != removeSavedV1Schema || r.SchemaVersion != 1) &&
+		(r.Schema != removeSavedV2Schema || r.SchemaVersion != 2) {
 		return invalidMachineOutput("remove saved spore schema = %q v%d", r.Schema, r.SchemaVersion)
 	}
 	if r.Action != "removed_spore" {
