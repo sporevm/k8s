@@ -10,10 +10,6 @@ run = "python3 scripts/validate_fleet_contracts.py && python3 -m unittest discov
 description = "Run Go fleet coordinator and agent tests"
 run = "go test ./..."
 
-[tasks."fleet:benchmark:synthetic"]
-description = "Run the synthetic 1,000-child coordinator benchmark harness"
-run = "go run ./cmd/spore-fleet-benchmark --bundle-run examples/fleet/bundle-run-1000.json --agents 10 --slots-per-agent 100 --target-concurrency 1000"
-
 [tasks."fleet:benchmark:computesdk"]
 description = "Run the live ComputeSDK-shaped sequential TTI benchmark against the current Kubernetes context"
 run = "python3 scripts/computesdk_sporevm_benchmark.py"

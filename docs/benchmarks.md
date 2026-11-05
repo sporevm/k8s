@@ -1,9 +1,7 @@
 # Benchmarks
 
-This repo has three benchmark paths:
+This repo has two benchmark paths:
 
-- `mise run fleet:benchmark:synthetic` exercises the coordinator with
-  deterministic local agents.
 - `scripts/computesdk_sporevm_benchmark.py` runs a live Kubernetes benchmark
   shaped like the ComputeSDK sandbox TTI benchmark.
 - `mise run fleet:benchmark:computesdk-upstream` imports the current upstream
