@@ -316,7 +316,7 @@ type fakeSporeClient struct {
 }
 
 func (c fakeSporeClient) Version(context.Context) (string, error) {
-	return "spore 0.16.0 (ReleaseSafe)", nil
+	return "0.16.0", nil
 }
 
 func (c fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {

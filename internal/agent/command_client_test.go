@@ -295,8 +295,15 @@ func TestCommandClientVersion(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "version" ]; then
-  printf '%s\n' 'spore 0.11.1 (ReleaseSafe)'
+if [ "$1" = "--json" ] && [ "$2" = "version" ]; then
+  cat <<'JSON'
+{
+  "schema": "spore.version.result.v1",
+  "schema_version": 1,
+  "version": "0.17.1",
+  "build_mode": "ReleaseSafe"
+}
+JSON
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -308,10 +315,10 @@ exit 2
 	if err != nil {
 		t.Fatalf("Version: %v", err)
 	}
-	if version != "spore 0.11.1 (ReleaseSafe)" {
+	if version != "0.17.1" {
 		t.Fatalf("version = %q", version)
 	}
-	if args := strings.TrimSpace(readFile(t, argsFile)); args != "version" {
+	if args := strings.TrimSpace(readFile(t, argsFile)); args != "--json version" {
 		t.Fatalf("args = %q", args)
 	}
 }

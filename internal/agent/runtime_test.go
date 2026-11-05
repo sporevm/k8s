@@ -1602,7 +1602,7 @@ func (c *fakeSporeClient) Version(context.Context) (string, error) {
 	if c.version != "" {
 		return c.version, nil
 	}
-	return "spore 0.16.0 (ReleaseSafe)", nil
+	return "0.16.0", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {

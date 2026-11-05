@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	versionSchema       = "spore.version.result.v1"
 	hostInfoV2Schema    = "spore.host-info.v2"
 	hostInfoV3Schema    = "spore.host-info.v3"
 	lifecycleSchema     = "spore.lifecycle.v1"
@@ -30,6 +31,25 @@ var (
 	// ErrInvalidSporeRequest means the agent built an invalid SporeVM request.
 	ErrInvalidSporeRequest = errors.New("invalid sporevm request")
 )
+
+// VersionResult is the `spore --json version` result.
+type VersionResult struct {
+	Schema        string `json:"schema"`
+	SchemaVersion int    `json:"schema_version"`
+	Version       string `json:"version"`
+	BuildMode     string `json:"build_mode"`
+}
+
+// Validate checks the version schema identity.
+func (r VersionResult) Validate() error {
+	if r.Schema != versionSchema || r.SchemaVersion != schemaVersion {
+		return invalidMachineOutput("version schema = %q v%d", r.Schema, r.SchemaVersion)
+	}
+	if r.Version == "" {
+		return invalidMachineOutput("version is empty")
+	}
+	return nil
+}
 
 // HostInfo is the `spore --json host-info` result.
 type HostInfo struct {
