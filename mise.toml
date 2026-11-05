@@ -2,9 +2,9 @@
 go = "1.26.3"
 helm = "3.19.0"
 
-[tasks."fleet:contracts:test"]
-description = "Validate fleet contract examples and invariants"
-run = "python3 scripts/validate_fleet_contracts.py && python3 -m unittest discover -s tests -p '*_test.py'"
+[tasks."scripts:test"]
+description = "Run Python tests for the acceptance and benchmark scripts"
+run = "python3 -m unittest discover -s tests -p '*_test.py'"
 
 [tasks."fleet:go:test"]
 description = "Run Go fleet coordinator and agent tests"
@@ -55,5 +55,5 @@ description = "Check for private infrastructure details before publishing"
 run = "scripts/public_leak_scan.sh"
 
 [tasks."fleet:test"]
-description = "Run all fleet contract and Go tests"
-run = "mise run fleet:contracts:test && mise run fleet:go:test && mise run chart:lint"
+description = "Run all Python, Go, and chart checks"
+run = "mise run scripts:test && mise run fleet:go:test && mise run chart:lint"

@@ -92,7 +92,6 @@ remain allocated.
 ## Development
 
 ```bash
-mise run fleet:contracts:test
 mise run fleet:go:test
 mise run fleet:test
 mise run public:leak-scan

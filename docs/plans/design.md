@@ -696,7 +696,7 @@ Done when:
 
 ## Verification
 
-- Schema tests for run and compiled bundle run examples.
+- Go contract validation for every fleet example.
 - Unit tests for child id derivation, shard overlap rejection, attempt keys, and
   terminal-result short-circuiting.
 - Agent tests for prepare, fork, pack, automatic boot-template reuse, sandbox
