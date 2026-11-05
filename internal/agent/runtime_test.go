@@ -1260,11 +1260,11 @@ func TestRunnerRunChildPlatformMismatchIsNonTerminalAttempt(t *testing.T) {
 	}
 }
 
-func TestRunnerRunChildPullHostErrorIsPlatformMismatch(t *testing.T) {
+func TestRunnerRunChildPullUnsupportedHostIsPlatformMismatch(t *testing.T) {
 	store := newTestResultStore(t)
 	client := &fakeSporeClient{
 		pullFunc: func(context.Context, PullRequest) (PullResult, error) {
-			return PullResult{}, machineError("host.unavailable", "host backend is unavailable")
+			return PullResult{}, machineError("host.unsupported", "The host lacks a required capability.")
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
@@ -1284,6 +1284,50 @@ func TestRunnerRunChildPullHostErrorIsPlatformMismatch(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	if _, ok, err := store.TerminalResult(context.Background(), run, 47); err != nil || ok {
+		t.Fatalf("terminal ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRunnerRunChildPullUnavailableHostIsRetryableFailure(t *testing.T) {
+	store := newTestResultStore(t)
+	client := &fakeSporeClient{
+		pullFunc: func(context.Context, PullRequest) (PullResult, error) {
+			// SporeVM's classification for a temporarily unusable host.
+			return PullResult{}, &MachineError{Envelope: MachineErrorEnvelope{
+				Schema:        errorSchema,
+				SchemaVersion: schemaVersion,
+				Error: MachineErrorBody{
+					Code:      "host.unavailable",
+					Message:   "A required host service or device is temporarily unavailable.",
+					Retry:     "transient",
+					Retryable: true,
+					Scope:     "host",
+					ExitCode:  69,
+					Source:    "MissingKvmDevice",
+				},
+			}}
+		},
+	}
+	runner := newConfiguredRunner(t, client, store)
+	run := testBundleRun()
+
+	result, err := runner.RunChild(context.Background(), RunChildRequest{
+		Run:      run,
+		Lease:    testLease(run),
+		ChildID:  48,
+		Attempt:  1,
+		Pressure: normalPressure(),
+	})
+	if err == nil {
+		t.Fatal("RunChild succeeded")
+	}
+	if result.Status != fleet.AttemptFailed || result.Terminal {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Error == nil || result.Error.Code != "host.unavailable" || result.Error.Retry != "transient" || !result.Error.Retryable {
+		t.Fatalf("attempt error = %+v", result.Error)
+	}
+	if _, ok, err := store.TerminalResult(context.Background(), run, 48); err != nil || ok {
 		t.Fatalf("terminal ok=%v err=%v", ok, err)
 	}
 }

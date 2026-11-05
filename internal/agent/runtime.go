@@ -1442,8 +1442,11 @@ func attemptError(err error) *fleet.AttemptError {
 	return &fleet.AttemptError{Code: code, Message: err.Error()}
 }
 
+// machineErrorIsPlatformMismatch reports whether SporeVM rejected this host or
+// the spore's platform. host.unavailable is transient (for example a missing
+// /dev/kvm or a monitor that did not start), so it stays a retryable failure.
 func machineErrorIsPlatformMismatch(body MachineErrorBody) bool {
-	return strings.HasPrefix(body.Code, "host.") ||
+	return body.Code == "host.unsupported" ||
 		(body.Code == "object.invalid" && body.Source == "PlatformMismatch")
 }
 
