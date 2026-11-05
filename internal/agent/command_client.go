@@ -24,17 +24,16 @@ type CommandClient struct {
 	Env  []string
 }
 
-// Version runs `spore version`.
+// Version runs `spore --json version` and returns the release version.
 func (c CommandClient) Version(ctx context.Context) (string, error) {
-	stdout, stderr, err := c.run(ctx, "version")
-	if err != nil {
-		return "", commandError(err, stderr)
+	var result VersionResult
+	if err := c.runJSON(ctx, &result, "--json", "version"); err != nil {
+		return "", err
 	}
-	version := strings.TrimSpace(string(stdout))
-	if version == "" {
-		return "", invalidMachineOutput("spore version output is empty")
+	if err := result.Validate(); err != nil {
+		return "", err
 	}
-	return version, nil
+	return result.Version, nil
 }
 
 // HostInfo runs `spore --json host-info`.

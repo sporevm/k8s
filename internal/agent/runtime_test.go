@@ -812,13 +812,7 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 			if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
 				return PullResult{}, err
 			}
-			pull := pullResult(req.OutDir, "42")
-			pull.Timings = &PullTimings{
-				Verify:         1,
-				InstallIndexes: 2,
-				InstallChunks:  3,
-			}
-			return pull, nil
+			return pullResult(req.OutDir, "42"), nil
 		},
 		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
 			if req.GenerationPath == "" {
@@ -868,9 +862,6 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	}
 	if result.TimingsMS.ArtifactPull < 0 || result.TimingsMS.Resume < 0 {
 		t.Fatalf("timings = %+v", result.TimingsMS)
-	}
-	if result.TimingsMS.PullVerify != 1 || result.TimingsMS.PullInstallIndexes != 2 || result.TimingsMS.PullInstallChunks != 3 {
-		t.Fatalf("pull timings = %+v", result.TimingsMS)
 	}
 	if runner.AvailableSlots() != 100 {
 		t.Fatalf("available slots = %d, want 100", runner.AvailableSlots())
@@ -1260,11 +1251,11 @@ func TestRunnerRunChildPlatformMismatchIsNonTerminalAttempt(t *testing.T) {
 	}
 }
 
-func TestRunnerRunChildPullHostErrorIsPlatformMismatch(t *testing.T) {
+func TestRunnerRunChildPullUnsupportedHostIsPlatformMismatch(t *testing.T) {
 	store := newTestResultStore(t)
 	client := &fakeSporeClient{
 		pullFunc: func(context.Context, PullRequest) (PullResult, error) {
-			return PullResult{}, machineError("host.unavailable", "host backend is unavailable")
+			return PullResult{}, machineError("host.unsupported", "The host lacks a required capability.")
 		},
 	}
 	runner := newConfiguredRunner(t, client, store)
@@ -1284,6 +1275,50 @@ func TestRunnerRunChildPullHostErrorIsPlatformMismatch(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	if _, ok, err := store.TerminalResult(context.Background(), run, 47); err != nil || ok {
+		t.Fatalf("terminal ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRunnerRunChildPullUnavailableHostIsRetryableFailure(t *testing.T) {
+	store := newTestResultStore(t)
+	client := &fakeSporeClient{
+		pullFunc: func(context.Context, PullRequest) (PullResult, error) {
+			// SporeVM's classification for a temporarily unusable host.
+			return PullResult{}, &MachineError{Envelope: MachineErrorEnvelope{
+				Schema:        errorSchema,
+				SchemaVersion: schemaVersion,
+				Error: MachineErrorBody{
+					Code:      "host.unavailable",
+					Message:   "A required host service or device is temporarily unavailable.",
+					Retry:     "transient",
+					Retryable: true,
+					Scope:     "host",
+					ExitCode:  69,
+					Source:    "MissingKvmDevice",
+				},
+			}}
+		},
+	}
+	runner := newConfiguredRunner(t, client, store)
+	run := testBundleRun()
+
+	result, err := runner.RunChild(context.Background(), RunChildRequest{
+		Run:      run,
+		Lease:    testLease(run),
+		ChildID:  48,
+		Attempt:  1,
+		Pressure: normalPressure(),
+	})
+	if err == nil {
+		t.Fatal("RunChild succeeded")
+	}
+	if result.Status != fleet.AttemptFailed || result.Terminal {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Error == nil || result.Error.Code != "host.unavailable" || result.Error.Retry != "transient" || !result.Error.Retryable {
+		t.Fatalf("attempt error = %+v", result.Error)
+	}
+	if _, ok, err := store.TerminalResult(context.Background(), run, 48); err != nil || ok {
 		t.Fatalf("terminal ok=%v err=%v", ok, err)
 	}
 }
@@ -1558,7 +1593,7 @@ func (c *fakeSporeClient) Version(context.Context) (string, error) {
 	if c.version != "" {
 		return c.version, nil
 	}
-	return "spore 0.16.0 (ReleaseSafe)", nil
+	return "0.16.0", nil
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {

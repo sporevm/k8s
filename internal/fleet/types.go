@@ -220,15 +220,12 @@ const (
 
 // AttemptTimings records the benchmark-relevant phases for a child attempt.
 type AttemptTimings struct {
-	ArtifactPull       float64 `json:"artifactPull"`
-	Materialization    float64 `json:"materialization"`
-	Resume             float64 `json:"resume"`
-	GuestReady         float64 `json:"guestReady"`
-	ResultCommit       float64 `json:"resultCommit"`
-	LocalChild         float64 `json:"localChild,omitempty"`
-	PullVerify         float64 `json:"pullVerify,omitempty"`
-	PullInstallIndexes float64 `json:"pullInstallIndexes,omitempty"`
-	PullInstallChunks  float64 `json:"pullInstallChunks,omitempty"`
+	ArtifactPull    float64 `json:"artifactPull"`
+	Materialization float64 `json:"materialization"`
+	Resume          float64 `json:"resume"`
+	GuestReady      float64 `json:"guestReady"`
+	ResultCommit    float64 `json:"resultCommit"`
+	LocalChild      float64 `json:"localChild,omitempty"`
 }
 
 // AttemptError is the compact error body stored with failed attempts.

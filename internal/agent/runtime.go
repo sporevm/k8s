@@ -1021,11 +1021,6 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 			AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
 		})
 		result.TimingsMS.ArtifactPull = elapsedMS(pullStart, r.now())
-		if pull.Timings != nil {
-			result.TimingsMS.PullVerify = pull.Timings.Verify
-			result.TimingsMS.PullInstallIndexes = pull.Timings.InstallIndexes
-			result.TimingsMS.PullInstallChunks = pull.Timings.InstallChunks
-		}
 		if err != nil {
 			return r.failAttemptFromError(ctx, req.Run, result, err, false)
 		}
@@ -1442,8 +1437,11 @@ func attemptError(err error) *fleet.AttemptError {
 	return &fleet.AttemptError{Code: code, Message: err.Error()}
 }
 
+// machineErrorIsPlatformMismatch reports whether SporeVM rejected this host or
+// the spore's platform. host.unavailable is transient (for example a missing
+// /dev/kvm or a monitor that did not start), so it stays a retryable failure.
 func machineErrorIsPlatformMismatch(body MachineErrorBody) bool {
-	return strings.HasPrefix(body.Code, "host.") ||
+	return body.Code == "host.unsupported" ||
 		(body.Code == "object.invalid" && body.Source == "PlatformMismatch")
 }
 
