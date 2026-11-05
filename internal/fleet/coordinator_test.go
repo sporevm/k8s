@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestDecodeBundleRunRejectsUnknownFields(t *testing.T) {
@@ -49,12 +48,8 @@ func TestDecodeBundleRunRejectsTrailingJSON(t *testing.T) {
 func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)
-	now := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
 
-	plan, err := BuildSingleAgentSequentialPlan(run, agents, DryRunOptions{
-		Now:      now,
-		LeaseTTL: 10 * time.Minute,
-	})
+	plan, err := BuildSingleAgentSequentialPlan(run, agents)
 	if err != nil {
 		t.Fatalf("BuildSingleAgentSequentialPlan: %v", err)
 	}
@@ -76,16 +71,13 @@ func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 	if lease.ChildStart != 0 || lease.ChildCount != 1000 {
 		t.Fatalf("lease range = [%d, %d), want [0, 1000)", lease.ChildStart, lease.ChildStart+lease.ChildCount)
 	}
-	if !lease.LeaseDeadline.Equal(now.Add(10 * time.Minute)) {
-		t.Fatalf("lease deadline = %s", lease.LeaseDeadline)
-	}
 }
 
 func TestBuildSingleAgentSequentialPlanRejectsInsufficientInFlightCapacity(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 99, run.HostClass)
 
-	plan, err := BuildSingleAgentSequentialPlan(run, agents, DryRunOptions{})
+	plan, err := BuildSingleAgentSequentialPlan(run, agents)
 	if !errors.Is(err, ErrInsufficientCapacity) {
 		t.Fatalf("BuildSingleAgentSequentialPlan error = %v, want ErrInsufficientCapacity", err)
 	}
@@ -100,7 +92,7 @@ func TestBuildSingleAgentSequentialPlanRejectsHostClassMismatch(t *testing.T) {
 	hostClass.CPUProfile = "graviton2"
 	agents := makeAgents(t, 1, 100, hostClass)
 
-	plan, err := BuildSingleAgentSequentialPlan(run, agents, DryRunOptions{})
+	plan, err := BuildSingleAgentSequentialPlan(run, agents)
 	if !errors.Is(err, ErrNoCompatibleAgents) {
 		t.Fatalf("BuildSingleAgentSequentialPlan error = %v, want ErrNoCompatibleAgents", err)
 	}

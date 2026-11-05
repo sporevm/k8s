@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"time"
 )
 
 var (
@@ -13,12 +12,6 @@ var (
 	// ErrInsufficientCapacity means compatible agents cannot cover the run.
 	ErrInsufficientCapacity = errors.New("insufficient agent capacity")
 )
-
-// DryRunOptions controls deterministic lease construction.
-type DryRunOptions struct {
-	Now      time.Time
-	LeaseTTL time.Duration
-}
 
 type candidateAgent struct {
 	status    AgentStatus
@@ -41,11 +34,10 @@ func ShardSlotDemand(run BundleRun, lease ShardLease) int {
 // This is used for local source runs where the prepared bundle only exists on
 // the preparing agent. The lease may cover more children than the agent can run
 // concurrently; execution remains bounded by RequiredInFlightSlots.
-func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus, opts DryRunOptions) (Plan, error) {
+func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus) (Plan, error) {
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
 	}
-	opts = normalizeDryRunOptions(opts)
 
 	candidates, summary, err := candidateAgents(run, agents)
 	summary.RunID = run.RunID
@@ -77,7 +69,6 @@ func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus, opts Dr
 		AttemptBudget: run.RetryPolicy.MaxAttemptsPerChild,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       candidate.status.AgentID,
-		LeaseDeadline: opts.Now.Add(opts.LeaseTTL).UTC(),
 	}
 
 	summary.AssignedShards = 1
@@ -140,14 +131,4 @@ func bestCandidateCapacity(candidates []candidateAgent) int {
 		}
 	}
 	return best
-}
-
-func normalizeDryRunOptions(opts DryRunOptions) DryRunOptions {
-	if opts.Now.IsZero() {
-		opts.Now = time.Now().UTC()
-	}
-	if opts.LeaseTTL <= 0 {
-		opts.LeaseTTL = 10 * time.Minute
-	}
-	return opts
 }

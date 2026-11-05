@@ -16,8 +16,6 @@ var (
 	ErrBundleMetadataMismatch = errors.New("bundle metadata mismatch")
 	// ErrAgentExecutorMissing means no runtime executor is registered for a lease agent.
 	ErrAgentExecutorMissing = errors.New("agent executor missing")
-	// ErrLeaseExpired means a shard lease expired before or during execution.
-	ErrLeaseExpired = errors.New("shard lease expired")
 	// ErrLeaseIncomplete means a shard exhausted attempts without terminal results.
 	ErrLeaseIncomplete = errors.New("shard lease incomplete")
 	// ErrPlatformMismatch means an agent reported an incompatible SporeVM platform.
@@ -41,8 +39,7 @@ type ShardExecutor interface {
 
 // CoordinatorOptions configures a single-cell coordinator.
 type CoordinatorOptions struct {
-	Now      func() time.Time
-	LeaseTTL time.Duration
+	Now func() time.Time
 }
 
 // Coordinator owns run admission and static single-cell shard execution.
@@ -52,7 +49,6 @@ type Coordinator struct {
 	terminal  TerminalResultReader
 	executors map[string]ShardExecutor
 	now       func() time.Time
-	leaseTTL  time.Duration
 }
 
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
@@ -73,10 +69,6 @@ func NewCoordinator(
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	leaseTTL := opts.LeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = 10 * time.Minute
-	}
 	copiedAgents := append([]AgentStatus(nil), agents...)
 	copiedExecutors := make(map[string]ShardExecutor, len(executors))
 	for agentID, executor := range executors {
@@ -91,7 +83,6 @@ func NewCoordinator(
 		terminal:  terminal,
 		executors: copiedExecutors,
 		now:       now,
-		leaseTTL:  leaseTTL,
 	}, nil
 }
 
@@ -109,10 +100,7 @@ func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, er
 		return RuntimeReport{}, err
 	}
 
-	plan, err := BuildSingleAgentSequentialPlan(run, c.agents, DryRunOptions{
-		Now:      startedAt,
-		LeaseTTL: c.leaseTTL,
-	})
+	plan, err := BuildSingleAgentSequentialPlan(run, c.agents)
 	if err != nil {
 		return RuntimeReport{Plan: plan}, err
 	}
@@ -166,9 +154,6 @@ func (c *Coordinator) runLease(ctx context.Context, run BundleRun, lease ShardLe
 	for attempt := 1; attempt <= lease.AttemptBudget; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if c.now().After(lease.LeaseDeadline) {
-			return fmt.Errorf("%w: %s", ErrLeaseExpired, lease.ShardID)
 		}
 		pending, err := c.leaseHasPendingChildren(ctx, run, lease, state)
 		if err != nil {

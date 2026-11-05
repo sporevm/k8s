@@ -1873,7 +1873,6 @@ func testLease(run fleet.BundleRun) fleet.ShardLease {
 		AttemptBudget: run.RetryPolicy.MaxAttemptsPerChild,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       "spore-agent-us-east-1a-0001",
-		LeaseDeadline: time.Date(2026, 6, 20, 4, 10, 0, 0, time.UTC),
 	}
 }
 

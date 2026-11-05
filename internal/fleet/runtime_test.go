@@ -209,26 +209,32 @@ func TestCoordinatorDoesNotRetryPlatformMismatch(t *testing.T) {
 	}
 }
 
-func TestCoordinatorFailsExpiredLeaseBeforeExecution(t *testing.T) {
-	run := smallRuntimeRun(t, 1, 1)
+func TestCoordinatorRetriesAfterLongFirstAttempt(t *testing.T) {
+	run := smallRuntimeRun(t, 1, 2)
 	agents := makeAgents(t, 1, 1, run.HostClass)
-	base := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
-	executor := &fakeShardExecutor{}
-	coordinator := newTestCoordinator(t, run, agents, newFakeTerminalStore(), map[string]ShardExecutor{agents[0].AgentID: executor}, sequenceClock(
-		base,
-		base.Add(11*time.Minute),
-		base.Add(11*time.Minute),
-	))
+	store := newFakeTerminalStore()
+	clock := time.Date(2026, 6, 20, 4, 0, 0, 0, time.UTC)
+	executor := &fakeShardExecutor{
+		fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+			if req.Attempt == 1 {
+				clock = clock.Add(11 * time.Minute)
+				return []AttemptResult{
+					runtimeAttemptResult(run, req.Lease, 0, req.Attempt, AttemptFailed, false),
+				}, errors.New("transient runtime failure")
+			}
+			result := runtimeAttemptResult(run, req.Lease, 0, req.Attempt, AttemptSucceeded, true)
+			store.commit(result)
+			return []AttemptResult{result}, nil
+		},
+	}
+	coordinator := newTestCoordinator(t, run, agents, store, map[string]ShardExecutor{agents[0].AgentID: executor}, func() time.Time { return clock })
 
 	report, err := coordinator.Run(context.Background(), run)
-	if !errors.Is(err, ErrLeaseExpired) {
-		t.Fatalf("BundleRun error = %v, want ErrLeaseExpired", err)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if executor.callCount() != 0 {
-		t.Fatalf("executor calls = %d, want 0", executor.callCount())
-	}
-	if report.Summary.State != "failed" || report.Summary.LeaseErrors != 1 {
-		t.Fatalf("summary = %+v", report.Summary)
+	if executor.callCount() != 2 || report.Summary.State != "succeeded" {
+		t.Fatalf("executor calls = %d, summary = %+v", executor.callCount(), report.Summary)
 	}
 }
 
@@ -278,7 +284,7 @@ func newTestCoordinator(
 		}},
 		store,
 		executors,
-		CoordinatorOptions{Now: now, LeaseTTL: 10 * time.Minute},
+		CoordinatorOptions{Now: now},
 	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -370,19 +376,4 @@ func runtimeAttemptResult(run BundleRun, lease ShardLease, childID int, attempt 
 		result.Error = &AttemptError{Code: "runtime.execution_failed", Message: "test failure"}
 	}
 	return result
-}
-
-func sequenceClock(times ...time.Time) func() time.Time {
-	var mu sync.Mutex
-	var index int
-	return func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		if index >= len(times) {
-			return times[len(times)-1]
-		}
-		value := times[index]
-		index++
-		return value
-	}
 }

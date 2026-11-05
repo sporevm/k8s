@@ -189,15 +189,14 @@ type AgentStatus struct {
 
 // ShardLease assigns a global child id range to one agent.
 type ShardLease struct {
-	RunID         string    `json:"runID"`
-	BundleDigest  string    `json:"bundleDigest"`
-	ShardID       string    `json:"shardID"`
-	ChildStart    int       `json:"childStart"`
-	ChildCount    int       `json:"childCount"`
-	AttemptBudget int       `json:"attemptBudget"`
-	HostClassID   string    `json:"hostClassID"`
-	AgentID       string    `json:"agentID"`
-	LeaseDeadline time.Time `json:"leaseDeadline"`
+	RunID         string `json:"runID"`
+	BundleDigest  string `json:"bundleDigest"`
+	ShardID       string `json:"shardID"`
+	ChildStart    int    `json:"childStart"`
+	ChildCount    int    `json:"childCount"`
+	AttemptBudget int    `json:"attemptBudget"`
+	HostClassID   string `json:"hostClassID"`
+	AgentID       string `json:"agentID"`
 }
 
 // ChildRange returns the lease's global child id range.

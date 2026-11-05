@@ -73,7 +73,6 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 		AttemptBudget: 1,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       status.AgentID,
-		LeaseDeadline: time.Now().Add(time.Minute),
 	}
 	results, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -200,7 +199,6 @@ func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
 		AttemptBudget: 1,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       "spore-agent-other-0001",
-		LeaseDeadline: time.Now().Add(time.Minute),
 	}
 	_, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -227,7 +225,6 @@ func TestServerReturnsShardResultsWhenRunnerReportsChildError(t *testing.T) {
 		AttemptBudget: 1,
 		HostClassID:   run.HostClass.ID,
 		AgentID:       "spore-agent-test-0001",
-		LeaseDeadline: time.Now().Add(time.Minute),
 	}
 	results, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,

@@ -353,9 +353,6 @@ func (l ShardLease) Validate(run BundleRun) error {
 	if err := validateID(l.AgentID, "shardLease.agentID"); err != nil {
 		return err
 	}
-	if l.LeaseDeadline.IsZero() {
-		return contractError("shardLease.leaseDeadline must not be zero")
-	}
 	return nil
 }
 
