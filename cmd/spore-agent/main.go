@@ -76,7 +76,7 @@ func main() {
 	flag.StringVar(&workRoot, "work-root", envString("SPORE_WORK_ROOT", "/var/lib/sporevm/work"), "local root for materialized child spores")
 	flag.StringVar(&bundleCacheRoot, "bundle-cache-root", envString("SPORE_BUNDLE_CACHE_ROOT", "/var/lib/sporevm/bundle-cache"), "bundle cache root used for status")
 	flag.StringVar(&rootFSCacheRoot, "rootfs-cache-root", envString("SPORE_ROOTFS_CACHE_ROOT", "/var/lib/sporevm/rootfs-cache"), "rootfs cache root used for status")
-	flag.StringVar(&region, "region", envString("AWS_REGION", ""), "AWS region passed to spore pull")
+	flag.StringVar(&region, "region", envString("AWS_REGION", ""), "AWS region passed to spore pull and used for s3:// image stores")
 	flag.StringVar(&backend, "backend", envString("SPORE_BACKEND", "kvm"), "SporeVM backend used for resume")
 	flag.DurationVar(&childTimeout, "child-timeout", envDuration("SPORE_AGENT_CHILD_TIMEOUT", 0), "optional per-child resume timeout; 0 disables the agent-side timeout")
 	flag.BoolVar(&allowMetadataOnlyRootFS, "allow-metadata-only-rootfs", envBool("SPORE_ALLOW_METADATA_ONLY_ROOTFS", false), "allow metadata-only rootfs pulls")
@@ -132,7 +132,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create result store: %v", err)
 	}
-	spore := agent.CommandClient{Path: sporePath}
+	spore := agent.CommandClient{Path: sporePath, Region: region}
 	runner, err := agent.NewRunner(
 		effectiveSlots,
 		agent.WithSporeClient(spore),

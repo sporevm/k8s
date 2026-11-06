@@ -219,6 +219,12 @@ The lower-level bundle run remains useful for prebuilt bundles. The
 higher-level batch run is the normal CI entrypoint; its `children.command`
 compiles to the lower-level `childCommand`.
 
+`source.image` can also name an image in a private S3 image store,
+`s3://bucket/prefix/<tag|blake3:hex>`. SporeVM reads S3 credentials only from
+its environment, so the agent gives each such `spore run` credentials from the
+AWS default chain and `AWS_REGION` from `--region` (chart `agent.region`) or
+the chain. The agent's service account identity needs `s3:GetObject` there.
+
 A cell runs one agent until multi-agent bundle handoff exists. That agent gets
 one sequential lease for the full child range and runs at most
 `maxInFlightPerAgent` children at once.
