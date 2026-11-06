@@ -576,6 +576,10 @@ type fakeSporeClient struct {
 	packs          int
 }
 
+func (c *fakeSporeClient) Executable() (string, error) {
+	return os.Executable()
+}
+
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
 	return "spore 0.16.0 (ReleaseSafe)", nil
 }

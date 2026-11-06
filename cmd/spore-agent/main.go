@@ -25,6 +25,7 @@ const (
 	defaultTemplateRetain     = 16
 	defaultTemplateReconcile  = 15 * time.Minute
 	templateReconcileTimeout  = 2 * time.Minute
+	cacheGCTimeout            = 10 * time.Minute
 	sporeRuntimeDirEnv        = "SPOREVM_RUNTIME_DIR"
 	sporeRuntimeAuthorityFile = "local-ram-backing.key"
 )
@@ -154,21 +155,40 @@ func main() {
 			log.Printf("reconciled boot templates removed_builds=%d removed_templates=%d retained_templates=%d", result.RemovedBuilds, result.RemovedTemplates, result.RetainedTemplates)
 		}
 	}
-	reconcileTemplates()
-	if templateReconcileInterval > 0 {
-		go func() {
-			ticker := time.NewTicker(templateReconcileInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					reconcileTemplates()
-				}
-			}
-		}()
+	// Removing a saved spore does not release its cache pin in newer SporeVM,
+	// so collect orphaned pins and unreferenced storage after each pass.
+	collectCache := func() {
+		gcCtx, cancel := context.WithTimeout(ctx, cacheGCTimeout)
+		defer cancel()
+		result, err := spore.CollectCache(gcCtx)
+		if err != nil {
+			log.Printf("collect SporeVM cache: %v", err)
+			return
+		}
+		if result.DeletedCount > 0 {
+			log.Printf("collected SporeVM cache deleted_count=%d deleted_bytes=%d", result.DeletedCount, result.DeletedBytes)
+		}
 	}
+	reconcileTemplates()
+	// GC holds the rootfs cache lock while it scans, so keep it off the
+	// startup path.
+	go func() {
+		collectCache()
+		if templateReconcileInterval == 0 {
+			return
+		}
+		ticker := time.NewTicker(templateReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reconcileTemplates()
+				collectCache()
+			}
+		}
+	}()
 	handler, err := (&agenthttp.Server{
 		Runner:                  runner,
 		Client:                  spore,

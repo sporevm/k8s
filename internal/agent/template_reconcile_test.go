@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,9 +15,9 @@ func TestReconcileBootTemplatesCleansBuildsAndRetainsNewest(t *testing.T) {
 	client := &fakeSporeClient{hostInfo: validHostInfo()}
 	runner := newInteractiveTestRunner(t, 1, client)
 	root := filepath.Join(runner.workRoot, "templates")
-	old := writeBootTemplateEntry(t, root, strings.Repeat("1", 64), time.Unix(1, 0))
-	newest := writeBootTemplateEntry(t, root, strings.Repeat("2", 64), time.Unix(2, 0))
-	build := writeBootTemplateEntry(t, root, ".build-abandoned", time.Unix(3, 0))
+	old := writeBootTemplateEntry(t, runner, strings.Repeat("1", 64), time.Unix(1, 0))
+	newest := writeBootTemplateEntry(t, runner, strings.Repeat("2", 64), time.Unix(2, 0))
+	build := writeBootTemplateEntry(t, runner, ".build-abandoned", time.Unix(3, 0))
 	incomplete := filepath.Join(root, strings.Repeat("3", 64))
 	if err := os.MkdirAll(incomplete, 0o755); err != nil {
 		t.Fatalf("create incomplete entry: %v", err)
@@ -57,7 +58,7 @@ func TestReconcileBootTemplatesPreservesPinWhenRemovalFails(t *testing.T) {
 		},
 	}
 	runner := newInteractiveTestRunner(t, 1, client)
-	entry := writeBootTemplateEntry(t, filepath.Join(runner.workRoot, "templates"), strings.Repeat("1", 64), time.Unix(1, 0))
+	entry := writeBootTemplateEntry(t, runner, strings.Repeat("1", 64), time.Unix(1, 0))
 
 	result, err := runner.ReconcileBootTemplates(context.Background(), 0)
 	if err == nil {
@@ -73,7 +74,7 @@ func TestReconcileBootTemplatesPreservesPinWhenRemovalFails(t *testing.T) {
 
 func TestReconcileBootTemplatesSkipsActiveTemplate(t *testing.T) {
 	runner := newInteractiveTestRunner(t, 1, &fakeSporeClient{hostInfo: validHostInfo()})
-	entry := writeBootTemplateEntry(t, filepath.Join(runner.workRoot, "templates"), strings.Repeat("1", 64), time.Unix(1, 0))
+	entry := writeBootTemplateEntry(t, runner, strings.Repeat("1", 64), time.Unix(1, 0))
 	templateDir := filepath.Join(entry, "parent.spore")
 	runner.templateMu.Lock()
 	release := runner.leaseBootTemplate(templateDir)
@@ -92,9 +93,66 @@ func TestReconcileBootTemplatesSkipsActiveTemplate(t *testing.T) {
 	}
 }
 
-func writeBootTemplateEntry(t *testing.T, root, name string, modified time.Time) string {
+func TestReconcileBootTemplatesEvictsTemplatesFromAnotherSporeBinary(t *testing.T) {
+	spore := writeFakeSporeBinary(t, "spore build a", time.Unix(1, 0))
+	client := &fakeSporeClient{hostInfo: validHostInfo(), version: "0.17.1", executable: spore}
+	runner := newInteractiveTestRunner(t, 1, client)
+	req := RunRequest{Image: interactiveTestImage, Memory: "512mb", Command: []string{"/bin/true"}}
+	old, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("Run with the old binary: %v", err)
+	}
+	writeFakeSporeBinary(t, "spore build b", time.Unix(2, 0), spore)
+	current, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("Run with the new binary: %v", err)
+	}
+	templateEntry := func(status TemplateStatus) string {
+		return filepath.Join(runner.workRoot, "templates", strings.TrimPrefix(status.ID, "sha256:"))
+	}
+	oldEntry, currentEntry := templateEntry(old.Template), templateEntry(current.Template)
+	oldTemplate := filepath.Join(oldEntry, "parent.spore")
+
+	// A stale template that is still restoring a child stays until released.
+	runner.templateMu.Lock()
+	release := runner.leaseBootTemplate(oldTemplate)
+	runner.templateMu.Unlock()
+	result, err := runner.ReconcileBootTemplates(context.Background(), 16)
+	if err != nil {
+		t.Fatalf("ReconcileBootTemplates while leased: %v", err)
+	}
+	if result.RemovedTemplates != 0 {
+		t.Fatalf("result while leased = %+v", result)
+	}
+	if _, err := os.Stat(oldEntry); err != nil {
+		t.Fatalf("leased stale template was removed: %v", err)
+	}
+	release()
+
+	result, err = runner.ReconcileBootTemplates(context.Background(), 16)
+	if err != nil {
+		t.Fatalf("ReconcileBootTemplates: %v", err)
+	}
+	if result.RemovedTemplates != 1 || result.RetainedTemplates != 1 {
+		t.Fatalf("result = %+v, want the old binary's template removed", result)
+	}
+	if _, err := os.Stat(oldEntry); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale template still exists: %v", err)
+	}
+	if _, err := os.Stat(currentEntry); err != nil {
+		t.Fatalf("current template was removed: %v", err)
+	}
+	removes := client.removeSavedSporeRequests()
+	if len(removes) != 1 || removes[0].SporeDir != oldTemplate {
+		t.Fatalf("saved spore removals = %+v, want %s", removes, oldTemplate)
+	}
+}
+
+// writeBootTemplateEntry writes a completed template whose key matches the
+// runner's current spore binary and host.
+func writeBootTemplateEntry(t *testing.T, runner *Runner, name string, modified time.Time) string {
 	t.Helper()
-	entry := filepath.Join(root, name)
+	entry := filepath.Join(runner.workRoot, "templates", name)
 	templateDir := filepath.Join(entry, "parent.spore")
 	if err := os.MkdirAll(templateDir, 0o755); err != nil {
 		t.Fatalf("create template entry: %v", err)
@@ -102,8 +160,18 @@ func writeBootTemplateEntry(t *testing.T, root, name string, modified time.Time)
 	if err := os.WriteFile(filepath.Join(templateDir, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
+	runner.templateMu.Lock()
+	identity, err := runner.bootTemplateIdentity(context.Background())
+	runner.templateMu.Unlock()
+	if err != nil {
+		t.Fatalf("boot template identity: %v", err)
+	}
+	key, err := json.Marshal(identity.key(runner.backend, interactiveTestImage, "512mb"))
+	if err != nil {
+		t.Fatalf("encode template key: %v", err)
+	}
 	metadata := filepath.Join(entry, "template.json")
-	if err := os.WriteFile(metadata, []byte("{}\n"), 0o644); err != nil {
+	if err := os.WriteFile(metadata, key, 0o644); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
 	if err := os.Chtimes(metadata, modified, modified); err != nil {

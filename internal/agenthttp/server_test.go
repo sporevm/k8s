@@ -315,6 +315,10 @@ type fakeSporeClient struct {
 	resumeErr  error
 }
 
+func (c fakeSporeClient) Executable() (string, error) {
+	return os.Executable()
+}
+
 func (c fakeSporeClient) Version(context.Context) (string, error) {
 	return "0.16.0", nil
 }

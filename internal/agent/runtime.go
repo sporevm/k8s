@@ -50,6 +50,7 @@ var (
 // The concrete subprocess implementation should wait for SporeVM's stable JSON
 // contract. Tests and coordinator dry-runs can use fakes behind this interface.
 type SporeClient interface {
+	Executable() (string, error)
 	Version(context.Context) (string, error)
 	HostInfo(context.Context) (HostInfo, error)
 	InspectBundle(context.Context, InspectBundleRequest) (InspectBundleResult, error)

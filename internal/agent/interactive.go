@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ import (
 	"github.com/sporevm/k8s/internal/fleet"
 )
 
-const bootTemplateSchema = "sporevm-k8s.boot-template.v1"
+const bootTemplateSchema = "sporevm-k8s.boot-template.v2"
 
 const interactiveDefaultMemory = "1024mb"
 
@@ -103,9 +104,14 @@ type SandboxCreateResponse struct {
 	Timings  SandboxTimings `json:"timingsMs"`
 }
 
+// bootTemplateRuntimeIdentity is the part of a template key that comes from the
+// spore binary and host rather than the request.
 type bootTemplateRuntimeIdentity struct {
 	Version   string
+	Digest    string
 	HostClass fleet.HostClass
+	// executable is the file the digest was computed from.
+	executable os.FileInfo
 }
 
 type bootTemplateKey struct {
@@ -114,7 +120,30 @@ type bootTemplateKey struct {
 	Memory    string          `json:"memory,omitempty"`
 	Backend   string          `json:"backend"`
 	Version   string          `json:"sporeVersion"`
+	Digest    string          `json:"sporeDigest"`
 	HostClass fleet.HostClass `json:"hostClass"`
+}
+
+func (i bootTemplateRuntimeIdentity) key(backend, image, memory string) bootTemplateKey {
+	return bootTemplateKey{
+		Schema:    bootTemplateSchema,
+		Image:     image,
+		Memory:    memory,
+		Backend:   backend,
+		Version:   i.Version,
+		Digest:    i.Digest,
+		HostClass: i.HostClass,
+	}
+}
+
+// matches reports whether key was saved by this spore binary on this host and
+// backend; image and memory are per-request and not compared.
+func (i bootTemplateRuntimeIdentity) matches(key bootTemplateKey, backend string) bool {
+	return key.Schema == bootTemplateSchema &&
+		key.Backend == backend &&
+		key.Version == i.Version &&
+		key.Digest == i.Digest &&
+		key.HostClass == i.HostClass
 }
 
 // Run executes one command in a fresh child restored from an automatic boot template.
@@ -272,14 +301,7 @@ func (r *Runner) ensureBootTemplate(ctx context.Context, image string, memory st
 	if err != nil {
 		return TemplateStatus{}, "", nil, err
 	}
-	key := bootTemplateKey{
-		Schema:    bootTemplateSchema,
-		Image:     image,
-		Memory:    memory,
-		Backend:   r.backend,
-		Version:   identity.Version,
-		HostClass: identity.HostClass,
-	}
+	key := identity.key(r.backend, image, memory)
 	payload, err := json.Marshal(key)
 	if err != nil {
 		return TemplateStatus{}, "", nil, err
@@ -366,15 +388,31 @@ func (r *Runner) cleanupTemplateBuild(ctx context.Context, tmpDir, templateDir s
 	_ = os.RemoveAll(tmpDir)
 }
 
+// bootTemplateIdentity returns the runtime half of the template key while
+// templateMu is held. Builds can report the same version, so the key also
+// carries the spore executable's SHA-256. The file is hashed, and its version
+// re-read, only when its identity, size, or mtime changes.
 func (r *Runner) bootTemplateIdentity(ctx context.Context) (bootTemplateRuntimeIdentity, error) {
-	if r.templateIdentity != nil {
-		return *r.templateIdentity, nil
-	}
 	if r.client == nil {
 		return bootTemplateRuntimeIdentity{}, ErrSporeClientNotConfigured
 	}
 	if r.workRoot == "" {
 		return bootTemplateRuntimeIdentity{}, ErrWorkRootNotConfigured
+	}
+	path, err := r.client.Executable()
+	if err != nil {
+		return bootTemplateRuntimeIdentity{}, fmt.Errorf("resolve spore executable: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return bootTemplateRuntimeIdentity{}, fmt.Errorf("stat spore executable: %w", err)
+	}
+	if cached := r.templateIdentity; cached != nil && sameExecutable(cached.executable, info) {
+		return *cached, nil
+	}
+	digest, info, err := hashExecutable(path)
+	if err != nil {
+		return bootTemplateRuntimeIdentity{}, err
 	}
 	version, err := r.client.Version(ctx)
 	if err != nil {
@@ -384,9 +422,31 @@ func (r *Runner) bootTemplateIdentity(ctx context.Context) (bootTemplateRuntimeI
 	if err != nil {
 		return bootTemplateRuntimeIdentity{}, err
 	}
-	identity := bootTemplateRuntimeIdentity{Version: version, HostClass: hostClass}
+	identity := bootTemplateRuntimeIdentity{Version: version, Digest: digest, HostClass: hostClass, executable: info}
 	r.templateIdentity = &identity
 	return identity, nil
+}
+
+func sameExecutable(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+// hashExecutable returns the SHA-256 of path and the stat of the file it read.
+func hashExecutable(path string) (string, os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("open spore executable: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", nil, fmt.Errorf("stat spore executable: %w", err)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", nil, fmt.Errorf("hash spore executable: %w", err)
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), info, nil
 }
 
 func (r *Runner) admitOne(pressure fleet.Pressure) (func(), error) {

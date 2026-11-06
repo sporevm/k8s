@@ -129,22 +129,29 @@ identity and cleanup checks unchanged; `/runs` remains the distinct one-shot
 fresh-child contract.
 
 Boot templates are automatic, immutable cache entries. Their identity includes
-the image digest, memory, backend, SporeVM version, host class, and template
-schema version. Mutable image tags are rejected so a cache hit cannot silently
-select different bytes. The first request may pay image/rootfs resolution,
-boot, and capture. Later requests use the published template without forking,
-packing, pulling, or writing generation metadata.
+the image digest, memory, backend, SporeVM version, the SHA-256 of the spore
+binary, host class, and template schema version. The binary digest keeps two
+builds that report the same version from sharing templates; the agent hashes
+the binary again only when its file identity, size, or mtime changes. Mutable
+image tags are rejected so a cache hit cannot silently select different bytes.
+The first request may pay image/rootfs resolution, boot, and capture. Later
+requests use the published template without forking, packing, pulling, or
+writing generation metadata.
 SporeVM 0.13.0 disk-backed saves own durable host-cache pins, so failed
 temporary captures are removed through `spore rm --spore`; raw directory
 deletion would leak the pin.
 The agent reconciles this cache before serving and periodically thereafter.
-Each pass removes abandoned builds and incomplete entries, keeps the newest 16
-completed templates by default, skips templates currently restoring a child,
-and releases every evicted durable pin through SporeVM before deleting its
-metadata. Operators can set the count and interval with the chart's
-`agent.cache.templateRetain` and `agent.cache.templateReconcileInterval`
-values; a zero interval keeps startup reconciliation but disables the periodic
-pass.
+Each pass removes abandoned builds, incomplete entries, and templates saved by
+another spore binary, host class, or backend, keeps the newest 16 completed
+templates by default, skips templates currently restoring a child, and removes
+every evicted template through `spore rm --spore` before deleting its metadata.
+After the startup pass and each periodic pass, the agent runs `spore cache gc
+--force` in the background; newer SporeVM releases removed saves' pins there
+rather than in `rm --spore`, and GC keeps storage that live VMs, images, and
+remaining saves still reference. Operators can set the count and interval with
+the chart's `agent.cache.templateRetain` and
+`agent.cache.templateReconcileInterval` values; a zero interval keeps startup
+reconciliation but disables the periodic pass.
 The agent also keeps SporeVM's local RAM-backing authority under the persistent
 work root so retained template proofs survive pod replacement. Before serving,
 it removes every other entry from that runtime directory: named VM metadata,
@@ -253,7 +260,7 @@ Kubernetes owns deployment and coarse lifecycle for a cell:
 
 1. Require a digest-pinned OCI image and validate slot and pressure admission.
 2. Derive the boot-template identity from image, memory, backend, SporeVM
-   version, template schema, and exact host class.
+   version and binary digest, template schema, and exact host class.
 3. On a cache miss, run `/bin/true` with `spore run --save` and atomically
    publish the captured template. On a hit, reuse the immutable template.
 4. For `/runs`, execute the command with `spore run --from` and discard the
