@@ -67,6 +67,7 @@ spec:
             - --template-retain={{ .Values.agent.cache.templateRetain }}
             - --template-reconcile-interval={{ .Values.agent.cache.templateReconcileInterval }}
             - --reset-runtime-on-start=true
+            - --cache-gc=true
             {{- if .Values.agent.region }}
             - --region={{ .Values.agent.region }}
             {{- end }}

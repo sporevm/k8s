@@ -1589,6 +1589,7 @@ type fakeSporeClient struct {
 	removeSaveds     []RemoveSavedSporeRequest
 	outDir           string
 	hostInfoCalls    int
+	cacheGCCalls     int
 }
 
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
@@ -1737,6 +1738,19 @@ func (c *fakeSporeClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedS
 		return os.RemoveAll(req.SporeDir)
 	}
 	return c.removeSavedFunc(ctx, req)
+}
+
+func (c *fakeSporeClient) CollectCache(context.Context) (CacheGCResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cacheGCCalls++
+	return CacheGCResult{Schema: cacheGCV2Schema, SchemaVersion: 2}, nil
+}
+
+func (c *fakeSporeClient) cacheGCCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cacheGCCalls
 }
 
 func (c *fakeSporeClient) runCaptureRequests() []RunCaptureRequest {

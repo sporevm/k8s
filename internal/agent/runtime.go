@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sporevm/k8s/internal/fleet"
@@ -64,6 +65,7 @@ type SporeClient interface {
 	Exec(context.Context, ExecRequest) ([]RunEvent, error)
 	RemoveVM(context.Context, RemoveVMRequest) error
 	RemoveSavedSpore(context.Context, RemoveSavedSporeRequest) error
+	CollectCache(context.Context) (CacheGCResult, error)
 }
 
 // RunnerOption configures a node-local Runner.
@@ -101,6 +103,16 @@ func WithBackend(backend string) RunnerOption {
 func WithChildTimeout(timeout time.Duration) RunnerOption {
 	return func(r *Runner) {
 		r.childTimeout = timeout
+	}
+}
+
+// WithCacheGC lets CollectCache run `spore cache gc`. Enable it only on the
+// agent that owns the node's SporeVM caches: GC roots only the VMs under its
+// own runtime directory and the pins its own SporeVM release reads, so on a
+// shared cache it deletes storage another agent's VMs or saves still need.
+func WithCacheGC(enabled bool) RunnerOption {
+	return func(r *Runner) {
+		r.cacheGC = enabled
 	}
 }
 
@@ -208,6 +220,8 @@ type Runner struct {
 	templateMu       sync.Mutex
 	templateIdentity *bootTemplateRuntimeIdentity
 	templateUses     map[string]int
+	cacheGC          bool
+	cacheGCPending   atomic.Bool
 	sandboxMu        sync.Mutex
 	sandboxes        map[string]func()
 	prepareOpsMu     sync.Mutex
@@ -235,10 +249,32 @@ func NewRunner(totalSlots int, opts ...RunnerOption) (*Runner, error) {
 		sandboxes:    make(map[string]func()),
 		prepareOps:   make(map[string]*prepareOperation),
 	}
+	// Saved-spore removals set cacheGCPending; start pending so the first
+	// collection runs.
+	runner.cacheGCPending.Store(true)
 	for _, opt := range opts {
 		opt(runner)
 	}
 	return runner, nil
+}
+
+// CollectCache runs `spore cache gc --force` when this agent owns the node
+// cache (WithCacheGC) and the agent removed a saved spore since the last
+// successful collection, or none has succeeded yet. GC holds the exclusive
+// cache lock for its whole run, so passes in which the agent removed nothing
+// skip it and return the zero result.
+func (r *Runner) CollectCache(ctx context.Context) (CacheGCResult, error) {
+	if !r.cacheGC || !r.cacheGCPending.Swap(false) {
+		return CacheGCResult{}, nil
+	}
+	if r.client == nil {
+		return CacheGCResult{}, ErrSporeClientNotConfigured
+	}
+	result, err := r.client.CollectCache(ctx)
+	if err != nil {
+		r.cacheGCPending.Store(true)
+	}
+	return result, err
 }
 
 // AvailableSlots returns the runner's available child execution slots.
@@ -823,9 +859,19 @@ func validateNoSymlinkPath(base, path string) error {
 	return nil
 }
 
+// removeSavedSpore removes a saved spore through SporeVM. Newer SporeVM leaves
+// its pin and storage to GC, so a successful removal makes GC pending.
+func (r *Runner) removeSavedSpore(ctx context.Context, dir string) error {
+	if err := r.client.RemoveSavedSpore(ctx, RemoveSavedSporeRequest{SporeDir: dir}); err != nil {
+		return err
+	}
+	r.cacheGCPending.Store(true)
+	return nil
+}
+
 func (r *Runner) removePreparedSpore(ctx context.Context, path string) error {
 	for {
-		err := r.client.RemoveSavedSpore(ctx, RemoveSavedSporeRequest{SporeDir: path})
+		err := r.removeSavedSpore(ctx, path)
 		if err == nil || !savedSporeInUse(err) {
 			return err
 		}

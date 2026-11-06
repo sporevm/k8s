@@ -136,16 +136,6 @@ func (i bootTemplateRuntimeIdentity) key(backend, image, memory string) bootTemp
 	}
 }
 
-// matches reports whether key was saved by this spore binary on this host and
-// backend; image and memory are per-request and not compared.
-func (i bootTemplateRuntimeIdentity) matches(key bootTemplateKey, backend string) bool {
-	return key.Schema == bootTemplateSchema &&
-		key.Backend == backend &&
-		key.Version == i.Version &&
-		key.Digest == i.Digest &&
-		key.HostClass == i.HostClass
-}
-
 // Run executes one command in a fresh child restored from an automatic boot template.
 func (r *Runner) Run(ctx context.Context, req RunRequest, pressure fleet.Pressure) (RunResponse, error) {
 	started := r.now()
@@ -380,7 +370,7 @@ func (r *Runner) cleanupTemplateBuild(ctx context.Context, tmpDir, templateDir s
 	if bootTemplateReady(templateDir) {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleCleanupTimeout)
 		defer cancel()
-		if err := r.client.RemoveSavedSpore(cleanupCtx, RemoveSavedSporeRequest{SporeDir: templateDir}); err != nil {
+		if err := r.removeSavedSpore(cleanupCtx, templateDir); err != nil {
 			// Keep the save visible so its durable pin can be recovered by an operator.
 			return
 		}
@@ -391,7 +381,7 @@ func (r *Runner) cleanupTemplateBuild(ctx context.Context, tmpDir, templateDir s
 // bootTemplateIdentity returns the runtime half of the template key while
 // templateMu is held. Builds can report the same version, so the key also
 // carries the spore executable's SHA-256. The file is hashed, and its version
-// re-read, only when its identity, size, or mtime changes.
+// re-read, only when its identity, size, mtime, or ctime changes.
 func (r *Runner) bootTemplateIdentity(ctx context.Context) (bootTemplateRuntimeIdentity, error) {
 	if r.client == nil {
 		return bootTemplateRuntimeIdentity{}, ErrSporeClientNotConfigured
@@ -427,8 +417,11 @@ func (r *Runner) bootTemplateIdentity(ctx context.Context) (bootTemplateRuntimeI
 	return identity, nil
 }
 
+// sameExecutable compares ctime too: `cp -p` over the file keeps its inode,
+// and can keep its size and mtime.
 func sameExecutable(a, b os.FileInfo) bool {
-	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime()) &&
+		changeTime(a).Equal(changeTime(b))
 }
 
 // hashExecutable returns the SHA-256 of path and the stat of the file it read.

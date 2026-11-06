@@ -33,6 +33,7 @@ type Server struct {
 	Pressure                fleet.Pressure
 	AllowMetadataOnlyRootFS bool
 	Now                     func() time.Time
+	Started                 func() bool // /readyz fails until it returns true; nil means started
 	statusMu                sync.Mutex
 	statusCache             fleet.CacheStatus
 	statusCacheAt           time.Time
@@ -78,6 +79,10 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if s.Started != nil && !s.Started() {
+		writeError(w, http.StatusServiceUnavailable, errors.New("agent startup maintenance is running"))
+		return
+	}
 	info, err := s.Client.HostInfo(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)

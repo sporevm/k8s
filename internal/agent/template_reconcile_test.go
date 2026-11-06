@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,6 +146,64 @@ func TestReconcileBootTemplatesEvictsTemplatesFromAnotherSporeBinary(t *testing.
 	removes := client.removeSavedSporeRequests()
 	if len(removes) != 1 || removes[0].SporeDir != oldTemplate {
 		t.Fatalf("saved spore removals = %+v, want %s", removes, oldTemplate)
+	}
+}
+
+func TestReconcileBootTemplatesEvictsNothingAsStaleWithoutSporeIdentity(t *testing.T) {
+	spore := writeFakeSporeBinary(t, "spore build a", time.Unix(1, 0))
+	client := &fakeSporeClient{hostInfo: validHostInfo(), executable: spore}
+	runner := newInteractiveTestRunner(t, 1, client)
+	entry := writeBootTemplateEntry(t, runner, strings.Repeat("1", 64), time.Unix(1, 0))
+	if err := os.Remove(spore); err != nil {
+		t.Fatalf("remove spore binary: %v", err)
+	}
+
+	result, err := runner.ReconcileBootTemplates(context.Background(), 16)
+	if err == nil || !strings.Contains(err.Error(), "boot template identity") {
+		t.Fatalf("ReconcileBootTemplates error = %v, want the identity error", err)
+	}
+	if result.RemovedTemplates != 0 || result.RetainedTemplates != 1 {
+		t.Fatalf("result = %+v, want the template retained", result)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Fatalf("template removed without a known spore identity: %v", err)
+	}
+	if removes := client.removeSavedSporeRequests(); len(removes) != 0 {
+		t.Fatalf("saved spore removals = %+v, want none", removes)
+	}
+}
+
+func TestCollectCacheRunsOnlyOnTheCacheOwnerAfterRemovals(t *testing.T) {
+	for _, owner := range []bool{false, true} {
+		t.Run(fmt.Sprintf("owner=%t", owner), func(t *testing.T) {
+			client := &fakeSporeClient{hostInfo: validHostInfo()}
+			runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(t.TempDir()), WithCacheGC(owner))
+			if err != nil {
+				t.Fatalf("NewRunner: %v", err)
+			}
+			collect := func() {
+				t.Helper()
+				if _, err := runner.CollectCache(context.Background()); err != nil {
+					t.Fatalf("CollectCache: %v", err)
+				}
+			}
+
+			collect() // startup
+			collect() // nothing removed since
+			writeBootTemplateEntry(t, runner, strings.Repeat("1", 64), time.Unix(1, 0))
+			if result, err := runner.ReconcileBootTemplates(context.Background(), 0); err != nil || result.RemovedTemplates != 1 {
+				t.Fatalf("ReconcileBootTemplates = %+v, %v; want one template removed", result, err)
+			}
+			collect()
+
+			want := 0
+			if owner {
+				want = 2
+			}
+			if got := client.cacheGCCallCount(); got != want {
+				t.Fatalf("spore cache gc ran %d times, want %d", got, want)
+			}
+		})
 	}
 }
 

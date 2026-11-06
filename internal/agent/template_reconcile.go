@@ -48,7 +48,8 @@ func (r *Runner) ReconcileBootTemplates(ctx context.Context, retain int) (Templa
 
 	var complete []bootTemplateEntry
 	var cleanupErrors []error
-	// Without the current identity, keep every template rather than guess.
+	// Without the current identity, evict no template as stale; retention
+	// below still applies.
 	identity, err := r.bootTemplateIdentity(ctx)
 	identityKnown := err == nil
 	if err != nil {
@@ -133,12 +134,12 @@ func (r *Runner) bootTemplateCurrent(metadataPath string, identity bootTemplateR
 	if err := json.Unmarshal(data, &key); err != nil {
 		return false
 	}
-	return identity.matches(key, r.backend)
+	return key == identity.key(r.backend, key.Image, key.Memory)
 }
 
 func (r *Runner) removeBootTemplateEntry(ctx context.Context, entryDir, templateDir string) error {
 	if bootTemplateReady(templateDir) {
-		if err := r.client.RemoveSavedSpore(ctx, RemoveSavedSporeRequest{SporeDir: templateDir}); err != nil {
+		if err := r.removeSavedSpore(ctx, templateDir); err != nil {
 			return err
 		}
 	}

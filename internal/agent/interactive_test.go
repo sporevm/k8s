@@ -94,8 +94,11 @@ func TestRunnerRunTemplateKeyIncludesSporeBinary(t *testing.T) {
 		t.Fatalf("spore version ran %d times for an unchanged binary, want 1", calls)
 	}
 
-	// Another build reporting the same version must not reuse the template.
-	writeFakeSporeBinary(t, "spore build b", time.Unix(2, 0), spore)
+	// Another build reporting the same version must not reuse the template,
+	// even when copied over the old one with `cp -p`, which keeps the inode,
+	// size, and mtime. Wait one clock tick so the rewrite moves ctime.
+	time.Sleep(20 * time.Millisecond)
+	writeFakeSporeBinary(t, "spore build b", time.Unix(1, 0), spore)
 	third, err := runner.Run(context.Background(), req, normalPressure())
 	if err != nil {
 		t.Fatalf("third Run: %v", err)

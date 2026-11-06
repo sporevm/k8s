@@ -268,9 +268,12 @@ func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error 
 	return nil
 }
 
-// RemoveSavedSpore runs `spore rm --spore`, which refuses a spore a running VM
-// still uses. SporeVM 0.17 also releases the spore's durable cache pin; newer
-// SporeVM leaves the pin and its storage to `spore cache gc --force`.
+// RemoveSavedSpore runs `spore rm --spore`. It refuses only a spore a running
+// VM restored with a saved-spore lease (pulled or unpacked spores); it removes
+// a cache-pinned save such as a boot template even while a VM restored from it
+// runs, since that VM's rootfs-cache lease roots the storage. SporeVM 0.17 also
+// releases the durable cache pin; newer SporeVM leaves the pin and its storage
+// to `spore cache gc --force`.
 func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSporeRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -283,8 +286,9 @@ func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSpor
 }
 
 // CollectCache runs `spore --json cache gc --force`, which deletes cache
-// storage and orphaned saved-spore pins that nothing on this host references.
-// It roots running VMs' leases and takes the same locks as saves and pulls.
+// storage and orphaned saved-spore pins that nothing references. It roots only
+// the VM leases under this process's runtime directory, and holds the rootfs
+// cache lock exclusively for its whole run.
 func (c CommandClient) CollectCache(ctx context.Context) (CacheGCResult, error) {
 	var result CacheGCResult
 	if err := c.runJSON(ctx, &result, "--json", "cache", "gc", "--force"); err != nil {

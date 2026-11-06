@@ -736,6 +736,10 @@ func (c *fakeSporeClient) RemoveSavedSpore(_ context.Context, req agent.RemoveSa
 	return c.removeSavedErr
 }
 
+func (c *fakeSporeClient) CollectCache(context.Context) (agent.CacheGCResult, error) {
+	return agent.CacheGCResult{}, nil
+}
+
 func (c *fakeSporeClient) runCaptureCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
