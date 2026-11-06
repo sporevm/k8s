@@ -352,6 +352,81 @@ exit 2
 	}
 }
 
+func TestCommandClientRunCaptureInjectsS3ImageCredentials(t *testing.T) {
+	// Only the agent's own environment feeds the AWS default chain here.
+	for _, name := range []string{
+		"AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+	} {
+		t.Setenv(name, "")
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("AWS_CONFIG_FILE", missing)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", missing)
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+	envFile := filepath.Join(t.TempDir(), "env")
+	spore := fakeSpore(t, `
+env | grep '^AWS_' | sort > "$SPORE_ENV_FILE"
+printf '%s\n' '{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"run","backend":"kvm","exit_code":0,"captured":true,"capture_path":"/work/template.spore"}'
+`, "")
+	capture := func(image string, inherited ...string) (string, error) {
+		t.Helper()
+		_ = os.Remove(envFile)
+		client := CommandClient{
+			Path:   spore,
+			Env:    append([]string{"PATH=" + os.Getenv("PATH"), "SPORE_ENV_FILE=" + envFile}, inherited...),
+			Region: "example-region-1",
+		}
+		_, err := client.RunCapture(context.Background(), RunCaptureRequest{
+			Image:      image,
+			CaptureDir: "/work/template.spore",
+			Command:    []string{"/bin/true"},
+		})
+		if err != nil {
+			return "", err
+		}
+		return readFile(t, envFile), nil
+	}
+	s3Image := "s3://images/app/blake3:" + strings.Repeat("ab", 32)
+
+	t.Run("s3 image gets credentials from the chain", func(t *testing.T) {
+		t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+		t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+		t.Setenv("AWS_SESSION_TOKEN", "token")
+		env, err := capture(s3Image, "AWS_SESSION_TOKEN=stale", "AWS_REGION=stale")
+		if err != nil {
+			t.Fatalf("RunCapture: %v", err)
+		}
+		want := "AWS_ACCESS_KEY_ID=AKIDEXAMPLE\nAWS_REGION=example-region-1\nAWS_SECRET_ACCESS_KEY=secret\nAWS_SESSION_TOKEN=token\n"
+		if env != want {
+			t.Fatalf("spore environment = %q, want %q", env, want)
+		}
+	})
+
+	t.Run("other images get none", func(t *testing.T) {
+		t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+		t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+		env, err := capture(interactiveTestImage)
+		if err != nil {
+			t.Fatalf("RunCapture: %v", err)
+		}
+		if env != "" {
+			t.Fatalf("spore environment = %q, want no AWS variables", env)
+		}
+	})
+
+	t.Run("chain error fails before spore runs", func(t *testing.T) {
+		_, err := capture(s3Image)
+		if err == nil || !strings.Contains(err.Error(), "resolve AWS credentials for s3:// image") {
+			t.Fatalf("RunCapture error = %v, want a credential error", err)
+		}
+		if _, statErr := os.Stat(envFile); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("spore ran without credentials: %v", statErr)
+		}
+	})
+}
+
 func TestCommandClientForkAndPack(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `

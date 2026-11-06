@@ -12,10 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/aws/aws-sdk-go-v2/config"
 )
 
 // CommandClient invokes the `spore` CLI machine interface.
@@ -23,6 +26,9 @@ type CommandClient struct {
 	Path string
 	Dir  string
 	Env  []string
+	// Region is the AWS region of s3:// image stores; empty uses the region
+	// of the AWS default config chain.
+	Region string
 }
 
 // Executable resolves the spore binary this client runs, the way exec does:
@@ -125,9 +131,15 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	args = append(args, "--")
 	args = append(args, req.Command...)
 
+	// c is this call's copy, so the credentials reach only this command.
+	env, err := c.imageEnv(ctx, req.Image)
+	if err != nil {
+		return nil, err
+	}
+	c.Env = env
+
 	var stdout []byte
 	var stderr []byte
-	var err error
 	if req.ReadyMarker != "" {
 		stdout, stderr, err = c.runSignalingOnMarker(ctx, req.ReadyMarker, req.CaptureSignal, args...)
 	} else {
@@ -341,6 +353,56 @@ func (c CommandClient) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	return cmd
+}
+
+// s3ImageEnvKeys are the variables SporeVM reads to sign s3:// store reads.
+var s3ImageEnvKeys = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION"}
+
+// imageEnv returns the environment for a spore command that reads image.
+// SporeVM signs s3:// store reads only with credentials and a region from its
+// environment, so for those images it resolves them from the AWS default
+// chain on every call, which picks up refreshed role credentials, and
+// replaces any inherited values.
+func (c CommandClient) imageEnv(ctx context.Context, image string) ([]string, error) {
+	if !strings.HasPrefix(image, "s3://") {
+		return c.Env, nil
+	}
+	var options []func(*config.LoadOptions) error
+	if c.Region != "" {
+		options = append(options, config.WithRegion(c.Region))
+	}
+	awsConfig, err := config.LoadDefaultConfig(ctx, options...)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS configuration for s3:// image: %w", err)
+	}
+	if awsConfig.Region == "" {
+		return nil, errors.New("s3:// image needs an AWS region: set --region or AWS_REGION")
+	}
+	credentials, err := awsConfig.Credentials.Retrieve(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve AWS credentials for s3:// image: %w", err)
+	}
+
+	env := c.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	out := make([]string, 0, len(env)+len(s3ImageEnvKeys))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(s3ImageEnvKeys, name) {
+			out = append(out, entry)
+		}
+	}
+	out = append(out,
+		"AWS_ACCESS_KEY_ID="+credentials.AccessKeyID,
+		"AWS_SECRET_ACCESS_KEY="+credentials.SecretAccessKey,
+		"AWS_REGION="+awsConfig.Region,
+	)
+	if credentials.SessionToken != "" {
+		out = append(out, "AWS_SESSION_TOKEN="+credentials.SessionToken)
+	}
+	return out, nil
 }
 
 func (c CommandClient) runSignalingOnMarker(ctx context.Context, marker string, signalName string, args ...string) ([]byte, []byte, error) {
