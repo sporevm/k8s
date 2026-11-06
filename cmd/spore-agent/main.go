@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	defaultTemplateRetain     = 16
 	defaultTemplateReconcile  = 15 * time.Minute
 	templateReconcileTimeout  = 2 * time.Minute
+	cacheGCTimeout            = 10 * time.Minute
 	sporeRuntimeDirEnv        = "SPOREVM_RUNTIME_DIR"
 	sporeRuntimeAuthorityFile = "local-ram-backing.key"
 )
@@ -57,6 +59,7 @@ func main() {
 	var templateRetain int
 	var templateReconcileInterval time.Duration
 	var resetRuntimeOnStart bool
+	var cacheGC bool
 
 	flag.StringVar(&listen, "listen", envString("SPORE_AGENT_LISTEN", ":8080"), "HTTP listen address")
 	flag.StringVar(&agentID, "agent-id", envString("SPORE_AGENT_ID", envString("HOSTNAME", "spore-agent-local")), "stable fleet agent id")
@@ -80,6 +83,7 @@ func main() {
 	flag.IntVar(&templateRetain, "template-retain", envInt("SPORE_AGENT_TEMPLATE_RETAIN", defaultTemplateRetain), "newest completed boot templates retained on this agent")
 	flag.DurationVar(&templateReconcileInterval, "template-reconcile-interval", envDuration("SPORE_AGENT_TEMPLATE_RECONCILE_INTERVAL", defaultTemplateReconcile), "interval between boot-template reconciliation passes; 0 disables periodic reconciliation")
 	flag.BoolVar(&resetRuntimeOnStart, "reset-runtime-on-start", envBool("SPORE_AGENT_RESET_RUNTIME_ON_START", false), "remove process-local SporeVM runtime state before serving while retaining local backing authority")
+	flag.BoolVar(&cacheGC, "cache-gc", envBool("SPORE_AGENT_CACHE_GC", false), "run 'spore cache gc --force' after the agent removes saved spores; set only on the one agent that owns this node's SporeVM caches")
 	flag.Parse()
 
 	for _, root := range []string{resultStoreRoot, workRoot, bundleCacheRoot, rootFSCacheRoot} {
@@ -136,6 +140,7 @@ func main() {
 		agent.WithWorkRoot(workRoot),
 		agent.WithBackend(backend),
 		agent.WithChildTimeout(childTimeout),
+		agent.WithCacheGC(cacheGC),
 	)
 	if err != nil {
 		log.Fatalf("create runner: %v", err)
@@ -154,21 +159,42 @@ func main() {
 			log.Printf("reconciled boot templates removed_builds=%d removed_templates=%d retained_templates=%d", result.RemovedBuilds, result.RemovedTemplates, result.RetainedTemplates)
 		}
 	}
-	reconcileTemplates()
-	if templateReconcileInterval > 0 {
-		go func() {
-			ticker := time.NewTicker(templateReconcileInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					reconcileTemplates()
-				}
-			}
-		}()
+	// Removing a saved spore does not release its cache pin in newer SporeVM,
+	// so collect orphaned pins and unreferenced storage after removals.
+	collectCache := func() {
+		gcCtx, cancel := context.WithTimeout(ctx, cacheGCTimeout)
+		defer cancel()
+		result, err := runner.CollectCache(gcCtx)
+		if err != nil {
+			log.Printf("collect SporeVM cache: %v", err)
+			return
+		}
+		if result.DeletedCount > 0 {
+			log.Printf("collected SporeVM cache deleted_count=%d deleted_bytes=%d", result.DeletedCount, result.DeletedBytes)
+		}
 	}
+	reconcileTemplates()
+	// GC holds the rootfs cache lock that warm requests need, so the agent
+	// serves health checks but reports not ready until startup GC finishes.
+	var started atomic.Bool
+	go func() {
+		collectCache()
+		started.Store(true)
+		if templateReconcileInterval == 0 {
+			return
+		}
+		ticker := time.NewTicker(templateReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reconcileTemplates()
+				collectCache()
+			}
+		}
+	}()
 	handler, err := (&agenthttp.Server{
 		Runner:                  runner,
 		Client:                  spore,
@@ -179,6 +205,7 @@ func main() {
 		BundleCacheRoot:         bundleCacheRoot,
 		RootFSCacheRoot:         rootFSCacheRoot,
 		AllowMetadataOnlyRootFS: allowMetadataOnlyRootFS,
+		Started:                 started.Load,
 	}).Handler()
 	if err != nil {
 		log.Fatalf("create handler: %v", err)

@@ -19,6 +19,8 @@ const (
 	pullResultSchema    = "spore.pull.result.v1"
 	removeSavedV1Schema = "spore.saved.remove.result.v1"
 	removeSavedV2Schema = "spore.saved.remove.result.v2"
+	cacheGCV1Schema     = "spore.cache.gc.result.v1"
+	cacheGCV2Schema     = "spore.cache.gc.result.v2"
 	errorSchema         = "spore.error.v1"
 	runEventsSchema     = "spore.automation.event.v1"
 	schemaVersion       = 1
@@ -672,6 +674,28 @@ func (r removedSavedSporeResult) Validate() error {
 	}
 	if r.Action != "removed_spore" {
 		return invalidMachineOutput("remove saved spore action = %q", r.Action)
+	}
+	return nil
+}
+
+// CacheGCResult is the part of the `spore --json cache gc` result the agent logs.
+type CacheGCResult struct {
+	Schema        string `json:"schema"`
+	SchemaVersion int    `json:"schema_version"`
+	DryRun        bool   `json:"dry_run"`
+	DeletedCount  int    `json:"deleted_count"`
+	DeletedBytes  uint64 `json:"deleted_bytes"`
+}
+
+// Validate accepts SporeVM 0.17's v1 result and the v2 result newer SporeVM
+// prints, and rejects a dry run.
+func (r CacheGCResult) Validate() error {
+	if (r.Schema != cacheGCV1Schema || r.SchemaVersion != 1) &&
+		(r.Schema != cacheGCV2Schema || r.SchemaVersion != 2) {
+		return invalidMachineOutput("cache gc schema = %q v%d", r.Schema, r.SchemaVersion)
+	}
+	if r.DryRun {
+		return invalidMachineOutput("cache gc reported a dry run")
 	}
 	return nil
 }

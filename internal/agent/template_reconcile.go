@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +25,9 @@ type bootTemplateEntry struct {
 	modifiedNS  int64
 }
 
-// ReconcileBootTemplates removes abandoned builds and retains the newest completed templates.
+// ReconcileBootTemplates removes abandoned builds and templates saved by
+// another spore binary, host class, or backend, and retains the newest
+// completed templates.
 func (r *Runner) ReconcileBootTemplates(ctx context.Context, retain int) (TemplateReconcileResult, error) {
 	var result TemplateReconcileResult
 	if retain < 0 {
@@ -45,6 +48,14 @@ func (r *Runner) ReconcileBootTemplates(ctx context.Context, retain int) (Templa
 
 	var complete []bootTemplateEntry
 	var cleanupErrors []error
+	// Without the current identity, evict no template as stale; retention
+	// below still applies.
+	identity, err := r.bootTemplateIdentity(ctx)
+	identityKnown := err == nil
+	if err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("boot template identity: %w", err))
+	}
+	staleInUse := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -62,10 +73,23 @@ func (r *Runner) ReconcileBootTemplates(ctx context.Context, retain int) (Templa
 		if !isBootTemplateEntryName(entry.Name()) {
 			continue
 		}
-		metadata, metadataErr := os.Stat(filepath.Join(entryDir, "template.json"))
+		metadataPath := filepath.Join(entryDir, "template.json")
+		metadata, metadataErr := os.Stat(metadataPath)
 		if !bootTemplateReady(templateDir) || metadataErr != nil || metadata.IsDir() {
 			if err := r.removeBootTemplateEntry(ctx, entryDir, templateDir); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove incomplete template %s: %w", entry.Name(), err))
+			} else {
+				result.RemovedTemplates++
+			}
+			continue
+		}
+		// No request can select a stale template again, so it only waits
+		// for in-flight users.
+		if identityKnown && !r.bootTemplateCurrent(metadataPath, identity) {
+			if r.templateUses[templateDir] > 0 {
+				staleInUse++
+			} else if err := r.removeBootTemplateEntry(ctx, entryDir, templateDir); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("remove stale template %s: %w", entry.Name(), err))
 			} else {
 				result.RemovedTemplates++
 			}
@@ -95,12 +119,27 @@ func (r *Runner) ReconcileBootTemplates(ctx context.Context, retain int) (Templa
 		}
 		result.RemovedTemplates++
 	}
+	result.RetainedTemplates += staleInUse
 	return result, errors.Join(cleanupErrors...)
+}
+
+// bootTemplateCurrent reports whether the template whose key is stored at
+// metadataPath was saved by this agent's spore binary, host, and backend.
+func (r *Runner) bootTemplateCurrent(metadataPath string, identity bootTemplateRuntimeIdentity) bool {
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return false
+	}
+	var key bootTemplateKey
+	if err := json.Unmarshal(data, &key); err != nil {
+		return false
+	}
+	return key == identity.key(r.backend, key.Image, key.Memory)
 }
 
 func (r *Runner) removeBootTemplateEntry(ctx context.Context, entryDir, templateDir string) error {
 	if bootTemplateReady(templateDir) {
-		if err := r.client.RemoveSavedSpore(ctx, RemoveSavedSporeRequest{SporeDir: templateDir}); err != nil {
+		if err := r.removeSavedSpore(ctx, templateDir); err != nil {
 			return err
 		}
 	}

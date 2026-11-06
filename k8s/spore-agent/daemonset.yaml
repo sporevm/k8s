@@ -52,6 +52,7 @@ spec:
             - --bundle-cache-root=/var/lib/sporevm/bundle-cache
             - --rootfs-cache-root=/var/lib/sporevm/rootfs-cache
             - --reset-runtime-on-start=true
+            - --cache-gc=true
             - --backend=kvm
           env:
             - name: POD_NAME

@@ -576,6 +576,10 @@ type fakeSporeClient struct {
 	packs          int
 }
 
+func (c *fakeSporeClient) Executable() (string, error) {
+	return os.Executable()
+}
+
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
 	return "spore 0.16.0 (ReleaseSafe)", nil
 }
@@ -730,6 +734,10 @@ func (c *fakeSporeClient) RemoveSavedSpore(_ context.Context, req agent.RemoveSa
 	c.removeSaveds = append(c.removeSaveds, req)
 	c.mu.Unlock()
 	return c.removeSavedErr
+}
+
+func (c *fakeSporeClient) CollectCache(context.Context) (agent.CacheGCResult, error) {
+	return agent.CacheGCResult{}, nil
 }
 
 func (c *fakeSporeClient) runCaptureCount() int {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const interactiveTestImage = "docker.io/library/node@sha256:6db9be2ebb4bafb687a078ef5ba1b1dd256e8004d246a31fd210b6b848ab6be2"
@@ -69,6 +70,47 @@ func TestRunnerRunTemplateKeyIncludesMemory(t *testing.T) {
 	}
 	if captures := client.runCaptureRequests(); len(captures) != 2 {
 		t.Fatalf("capture requests = %d, want 2", len(captures))
+	}
+}
+
+func TestRunnerRunTemplateKeyIncludesSporeBinary(t *testing.T) {
+	spore := writeFakeSporeBinary(t, "spore build a", time.Unix(1, 0))
+	client := &fakeSporeClient{hostInfo: validHostInfo(), version: "0.17.1", executable: spore}
+	runner := newInteractiveTestRunner(t, 1, client)
+	req := RunRequest{Image: interactiveTestImage, Memory: "512mb", Command: []string{"/bin/true"}}
+
+	first, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	second, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if second.Template.ID != first.Template.ID || !second.Template.CacheHit {
+		t.Fatalf("templates = %+v and %+v, want a hit for an unchanged binary", first.Template, second.Template)
+	}
+	if calls := client.versionCallCount(); calls != 1 {
+		t.Fatalf("spore version ran %d times for an unchanged binary, want 1", calls)
+	}
+
+	// Another build reporting the same version must not reuse the template,
+	// even when copied over the old one with `cp -p`, which keeps the inode,
+	// size, and mtime. Wait one clock tick so the rewrite moves ctime.
+	time.Sleep(20 * time.Millisecond)
+	writeFakeSporeBinary(t, "spore build b", time.Unix(1, 0), spore)
+	third, err := runner.Run(context.Background(), req, normalPressure())
+	if err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	if third.Template.ID == first.Template.ID || third.Template.CacheHit {
+		t.Fatalf("template after binary change = %+v, want a new template", third.Template)
+	}
+	if captures := client.runCaptureRequests(); len(captures) != 2 {
+		t.Fatalf("capture requests = %d, want 2", len(captures))
+	}
+	if calls := client.versionCallCount(); calls != 2 {
+		t.Fatalf("spore version ran %d times, want 2 after the binary changed", calls)
 	}
 }
 
@@ -334,6 +376,23 @@ func TestRunnerRemoveSandboxReconcilesUnknownName(t *testing.T) {
 	if runner.AvailableSlots() != 1 {
 		t.Fatalf("available slots = %d, want 1", runner.AvailableSlots())
 	}
+}
+
+// writeFakeSporeBinary writes content to path (a new temp file when path is
+// omitted) and sets its mtime, standing in for a spore build.
+func writeFakeSporeBinary(t *testing.T, content string, modified time.Time, path ...string) string {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "spore")
+	if len(path) > 0 {
+		target = path[0]
+	}
+	if err := os.WriteFile(target, []byte(content), 0o755); err != nil {
+		t.Fatalf("write fake spore: %v", err)
+	}
+	if err := os.Chtimes(target, modified, modified); err != nil {
+		t.Fatalf("set fake spore time: %v", err)
+	}
+	return target
 }
 
 func newInteractiveTestRunner(t *testing.T, slots int, client SporeClient) *Runner {

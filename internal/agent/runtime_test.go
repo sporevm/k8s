@@ -1563,6 +1563,8 @@ func TestLocalResultStoreRejectsUnsafeBucketSegment(t *testing.T) {
 type fakeSporeClient struct {
 	mu               sync.Mutex
 	version          string
+	versionCalls     int
+	executable       string
 	hostInfo         HostInfo
 	inspectFunc      func(context.Context, InspectBundleRequest) (InspectBundleResult, error)
 	runFunc          func(context.Context, RunCaptureRequest) ([]RunEvent, error)
@@ -1587,13 +1589,31 @@ type fakeSporeClient struct {
 	removeSaveds     []RemoveSavedSporeRequest
 	outDir           string
 	hostInfoCalls    int
+	cacheGCCalls     int
 }
 
 func (c *fakeSporeClient) Version(context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.versionCalls++
 	if c.version != "" {
 		return c.version, nil
 	}
 	return "0.16.0", nil
+}
+
+func (c *fakeSporeClient) versionCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.versionCalls
+}
+
+// Executable defaults to the test binary, a real file the runner can hash.
+func (c *fakeSporeClient) Executable() (string, error) {
+	if c.executable != "" {
+		return c.executable, nil
+	}
+	return os.Executable()
 }
 
 func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {
@@ -1718,6 +1738,19 @@ func (c *fakeSporeClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedS
 		return os.RemoveAll(req.SporeDir)
 	}
 	return c.removeSavedFunc(ctx, req)
+}
+
+func (c *fakeSporeClient) CollectCache(context.Context) (CacheGCResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cacheGCCalls++
+	return CacheGCResult{Schema: cacheGCV2Schema, SchemaVersion: 2}, nil
+}
+
+func (c *fakeSporeClient) cacheGCCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cacheGCCalls
 }
 
 func (c *fakeSporeClient) runCaptureRequests() []RunCaptureRequest {

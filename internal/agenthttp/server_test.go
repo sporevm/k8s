@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -122,6 +123,32 @@ func TestServerCachesCacheRootStatusBriefly(t *testing.T) {
 	}
 	if refreshed.RootFSCacheEntries != 1 || refreshed.RootFSCacheBytes != int64(len("cache")) {
 		t.Fatalf("refreshed status = %+v", refreshed)
+	}
+}
+
+func TestServerReadyzWaitsForStartup(t *testing.T) {
+	fake := fakeSporeClient{}
+	runner, err := agent.NewRunner(1, agent.WithSporeClient(fake), agent.WithWorkRoot(t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	started := false
+	handler, err := (&Server{Runner: runner, Client: fake, Backend: "kvm", Started: func() bool { return started }}).Handler()
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	readyz := func() int {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return recorder.Code
+	}
+
+	if code := readyz(); code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz during startup = %d, want 503", code)
+	}
+	started = true
+	if code := readyz(); code != http.StatusOK {
+		t.Fatalf("readyz after startup = %d, want 200", code)
 	}
 }
 
@@ -315,6 +342,10 @@ type fakeSporeClient struct {
 	resumeErr  error
 }
 
+func (c fakeSporeClient) Executable() (string, error) {
+	return os.Executable()
+}
+
 func (c fakeSporeClient) Version(context.Context) (string, error) {
 	return "0.16.0", nil
 }
@@ -454,6 +485,10 @@ func (c fakeSporeClient) RemoveVM(context.Context, agent.RemoveVMRequest) error 
 
 func (c fakeSporeClient) RemoveSavedSpore(_ context.Context, req agent.RemoveSavedSporeRequest) error {
 	return os.RemoveAll(req.SporeDir)
+}
+
+func (c fakeSporeClient) CollectCache(context.Context) (agent.CacheGCResult, error) {
+	return agent.CacheGCResult{}, nil
 }
 
 func testDigest(raw string) agent.DigestRef {

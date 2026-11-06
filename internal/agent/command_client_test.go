@@ -699,6 +699,70 @@ exit 2
 	}
 }
 
+func TestCommandClientCollectCache(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{
+			name:   "v0.17 result",
+			output: `{"schema":"spore.cache.gc.result.v1","schema_version":1,"cache_root":"/var/lib/sporevm/rootfs-cache","dry_run":false,"unparseable_ref_count":0,"legacy_step_record_count":0,"candidate_count":3,"candidate_bytes":4096,"deleted_count":3,"deleted_bytes":4096,"entries":[]}`,
+		},
+		{
+			name:   "v2 result",
+			output: `{"schema":"spore.cache.gc.result.v2","schema_version":2,"cache_root":"/var/lib/sporevm/rootfs-cache","dry_run":false,"candidate_count":3,"candidate_bytes":4096,"deleted_count":3,"deleted_bytes":4096,"entries":[]}`,
+		},
+		{
+			name:    "dry run",
+			output:  `{"schema":"spore.cache.gc.result.v2","schema_version":2,"cache_root":"/var/lib/sporevm/rootfs-cache","dry_run":true,"deleted_count":0,"deleted_bytes":0,"entries":[]}`,
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argsFile := filepath.Join(t.TempDir(), "args")
+			spore := fakeSpore(t, `
+printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
+printf '%s\n' "$SPORE_GC_OUTPUT"
+`, argsFile)
+
+			client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile, "SPORE_GC_OUTPUT="+tc.output)}
+			result, err := client.CollectCache(context.Background())
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidMachineOutput) {
+					t.Fatalf("CollectCache error = %v, want ErrInvalidMachineOutput", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CollectCache: %v", err)
+			}
+			if result.DeletedCount != 3 || result.DeletedBytes != 4096 {
+				t.Fatalf("result = %+v", result)
+			}
+			if args := strings.TrimSpace(readFile(t, argsFile)); args != "--json cache gc --force" {
+				t.Fatalf("args = %q", args)
+			}
+		})
+	}
+}
+
+func TestCommandClientExecutableResolvesLikeExec(t *testing.T) {
+	bin := t.TempDir()
+	spore := filepath.Join(bin, "spore")
+	if err := os.WriteFile(spore, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write spore: %v", err)
+	}
+	t.Setenv("PATH", bin)
+
+	if path, err := (CommandClient{}).Executable(); err != nil || path != spore {
+		t.Fatalf("Executable() = %q, %v; want %q from PATH", path, err, spore)
+	}
+	if path, err := (CommandClient{Path: "bin/spore", Dir: "/work"}).Executable(); err != nil || path != "/work/bin/spore" {
+		t.Fatalf("Executable() = %q, %v; want the relative path under Dir", path, err)
+	}
+}
+
 func TestCommandClientResumeRejectsExitMismatch(t *testing.T) {
 	spore := fakeSpore(t, `
 if [ "$1" = "attach" ]; then
