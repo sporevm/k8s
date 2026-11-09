@@ -124,6 +124,8 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	if req.Memory != "" {
 		args = append(args, "--memory", req.Memory)
 	}
+	// The caller's context owns the warm-up deadline, not the CLI's 30s default.
+	args = append(args, "--exec-timeout", "none")
 	args = append(args, "--image", req.Image, "--save-checkpoint", req.CaptureDir)
 	if req.CaptureSignal != "" {
 		args = append(args, "--save-on", req.CaptureSignal)
@@ -224,6 +226,7 @@ func (c CommandClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEv
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
+	args = append(args, "--exec-timeout", "none")
 	args = append(args, "--checkpoint", req.SporeDir)
 	if req.GenerationPath != "" {
 		args = append(args, "--generation", req.GenerationPath)
@@ -244,7 +247,7 @@ func (c CommandClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, e
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"--json", "vm", "exec", req.Name, "--"}
+	args := []string{"--json", "vm", "exec", req.Name, "--exec-timeout", "none", "--"}
 	args = append(args, req.Command...)
 
 	stdout, stderr, err := c.run(ctx, args...)

@@ -527,6 +527,50 @@ func TestRunnerReleasePreparedRunRetriesCheckpointStillInUse(t *testing.T) {
 	}
 }
 
+func TestRunnerReleasePreparedRunAfterIncompleteCapture(t *testing.T) {
+	for _, manifestExists := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manifestExists=%t", manifestExists), func(t *testing.T) {
+			source := testRun()
+			workRoot := t.TempDir()
+			prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+			parentDir := filepath.Join(prepareRoot, "parent.spore")
+			if err := os.MkdirAll(filepath.Join(parentDir, "chunks"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if manifestExists {
+				if err := os.WriteFile(filepath.Join(parentDir, "manifest.json"), []byte("corrupt"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client := &fakeSporeClient{removeSavedFunc: func(context.Context, RemoveSavedSporeRequest) error {
+				return &MachineError{Envelope: MachineErrorEnvelope{Error: MachineErrorBody{
+					Code: "object.invalid", Source: "InvalidSporeDir",
+				}}}
+			}}
+			runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runner.ReleasePreparedRun(context.Background(), source)
+			if manifestExists {
+				if err == nil {
+					t.Fatal("corrupt save was not retained for investigation")
+				}
+				if _, err := os.Stat(parentDir); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("release incomplete capture: %v", err)
+				}
+				if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("incomplete capture still exists: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestRunnerReleasePreparedRunKeepsFailedStateForRetry(t *testing.T) {
 	source := testRun()
 	workRoot := t.TempDir()

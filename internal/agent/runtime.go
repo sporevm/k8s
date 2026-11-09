@@ -819,6 +819,18 @@ func (r *Runner) removeSavedSpore(ctx context.Context, dir string) error {
 func (r *Runner) removePreparedSpore(ctx context.Context, path string) error {
 	for {
 		err := r.removeSavedSpore(ctx, path)
+		var machineErr *MachineError
+		if errors.As(err, &machineErr) && machineErr.Envelope.Error.Source == "InvalidSporeDir" {
+			// A failed capture can leave chunks before publishing its manifest.
+			// Only discard such incomplete, agent-owned output; retain corrupt saves.
+			if _, statErr := os.Lstat(filepath.Join(path, "manifest.json")); errors.Is(statErr, os.ErrNotExist) {
+				if err := os.RemoveAll(path); err != nil {
+					return err
+				}
+				r.cacheGCPending.Store(true)
+				return nil
+			}
+		}
 		if err == nil || !savedSporeInUse(err) {
 			return err
 		}

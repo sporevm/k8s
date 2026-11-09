@@ -96,6 +96,10 @@ Today's limits affect the delivery boundary:
   suite. Serialize build stages and cap dependency-fetch concurrency for the
   first proof; keep runtime services guest-local. This is a setup constraint,
   not evidence that the warm application or its test shards have passed.
+- The separate Buildkite workload trial reports a guest PID 1 cleanup panic
+  after timed-out Docker commands on both HVF and KVM. Its browser suite has
+  not passed. Ordinary-shell cancellation and Rails/PostgreSQL acceptance do
+  not validate Docker/cgroup cleanup; that runtime issue remains separate.
 
 These limits are grounded in the v0.18.0
 [fan-out](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/fanout.md),
@@ -108,9 +112,9 @@ contracts and `internal/fleet/coordinator.go`'s single-agent planner.
 1. Adapt the agent's capture, local fork, saved-process resume, new-command
    execution, named VM lifecycle and GC calls to the released CLI. Use global
    `--json`, preserve the stable `attach`/`exec` wire identifiers, and retain
-   exactly-one-completion and guest-exit validation. Retain runtime timeout
-   defaults in this spelling-only slice. Explicit execution-budget changes
-   require separate validation. Do not change the deployed runtime pin yet.
+   exactly-one-completion and guest-exit validation. Validate execution-budget
+   ownership separately from the spelling change. Do not change the deployed
+   runtime pin in the first slice.
 2. Replace checkpoint bundles with one immutable parent checkpoint and
    aggregate run-owned child generation metadata. Replace the old bundle
    machine schemas, `inspect-bundle`, `pack`, child-selecting pull and
@@ -192,6 +196,13 @@ alongside global shard identity; without that barrier a warm process can remain
 asleep instead of running its shard. Source runs may omit `children.command`
 to resume the captured process rather than replace it with a new command.
 
+Warm capture, new-command checkpoint execution and named exec disable the
+CLI's default 30-second execution limit: caller contexts and the configured
+per-child timeout own their execution budgets. Startup readiness remains
+bounded by SporeVM. A failed capture can leave chunks without a manifest;
+cleanup discards that incomplete agent-owned output and makes GC pending,
+but retains a corrupt save whose manifest exists for investigation.
+
 Local validation passes: Go tests with the race detector, vet, Python script
 tests, Helm lint, the public leak scan, example schema checks and whitespace
 checks. CI passes for runtime commit
@@ -229,11 +240,48 @@ do not include the initial admission pull; retain overall elapsed time when
 evaluating cold handoff and add explicit admission-phase transfer accounting
 before using child timings for distributed performance comparisons.
 
-The PR remains draft pending actual Kubernetes and private-S3 image/checkpoint
-acceptance with renewable credentials. The full Buildkite browser workload and
-cross-node execution are not proven. Distributed scheduling remains a separate
-PR as agreed; external services and named-fork networking retain the limits
-above. Published runtime image tags and chart defaults remain unchanged.
+Additional Kubernetes/private-S3 acceptance establishes:
+
+- Two isolated privileged, host-network pods on one real ARM64 KVM node use
+  separate `emptyDir` cache/runtime/work state, without touching the existing
+  deployment or node cache. The published v0.18 binary, AWS CLI and current
+  agent binaries are overlaid into existing base images for this probe; this
+  is not acceptance of a newly published runtime image or a Helm rollout.
+- A native Rails image is built and published privately. Pod B starts with an
+  empty image cache, warms/captures once, and passes three RSpec shards at
+  concurrency two, with terminal outputs verified independently from S3.
+  Warm/capture takes 89.411 seconds, local checkpoint publication 56.175 seconds
+  and already-prepared aggregate execution 0.651 seconds in this single sample.
+- The same immutable parent is pushed to private S3. Pod A, restarted with an
+  empty cache and runtime, pulls it, passes compatibility admission and executes
+  all three shards. Its aggregate report spans 56.482 seconds including
+  admission-time transfer, versus 1.294 seconds in the agent's shard handler.
+  Child timing percentiles are not a substitute for that overall elapsed time.
+- Database/disk isolation passes for three children. A child exiting seven
+  remains a terminal failure while its siblings succeed. Completed replay
+  produces zero attempts. After cancellation, two committed terminal objects
+  remain unchanged and the unfinished third child produces a successful result
+  on resubmission. Existing retry accounting counts skipped results as attempts
+  and logs append-only attempt-record collisions; do not treat that summary
+  count as a count of newly executed VMs. This pre-existing issue is deferred.
+- Three native forks also pass with the invoking process in a fresh network
+  namespace and AWS credential access disabled. Unauthenticated S3 access is
+  denied (anonymous object HEAD returns 403; native image pull cannot resolve
+  credentials). Node-role provider-chain integration passes; actual credential
+  expiry/rotation is not exercised during the short test window.
+- The cold warm-up initially fails at the CLI's 30-second execution limit and
+  leaves incomplete checkpoint chunks. After the deadline/cleanup fixes, the
+  agent removes that same incomplete output and the cold 89-second capture
+  succeeds. Identical 31-second interactive run and named-exec commands fail
+  before the fix and complete with their expected output afterward.
+
+These remain small-fixture, single-sample results, not large-suite speedup,
+cluster-DNS, production isolation or cross-node portability evidence. The full
+Buildkite browser workload remains unproven, including its Docker cleanup
+blocker. Distributed scheduling remains a separate PR as agreed; external
+services and named-fork networking retain the limits above. Published runtime
+image tags and chart defaults remain unchanged; merge and release still require
+approval.
 
 ## Problem
 

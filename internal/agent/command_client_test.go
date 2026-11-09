@@ -264,7 +264,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "--json run --backend kvm --memory 512mb --image example.com/sporevm/rails-rspec:sha-1111111 --save-checkpoint /work/parent.spore --save-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
+	want := "--json run --backend kvm --memory 512mb --exec-timeout none --image example.com/sporevm/rails-rspec:sha-1111111 --save-checkpoint /work/parent.spore --save-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -325,7 +325,7 @@ exit 2
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
-	want := "--json run --backend kvm --memory 512mb --image " + interactiveTestImage + " --save-checkpoint /work/template.spore -- /bin/true"
+	want := "--json run --backend kvm --memory 512mb --exec-timeout none --image " + interactiveTestImage + " --save-checkpoint /work/template.spore -- /bin/true"
 	if args := strings.TrimSpace(readFile(t, argsFile)); args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -490,7 +490,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json run --backend kvm --checkpoint /work/child-42.spore --generation /work/child-42.generation.json -- /bin/sh -c exit 7" {
+	if args != "--json run --backend kvm --exec-timeout none --checkpoint /work/child-42.spore --generation /work/child-42.generation.json -- /bin/sh -c exit 7" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -516,7 +516,7 @@ exit 2
 	if err != nil {
 		t.Fatalf("RunFrom: %v", err)
 	}
-	want := "--json run --backend kvm --checkpoint /work/template.spore -- /bin/sh -lc node -v"
+	want := "--json run --backend kvm --exec-timeout none --checkpoint /work/template.spore -- /bin/sh -lc node -v"
 	if args := strings.TrimSpace(readFile(t, argsFile)); args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -558,7 +558,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json vm exec sporevm-child-42 -- /bin/sh -c exit 7" {
+	if args != "--json vm exec sporevm-child-42 --exec-timeout none -- /bin/sh -c exit 7" {
 		t.Fatalf("args = %q", args)
 	}
 }
