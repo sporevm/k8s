@@ -40,7 +40,6 @@ agent:
     hostPath: /var/lib/sporevm
     mountPath: /var/lib/sporevm
     kernelDir: /var/lib/sporevm/kernels
-    bundleDir: /var/lib/sporevm/bundle-cache
     rootfsDir: /var/lib/sporevm/rootfs-cache
     resultDir: /var/lib/sporevm/results
     workDir: /var/lib/sporevm/work

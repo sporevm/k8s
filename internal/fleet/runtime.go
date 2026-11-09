@@ -21,14 +21,14 @@ var (
 	ErrPlatformMismatch = errors.New("platform mismatch")
 )
 
-// BundleInspector validates immutable bundle metadata before run admission.
-type BundleInspector interface {
-	InspectRunBundle(context.Context, BundleRun) (BundleInspection, error)
+// CheckpointInspector validates immutable bundle metadata before run admission.
+type CheckpointInspector interface {
+	InspectRunCheckpoint(context.Context, CheckpointRun) (CheckpointInspection, error)
 }
 
 // TerminalResultReader checks whether a child already has a committed result.
 type TerminalResultReader interface {
-	TerminalResult(context.Context, BundleRun, int) (AttemptResult, bool, error)
+	TerminalResult(context.Context, CheckpointRun, int) (AttemptResult, bool, error)
 }
 
 // ShardExecutor runs one shard lease on an agent.
@@ -44,7 +44,7 @@ type CoordinatorOptions struct {
 // Coordinator owns run admission and static single-cell shard execution.
 type Coordinator struct {
 	agents    []AgentStatus
-	inspector BundleInspector
+	inspector CheckpointInspector
 	terminal  TerminalResultReader
 	executors map[string]ShardExecutor
 	now       func() time.Time
@@ -53,7 +53,7 @@ type Coordinator struct {
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
 func NewCoordinator(
 	agents []AgentStatus,
-	inspector BundleInspector,
+	inspector CheckpointInspector,
 	terminal TerminalResultReader,
 	executors map[string]ShardExecutor,
 	opts CoordinatorOptions,
@@ -86,12 +86,12 @@ func NewCoordinator(
 }
 
 // Run admits, plans, and executes one bundle run on one of the coordinator's agents.
-func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, error) {
+func (c *Coordinator) Run(ctx context.Context, run CheckpointRun) (RuntimeReport, error) {
 	startedAt := c.now()
 	if err := run.Validate(); err != nil {
 		return RuntimeReport{}, err
 	}
-	inspection, err := c.inspector.InspectRunBundle(ctx, run)
+	inspection, err := c.inspector.InspectRunCheckpoint(ctx, run)
 	if err != nil {
 		return RuntimeReport{}, err
 	}
@@ -117,12 +117,9 @@ func (c *Coordinator) Run(ctx context.Context, run BundleRun) (RuntimeReport, er
 }
 
 // Validate checks inspected metadata against the submitted run.
-func (i BundleInspection) Validate(run BundleRun) error {
-	if i.BundleDigest != run.Bundle.Digest {
-		return fmt.Errorf("%w: inspected digest %q does not match run digest %q", ErrBundleMetadataMismatch, i.BundleDigest, run.Bundle.Digest)
-	}
-	if i.ChildCount < run.Children.End() {
-		return fmt.Errorf("%w: bundle child count %d does not cover run end child %d", ErrBundleMetadataMismatch, i.ChildCount, run.Children.End())
+func (i CheckpointInspection) Validate(run CheckpointRun) error {
+	if i.CheckpointDigest != run.Checkpoint.Digest {
+		return fmt.Errorf("%w: inspected digest %q does not match run digest %q", ErrBundleMetadataMismatch, i.CheckpointDigest, run.Checkpoint.Digest)
 	}
 	if i.HostClass.ID != "" && !i.HostClass.Equal(run.HostClass) {
 		return fmt.Errorf("%w: inspected host class %q does not match run host class %q", ErrBundleMetadataMismatch, i.HostClass.ID, run.HostClass.ID)
@@ -130,7 +127,7 @@ func (i BundleInspection) Validate(run BundleRun) error {
 	return nil
 }
 
-func (c *Coordinator) runLease(ctx context.Context, run BundleRun, lease ShardLease, state *runtimeState) error {
+func (c *Coordinator) runLease(ctx context.Context, run CheckpointRun, lease ShardLease, state *runtimeState) error {
 	executor, ok := c.executors[lease.AgentID]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrAgentExecutorMissing, lease.AgentID)
@@ -182,7 +179,7 @@ func hasPlatformMismatch(results []AttemptResult) bool {
 	return false
 }
 
-func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run BundleRun, lease ShardLease, state *runtimeState) (bool, error) {
+func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run CheckpointRun, lease ShardLease, state *runtimeState) (bool, error) {
 	pending := false
 	for childID := lease.ChildStart; childID < lease.ChildRange().End(); childID++ {
 		if state.terminalKnown(childID) {
@@ -202,7 +199,7 @@ func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run BundleRun
 }
 
 type runtimeState struct {
-	run                 BundleRun
+	run                 CheckpointRun
 	plan                Plan
 	startedAt           time.Time
 	terminal            map[int]AttemptResult
@@ -212,7 +209,7 @@ type runtimeState struct {
 	leaseErrors         int
 }
 
-func newRuntimeState(run BundleRun, plan Plan, startedAt time.Time) *runtimeState {
+func newRuntimeState(run CheckpointRun, plan Plan, startedAt time.Time) *runtimeState {
 	return &runtimeState{
 		run:       run,
 		plan:      plan,

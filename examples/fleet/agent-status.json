@@ -15,9 +15,7 @@
     "available": 96
   },
   "cache": {
-    "bundleCacheBytes": 2147483648,
     "rootfsCacheBytes": 8589934592,
-    "bundleCacheEntries": 4,
     "rootfsCacheEntries": 12
   },
   "pressure": {

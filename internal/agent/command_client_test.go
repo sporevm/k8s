@@ -16,23 +16,21 @@ func TestCommandClientHostInfo(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "--json" ] && [ "$2" = "host-info" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "system" ] && [ "$3" = "info" ]; then
   cat <<'JSON'
 {
-  "schema": "spore.host-info.v2",
-  "schema_version": 2,
+  "schema": "spore.host-info.v3",
+  "schema_version": 3,
   "host_class": "linux-arm64-kvm",
-  "platform": {
+  "architecture": "arm64",
+  "platform": {"arm64": {
     "os": "linux",
-    "arch": "arm64",
     "cpu_profile": "sporevm-aarch64-v0",
     "device_model_version": 4,
     "ram_base": 1073741824,
-    "gic_dist_base": 134217728,
-    "gic_redist_base": 134348800,
-    "counter_frequency_source": "cntfrq_el0",
-    "counter_frequency_hz": 24000000
-  },
+    "interrupt_controller": {"kind":"gicv3","distributor_base":134217728,"redistributor_base":134348800},
+    "counter": {"source":"cntfrq_el0","frequency_hz":24000000}
+  }},
   "backends": [
     {"name": "kvm", "supported": true, "available": true, "reason": "available"},
     {"name": "hvf", "supported": false, "available": false, "reason": "unsupported_os_or_arch"}
@@ -69,7 +67,7 @@ exit 2
 	}
 
 	args := readFile(t, argsFile)
-	if strings.TrimSpace(args) != "--json host-info" {
+	if strings.TrimSpace(args) != "--json system info" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -145,30 +143,16 @@ func TestCommandClientPull(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "--json" ] && [ "$2" = "pull" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "pull" ]; then
   cat <<'JSON'
 {
-  "schema": "spore.pull.result.v1",
-  "schema_version": 1,
-  "source": "s3://example-sporevm-artifacts/runs/ruby.bundle@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "bundle_dir": "/cache/bundles/ruby",
+  "schema": "spore.pull.result.v2",
+  "schema_version": 2,
+  "ref": "s3://example-sporevm-artifacts/runs/blake3:1111111111111111111111111111111111111111111111111111111111111111",
   "out_dir": "/work/child-42.spore",
-  "bundle_digest": {"algorithm": "sha256", "hex": "1111111111111111111111111111111111111111111111111111111111111111"},
-  "materialization": {
-    "chunk_count": 10,
-    "materialized_chunk_count": 10,
-    "payload_bytes": 40960,
-    "linked_chunk_count": 8,
-    "copied_chunk_count": 2,
-    "cache": {"hit_count": 8, "miss_count": 2, "bytes_fetched": 8192}
-  },
-  "rootfs": {
-    "artifact_count": 1,
-    "payload_bytes": 1048576,
-    "cache": {"hit_count": 0, "miss_count": 1, "bytes_fetched": 1048576}
-  },
-  "remote": {"cache_hit": false, "origin_bytes_read": 8192, "peer_bytes_read": 0},
-  "children": {"count": 1000, "selected_child": "42"}
+  "spore_digest": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+  "ram": {"objects": 10, "objects_fetched": 2, "bytes_fetched": 8192},
+  "disk": {"objects": 3, "objects_fetched": 1, "bytes_fetched": 1048576}
 }
 JSON
   exit 0
@@ -179,48 +163,44 @@ exit 2
 
 	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
 	result, err := client.Pull(context.Background(), PullRequest{
-		Source:                  "s3://example-sporevm-artifacts/runs/ruby.bundle@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-		ChildID:                 "42",
-		OutDir:                  "/work/child-42.spore",
-		Region:                  "us-east-1",
-		AllowMetadataOnlyRootFS: true,
+		Source: "s3://example-sporevm-artifacts/runs/blake3:1111111111111111111111111111111111111111111111111111111111111111",
+		OutDir: "/work/child-42.spore",
 	})
 	if err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
-	if result.BundleDigest.String() != "sha256:1111111111111111111111111111111111111111111111111111111111111111" {
-		t.Fatalf("bundle digest = %q", result.BundleDigest.String())
+	if result.SporeDigest != "blake3:1111111111111111111111111111111111111111111111111111111111111111" {
+		t.Fatalf("checkpoint digest = %q", result.SporeDigest)
 	}
-	if result.Children.SelectedChild == nil || *result.Children.SelectedChild != "42" {
-		t.Fatalf("selected child = %v", result.Children.SelectedChild)
+	if result.RAM.ObjectsFetched != 2 || result.Disk.BytesFetched != 1048576 {
+		t.Fatalf("transfer = %+v", result)
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "--json pull s3://example-sporevm-artifacts/runs/ruby.bundle@sha256:1111111111111111111111111111111111111111111111111111111111111111 --child 42 --allow-metadata-only-rootfs --out /work/child-42.spore --region us-east-1"
+	want := "--json checkpoint pull s3://example-sporevm-artifacts/runs/blake3:1111111111111111111111111111111111111111111111111111111111111111 --output /work/child-42.spore"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
 }
 
-func TestCommandClientInspectBundle(t *testing.T) {
+func TestCommandClientInspectCheckpoint(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "manifest.json"), []byte(`{"generation":{"generation":17}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "--json" ] && [ "$2" = "inspect-bundle" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "inspect" ]; then
   cat <<'JSON'
 {
-  "schema": "spore.bundle.inspect.v1",
+  "schema": "spore.inspect.result.v1",
   "schema_version": 1,
-  "source": "file:///bundles/ruby",
-  "bundle_dir": "/bundles/ruby",
-  "bundle_digest": {"algorithm": "sha256", "hex": "1111111111111111111111111111111111111111111111111111111111111111"},
-  "parent_manifest": "manifests/parent.json",
-  "chunkpack_index": "chunkpack.index.json",
-  "chunkpack": {"chunk_count": 10, "pack_count": 1, "payload_bytes": 40960},
-  "child_count": 1000,
-  "children": [],
-  "selection": {"kind": "range", "selected_count": 10, "children": []},
-  "rootfs": {"artifact_count": 1, "exact_bytes_count": 1, "metadata_only_count": 0, "payload_bytes": 1048576}
+  "version": 8,
+  "vm_state_present": true,
+  "can_run_from": true,
+  "can_attach": false,
+  "platform": {"arch": "aarch64", "cpu_profile": "graviton1", "counter_frequency_hz": 24000000}
 }
 JSON
   exit 0
@@ -230,19 +210,18 @@ exit 2
 `, argsFile)
 
 	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
-	result, err := client.InspectBundle(context.Background(), InspectBundleRequest{
-		Source:     "file:///bundles/ruby",
-		ChildRange: &ChildRangeSelection{Start: 10, End: 20},
+	result, err := client.InspectCheckpoint(context.Background(), InspectCheckpointRequest{
+		Source: parent,
 	})
 	if err != nil {
 		t.Fatalf("InspectBundle: %v", err)
 	}
-	if result.Selection.SelectedCount != 10 {
-		t.Fatalf("selected count = %d", result.Selection.SelectedCount)
+	if result.CanAttach || result.Platform.CounterFrequencyHz != 24000000 || result.Generation != 17 {
+		t.Fatalf("checkpoint = %+v", result)
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json inspect-bundle file:///bundles/ruby --child-range 10..20" {
+	if args != "--json checkpoint inspect "+parent {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -251,7 +230,7 @@ func TestCommandClientRunCaptureSignalsOnReadyMarker(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "run" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "run" ]; then
   trap 'printf "%s\n" "{\"schema\":\"spore.automation.event.v1\",\"schema_version\":1,\"event\":\"completion\",\"outcome\":\"completed\",\"command\":\"run\",\"backend\":\"kvm\",\"exit_code\":0,\"vcpus\":1,\"memory_bytes\":536870912,\"max_memory_bytes\":536870912,\"captured\":true,\"capture_path\":\"/work/parent.spore\",\"timings\":{\"start_ms\":1,\"vsock_connect_ms\":2,\"exec_response_ms\":3,\"probe_duration_ms\":4}}"; exit 0' USR1
   cat <<'JSONL'
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
@@ -285,7 +264,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "run --events=jsonl --backend kvm --memory 512mb --image example.com/sporevm/rails-rspec:sha-1111111 --save /work/parent.spore --save-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
+	want := "--json run --backend kvm --memory 512mb --exec-timeout none --image example.com/sporevm/rails-rspec:sha-1111111 --save-checkpoint /work/parent.spore --save-on USR1 -- /bin/bash /usr/local/bin/sporevm-rails-coordinator"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -327,7 +306,7 @@ func TestCommandClientRunCaptureOnGuestExit(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "run" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "run" ]; then
   printf '%s\n' '{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"run","backend":"kvm","exit_code":0,"captured":true,"capture_path":"/work/template.spore"}'
   exit 0
 fi
@@ -346,7 +325,7 @@ exit 2
 	if err != nil {
 		t.Fatalf("RunCapture: %v", err)
 	}
-	want := "run --events=jsonl --backend kvm --memory 512mb --image " + interactiveTestImage + " --save /work/template.spore -- /bin/true"
+	want := "--json run --backend kvm --memory 512mb --exec-timeout none --image " + interactiveTestImage + " --save-checkpoint /work/template.spore -- /bin/true"
 	if args := strings.TrimSpace(readFile(t, argsFile)); args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -356,8 +335,9 @@ func TestCommandClientForkAndPack(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" >> "$SPORE_ARGS_FILE"
-case "$1" in
-  fork|pack) exit 0 ;;
+case "$*" in
+  '--json checkpoint fork '*) exit 0 ;;
+  '--json checkpoint push '*) printf '%s\n' '{"schema":"spore.push.result.v2","schema_version":2,"digest_ref":"file:///work/store/blake3:1111111111111111111111111111111111111111111111111111111111111111","spore_digest":"blake3:1111111111111111111111111111111111111111111111111111111111111111"}'; exit 0 ;;
 esac
 echo unexpected "$*" >&2
 exit 2
@@ -371,16 +351,15 @@ exit 2
 	}); err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
-	if err := client.Pack(context.Background(), PackRequest{
-		ParentDir:   "/work/parent.spore",
-		ChildrenDir: "/work/children",
-		OutDir:      "/work/bundle",
+	if _, err := client.Push(context.Background(), PushRequest{
+		ParentDir: "/work/parent.spore",
+		To:        "file:///work/store/parent",
 	}); err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "fork /work/parent.spore --count 1000 --out /work/children\npack /work/parent.spore --children /work/children --out /work/bundle"
+	want := "--json checkpoint fork /work/parent.spore --count 1000 --output /work/children\n--json checkpoint push /work/parent.spore --to file:///work/store/parent"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -390,7 +369,7 @@ func TestCommandClientResumeTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "attach" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "resume" ]; then
   cat <<'JSONL'
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"start","command":"attach","requested_backend":"kvm"}
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"ready","command":"attach","backend":"kvm"}
@@ -420,7 +399,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "attach --events=jsonl --backend kvm --generation /work/child-42.generation.json /work/child-42.spore" {
+	if args != "--json checkpoint resume --backend kvm --generation /work/child-42.generation.json /work/child-42.spore" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -429,7 +408,7 @@ func TestCommandClientRestoreNamedWaitsForReadyLifecycle(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "--json" ] && [ "$2" = "restore" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "vm" ] && [ "$3" = "restore" ]; then
   printf '%s\n' '{"schema":"spore.lifecycle.v1","schema_version":1,"action":"restored","name":"sporevm-child-42","state":"ready","timing":{"prepare_ms":3,"spawn_monitor_ms":4,"wait_exec_ready_ms":17,"total_ms":24}}'
   exit 0
 fi
@@ -452,14 +431,14 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json restore /work/child-42.spore --name sporevm-child-42 --backend kvm --generation /work/child-42.generation.json" {
+	if args != "--json vm restore sporevm-child-42 --checkpoint /work/child-42.spore --backend kvm --generation /work/child-42.generation.json" {
 		t.Fatalf("args = %q", args)
 	}
 }
 
 func TestCommandClientRestoreNamedRejectsNonReadyLifecycle(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "--json" ] && [ "$2" = "restore" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "vm" ] && [ "$3" = "restore" ]; then
   printf '%s\n' '{"schema":"spore.lifecycle.v1","schema_version":1,"action":"restored","name":"sporevm-child-42","state":"starting","timing":{"prepare_ms":3,"spawn_monitor_ms":4,"wait_exec_ready_ms":0,"total_ms":7}}'
   exit 0
 fi
@@ -480,7 +459,7 @@ func TestCommandClientRunFromTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "run" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "run" ]; then
   cat <<'JSONL'
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"start","command":"run","requested_backend":"kvm"}
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"ready","command":"run","backend":"kvm"}
@@ -511,7 +490,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "run --events=jsonl --backend kvm --from /work/child-42.spore --generation /work/child-42.generation.json -- /bin/sh -c exit 7" {
+	if args != "--json run --backend kvm --exec-timeout none --checkpoint /work/child-42.spore --generation /work/child-42.generation.json -- /bin/sh -c exit 7" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -520,7 +499,7 @@ func TestCommandClientRunFromWithoutGeneration(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "run" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "run" ]; then
   printf '%s\n' '{"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"run","backend":"kvm","exit_code":0}'
   exit 0
 fi
@@ -537,7 +516,7 @@ exit 2
 	if err != nil {
 		t.Fatalf("RunFrom: %v", err)
 	}
-	want := "run --events=jsonl --backend kvm --from /work/template.spore -- /bin/sh -lc node -v"
+	want := "--json run --backend kvm --exec-timeout none --checkpoint /work/template.spore -- /bin/sh -lc node -v"
 	if args := strings.TrimSpace(readFile(t, argsFile)); args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
@@ -547,7 +526,7 @@ func TestCommandClientExecTreatsGuestExitAsResult(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "exec" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "vm" ] && [ "$3" = "exec" ]; then
   cat <<'JSONL'
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"stdout","command":"exec","backend":"kvm","offset":0,"byte_count":6,"data_base64":"aGVsbG8K"}
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"stderr","command":"exec","backend":"kvm","offset":0,"byte_count":5,"data_base64":"d2Fybgo="}
@@ -579,14 +558,14 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "exec --events=jsonl sporevm-child-42 -- /bin/sh -c exit 7" {
+	if args != "--json vm exec sporevm-child-42 --exec-timeout none -- /bin/sh -c exit 7" {
 		t.Fatalf("args = %q", args)
 	}
 }
 
 func TestCommandClientExecReturnsSporeCommandError(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "exec" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "vm" ] && [ "$3" = "exec" ]; then
   echo "spore exec: VM is not ready: $2" >&2
   exit 2
 fi
@@ -614,7 +593,7 @@ func TestCommandClientRemoveVM(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "--json" ] && [ "$2" = "rm" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "vm" ] && [ "$3" = "rm" ]; then
   exit 0
 fi
 echo unexpected "$*" >&2
@@ -627,14 +606,14 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json rm sporevm-child-42" {
+	if args != "--json vm rm sporevm-child-42" {
 		t.Fatalf("args = %q", args)
 	}
 }
 
 func TestCommandClientRemoveVMIgnoresMissingVM(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "--json" ] && [ "$2" = "rm" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "vm" ] && [ "$3" = "rm" ]; then
   printf '%s\n' '{"schema":"spore.error.v1","schema_version":1,"error":{"code":"object.not_found","message":"VM not found","retry":"after_fix","retryable":false,"scope":"object","exit_code":22,"source":"rm"}}' >&2
   exit 1
 fi
@@ -654,8 +633,9 @@ func TestCommandClientRemoveSavedSpore(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:   "v0.17 result",
-			output: `{"schema":"spore.saved.remove.result.v1","schema_version":1,"resource_type":"checkpoint","action":"removed_spore","spore_dir":"/work/template.spore","ownership":"machine-local-pinned","pin_id":"pin-1","pin_removed":true}`,
+			name:    "v0.17 result",
+			output:  `{"schema":"spore.saved.remove.result.v1","schema_version":1,"resource_type":"checkpoint","action":"removed_spore","spore_dir":"/work/template.spore","ownership":"machine-local-pinned","pin_id":"pin-1","pin_removed":true}`,
+			wantErr: true,
 		},
 		{
 			name:   "result without pin fields",
@@ -671,7 +651,7 @@ func TestCommandClientRemoveSavedSpore(t *testing.T) {
 			argsFile := filepath.Join(t.TempDir(), "args")
 			spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
-if [ "$1" = "--json" ] && [ "$2" = "rm" ] && [ "$3" = "--spore" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "rm" ]; then
   printf '%s\n' "$SPORE_RM_OUTPUT"
   exit 0
 fi
@@ -692,7 +672,7 @@ exit 2
 			}
 
 			args := strings.TrimSpace(readFile(t, argsFile))
-			if args != "--json rm --spore /work/template.spore" {
+			if args != "--json checkpoint rm /work/template.spore" {
 				t.Fatalf("args = %q", args)
 			}
 		})
@@ -706,8 +686,9 @@ func TestCommandClientCollectCache(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:   "v0.17 result",
-			output: `{"schema":"spore.cache.gc.result.v1","schema_version":1,"cache_root":"/var/lib/sporevm/rootfs-cache","dry_run":false,"unparseable_ref_count":0,"legacy_step_record_count":0,"candidate_count":3,"candidate_bytes":4096,"deleted_count":3,"deleted_bytes":4096,"entries":[]}`,
+			name:    "v0.17 result",
+			output:  `{"schema":"spore.cache.gc.result.v1","schema_version":1,"cache_root":"/var/lib/sporevm/rootfs-cache","dry_run":false,"unparseable_ref_count":0,"legacy_step_record_count":0,"candidate_count":3,"candidate_bytes":4096,"deleted_count":3,"deleted_bytes":4096,"entries":[]}`,
+			wantErr: true,
 		},
 		{
 			name:   "v2 result",
@@ -740,7 +721,7 @@ printf '%s\n' "$SPORE_GC_OUTPUT"
 			if result.DeletedCount != 3 || result.DeletedBytes != 4096 {
 				t.Fatalf("result = %+v", result)
 			}
-			if args := strings.TrimSpace(readFile(t, argsFile)); args != "--json cache gc --force" {
+			if args := strings.TrimSpace(readFile(t, argsFile)); args != "--json system gc --force" {
 				t.Fatalf("args = %q", args)
 			}
 		})
@@ -765,7 +746,7 @@ func TestCommandClientExecutableResolvesLikeExec(t *testing.T) {
 
 func TestCommandClientResumeRejectsExitMismatch(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "attach" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "resume" ]; then
   cat <<'JSONL'
 {"schema":"spore.automation.event.v1","schema_version":1,"event":"completion","outcome":"completed","command":"attach","backend":"kvm","exit_code":7,"vcpus":1,"memory_bytes":536870912,"max_memory_bytes":536870912,"captured":false,"capture_path":null,"timings":{"start_ms":1,"vsock_connect_ms":2,"exec_response_ms":3,"probe_duration_ms":4}}
 JSONL
@@ -832,7 +813,7 @@ func TestTerminalEventRejectsInterruptedAndTrailingStreams(t *testing.T) {
 
 func TestCommandClientPreservesContextDeadline(t *testing.T) {
 	spore := fakeSpore(t, `
-if [ "$1" = "attach" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "resume" ]; then
   sleep 30
 fi
 exit 2
@@ -887,18 +868,8 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	if _, err := client.Pull(context.Background(), PullRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Pull error = %v, want ErrInvalidSporeRequest", err)
 	}
-	if _, err := client.InspectBundle(context.Background(), InspectBundleRequest{
-		Source:     "file:///bundle",
-		ChildID:    "1",
-		ChildRange: &ChildRangeSelection{Start: 1, End: 2},
-	}); !errors.Is(err, ErrInvalidSporeRequest) {
+	if _, err := client.InspectCheckpoint(context.Background(), InspectCheckpointRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("InspectBundle error = %v, want ErrInvalidSporeRequest", err)
-	}
-	if _, err := client.InspectBundle(context.Background(), InspectBundleRequest{
-		Source:     "file:///bundle",
-		ChildRange: &ChildRangeSelection{Start: -1, End: 2},
-	}); !errors.Is(err, ErrInvalidSporeRequest) {
-		t.Fatalf("InspectBundle negative range error = %v, want ErrInvalidSporeRequest", err)
 	}
 	if _, err := client.Resume(context.Background(), ResumeRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Resume error = %v, want ErrInvalidSporeRequest", err)
@@ -924,7 +895,7 @@ func TestCommandClientRejectsInvalidRequestsBeforeExec(t *testing.T) {
 	if err := client.Fork(context.Background(), ForkRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Fork error = %v, want ErrInvalidSporeRequest", err)
 	}
-	if err := client.Pack(context.Background(), PackRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
+	if _, err := client.Push(context.Background(), PushRequest{}); !errors.Is(err, ErrInvalidSporeRequest) {
 		t.Fatalf("Pack error = %v, want ErrInvalidSporeRequest", err)
 	}
 }

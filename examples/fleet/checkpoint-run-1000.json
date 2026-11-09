@@ -1,8 +1,8 @@
 {
   "runID": "ruby-counter-20260620",
-  "bundle": {
-    "uri": "s3://example-sporevm-artifacts/runs/ruby-counter.bundle",
-    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  "checkpoint": {
+    "uri": "s3://example-sporevm-artifacts/warm-tests/blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "digest": "blake3:1111111111111111111111111111111111111111111111111111111111111111"
   },
   "children": {
     "start": 0,

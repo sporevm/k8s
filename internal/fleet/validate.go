@@ -14,21 +14,21 @@ import (
 
 var (
 	idPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,127}$`)
-	digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	digestPattern = regexp.MustCompile(`^blake3:[a-f0-9]{64}$`)
 	memoryPattern = regexp.MustCompile(`^([0-9]+)(b|kb|kib|mb|mib|gb|gib)$`)
 
 	// ErrInvalidContract identifies invalid fleet contract documents.
 	ErrInvalidContract = errors.New("invalid fleet contract")
 )
 
-// DecodeBundleRun decodes a bundle run document and rejects unknown fields.
-func DecodeBundleRun(r io.Reader) (BundleRun, error) {
-	var run BundleRun
+// DecodeCheckpointRun decodes a bundle run document and rejects unknown fields.
+func DecodeCheckpointRun(r io.Reader) (CheckpointRun, error) {
+	var run CheckpointRun
 	if err := decodeOne(r, "bundle run", &run); err != nil {
-		return BundleRun{}, err
+		return CheckpointRun{}, err
 	}
 	if err := run.Validate(); err != nil {
-		return BundleRun{}, err
+		return CheckpointRun{}, err
 	}
 	return run, nil
 }
@@ -85,8 +85,10 @@ func (r Run) Validate() error {
 	if r.Children.ChildRange().End() > r.Fork.Count {
 		return contractError("children range must fit fork.count")
 	}
-	if err := (CommandSpec{Command: r.Children.Command}).Validate("children"); err != nil {
-		return err
+	if len(r.Children.Command) > 0 {
+		if err := (CommandSpec{Command: r.Children.Command}).Validate("children"); err != nil {
+			return err
+		}
 	}
 	if r.Execution.MaxInFlightPerAgent < 1 {
 		return contractError("execution.maxInFlightPerAgent must be >= 1")
@@ -167,25 +169,25 @@ func validMemoryValue(value string) bool {
 }
 
 // Compile turns a prepared source run into the existing immutable bundle run.
-func (r Run) Compile(prepared PreparedBundle) (BundleRun, error) {
+func (r Run) Compile(prepared PreparedCheckpoint) (CheckpointRun, error) {
 	if err := r.Validate(); err != nil {
-		return BundleRun{}, err
+		return CheckpointRun{}, err
 	}
-	if prepared.Bundle.URI == "" {
-		return BundleRun{}, contractError("prepared.bundle.uri must not be empty")
+	if prepared.Checkpoint.URI == "" {
+		return CheckpointRun{}, contractError("prepared.bundle.uri must not be empty")
 	}
-	if err := validateDigest(prepared.Bundle.Digest, "prepared.bundle.digest"); err != nil {
-		return BundleRun{}, err
+	if err := validateDigest(prepared.Checkpoint.Digest, "prepared.bundle.digest"); err != nil {
+		return CheckpointRun{}, err
 	}
 	if prepared.ChildCount < r.Children.ChildRange().End() {
-		return BundleRun{}, contractError("prepared.childCount must cover children range")
+		return CheckpointRun{}, contractError("prepared.childCount must cover children range")
 	}
 	if err := prepared.HostClass.Validate("prepared.hostClass"); err != nil {
-		return BundleRun{}, err
+		return CheckpointRun{}, err
 	}
-	run := BundleRun{
+	run := CheckpointRun{
 		RunID:        r.RunID,
-		Bundle:       prepared.Bundle,
+		Checkpoint:   prepared.Checkpoint,
 		Children:     r.Children.ChildRange(),
 		ChildCommand: append([]string(nil), r.Children.Command...),
 		HostClass:    prepared.HostClass,
@@ -195,20 +197,20 @@ func (r Run) Compile(prepared PreparedBundle) (BundleRun, error) {
 		ResultStore:  r.ResultStore,
 	}
 	if err := run.Validate(); err != nil {
-		return BundleRun{}, err
+		return CheckpointRun{}, err
 	}
 	return run, nil
 }
 
 // Validate checks the run-level contract invariants needed for admission.
-func (r BundleRun) Validate() error {
+func (r CheckpointRun) Validate() error {
 	if err := validateID(r.RunID, "runID"); err != nil {
 		return err
 	}
-	if r.Bundle.URI == "" {
-		return contractError("bundle.uri must not be empty")
+	if r.Checkpoint.URI == "" {
+		return contractError("checkpoint.uri must not be empty")
 	}
-	if err := validateDigest(r.Bundle.Digest, "bundle.digest"); err != nil {
+	if err := validateDigest(r.Checkpoint.Digest, "checkpoint.digest"); err != nil {
 		return err
 	}
 	if err := r.Children.Validate("children"); err != nil {
@@ -297,8 +299,7 @@ func (s AgentStatus) Validate() error {
 	if s.ExecutionSlots.Available > s.ExecutionSlots.Total {
 		return contractError("executionSlots.available cannot exceed total")
 	}
-	if s.Cache.BundleCacheBytes < 0 || s.Cache.RootFSCacheBytes < 0 ||
-		s.Cache.BundleCacheEntries < 0 || s.Cache.RootFSCacheEntries < 0 {
+	if s.Cache.RootFSCacheBytes < 0 || s.Cache.RootFSCacheEntries < 0 {
 		return contractError("cache values must be >= 0")
 	}
 	if err := s.Pressure.Validate("pressure"); err != nil {
@@ -322,14 +323,14 @@ func (p Pressure) Validate(path string) error {
 }
 
 // Validate checks a shard lease against a run.
-func (l ShardLease) Validate(run BundleRun) error {
+func (l ShardLease) Validate(run CheckpointRun) error {
 	if err := run.Validate(); err != nil {
 		return err
 	}
 	if l.RunID != run.RunID {
 		return contractError("shardLease.runID does not match run.runID")
 	}
-	if l.BundleDigest != run.Bundle.Digest {
+	if l.CheckpointDigest != run.Checkpoint.Digest {
 		return contractError("shardLease.bundleDigest does not match run bundle digest")
 	}
 	if err := validateID(l.ShardID, "shardLease.shardID"); err != nil {
@@ -362,14 +363,14 @@ func FormatAttemptID(runID string, childID int, attempt int) string {
 }
 
 // Validate checks an attempt result against the admitted run contract.
-func (r AttemptResult) Validate(run BundleRun) error {
+func (r AttemptResult) Validate(run CheckpointRun) error {
 	if err := run.Validate(); err != nil {
 		return err
 	}
 	if r.RunID != run.RunID {
 		return contractError("attemptResult.runID does not match run.runID")
 	}
-	if r.BundleDigest != run.Bundle.Digest {
+	if r.CheckpointDigest != run.Checkpoint.Digest {
 		return contractError("attemptResult.bundleDigest does not match run bundle digest")
 	}
 	if r.ChildID < run.Children.Start || r.ChildID >= run.Children.End() {
@@ -517,7 +518,7 @@ func validateID(value, path string) error {
 
 func validateDigest(value, path string) error {
 	if !digestPattern.MatchString(value) {
-		return contractError("%s must be a sha256 digest", path)
+		return contractError("%s must be a blake3 digest", path)
 	}
 	return nil
 }

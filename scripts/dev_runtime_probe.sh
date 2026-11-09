@@ -124,10 +124,10 @@ spec:
         privileged: true
         allowPrivilegeEscalation: true
       env:
+        - name: SPOREVM_RUNTIME_DIR
+          value: ${work_root}/runtime
         - name: SPOREVM_KERNEL_CACHE_DIR
           value: ${spore_root}/kernels
-        - name: SPOREVM_BUNDLE_CACHE_DIR
-          value: ${spore_root}/bundle-cache
         - name: SPOREVM_ROOTFS_CACHE_DIR
           value: ${spore_root}/rootfs-cache
       volumeMounts:
@@ -141,9 +141,7 @@ spec:
         path: /dev/kvm
         type: CharDevice
     - name: sporevm-var
-      hostPath:
-        path: ${spore_root}
-        type: DirectoryOrCreate
+      emptyDir: {}
 YAML
 
 kube -n "${namespace}" wait --for=condition=Ready "pod/${pod_name}" --timeout=5m
@@ -176,7 +174,6 @@ mkdir -p '${work_root}' '${agent_result_root}' '${api_result_root}'
   --spore-path='${spore_path}' \
   --result-store-root='${agent_result_root}' \
   --work-root='${work_root}' \
-  --bundle-cache-root='${spore_root}/bundle-cache' \
   --rootfs-cache-root='${spore_root}/rootfs-cache' \
   ${region_arg[*]} \
   --backend=kvm \

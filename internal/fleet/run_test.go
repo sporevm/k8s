@@ -29,10 +29,10 @@ func TestDecodeRunRejectsUnknownFields(t *testing.T) {
 
 func TestRunCompilesToBundleRun(t *testing.T) {
 	source := loadRunExample(t)
-	prepared := PreparedBundle{
-		Bundle: Bundle{
+	prepared := PreparedCheckpoint{
+		Checkpoint: Checkpoint{
 			URI:    "s3://example-sporevm-artifacts/runs/rails-rspec-20260624.bundle",
-			Digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+			Digest: "blake3:2222222222222222222222222222222222222222222222222222222222222222",
 		},
 		ChildCount: 1000,
 		HostClass:  loadExampleRun(t).HostClass,
@@ -46,8 +46,8 @@ func TestRunCompilesToBundleRun(t *testing.T) {
 	if run.RunID != source.RunID {
 		t.Fatalf("runID = %q, want %q", run.RunID, source.RunID)
 	}
-	if run.Bundle != prepared.Bundle {
-		t.Fatalf("bundle = %#v, want %#v", run.Bundle, prepared.Bundle)
+	if run.Checkpoint != prepared.Checkpoint {
+		t.Fatalf("bundle = %#v, want %#v", run.Checkpoint, prepared.Checkpoint)
 	}
 	if run.Children != (ChildRange{Start: 0, Count: 1000}) {
 		t.Fatalf("children = %#v, want 0/1000", run.Children)
@@ -179,10 +179,10 @@ func TestRunChildrenMustFitForkCount(t *testing.T) {
 
 func TestRunCompileRequiresPreparedBundleCoverage(t *testing.T) {
 	run := loadRunExample(t)
-	_, err := run.Compile(PreparedBundle{
-		Bundle: Bundle{
+	_, err := run.Compile(PreparedCheckpoint{
+		Checkpoint: Checkpoint{
 			URI:    "s3://example-sporevm-artifacts/runs/rails-rspec-20260624.bundle",
-			Digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+			Digest: "blake3:2222222222222222222222222222222222222222222222222222222222222222",
 		},
 		ChildCount: 999,
 		HostClass:  loadExampleRun(t).HostClass,

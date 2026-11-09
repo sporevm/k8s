@@ -47,20 +47,20 @@ func TestS3ResultStorePreservesCreateOnlySemantics(t *testing.T) {
 	}
 }
 
-func successfulAttemptResult(run fleet.BundleRun, childID int) fleet.AttemptResult {
+func successfulAttemptResult(run fleet.CheckpointRun, childID int) fleet.AttemptResult {
 	started := time.Unix(1, 0).UTC()
 	return fleet.AttemptResult{
-		RunID:        run.RunID,
-		BundleDigest: run.Bundle.Digest,
-		ChildID:      childID,
-		AttemptID:    fleet.FormatAttemptID(run.RunID, childID, 1),
-		AgentID:      "agent-1",
-		ShardID:      "shard-1",
-		Status:       fleet.AttemptSucceeded,
-		StartedAt:    started,
-		FinishedAt:   started.Add(time.Second),
-		Terminal:     true,
-		ResultURI:    TerminalResultURI(run, childID),
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ChildID:          childID,
+		AttemptID:        fleet.FormatAttemptID(run.RunID, childID, 1),
+		AgentID:          "agent-1",
+		ShardID:          "shard-1",
+		Status:           fleet.AttemptSucceeded,
+		StartedAt:        started,
+		FinishedAt:       started.Add(time.Second),
+		Terminal:         true,
+		ResultURI:        TerminalResultURI(run, childID),
 	}
 }
 

@@ -93,21 +93,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "bundleCacheBytes",
         "rootfsCacheBytes",
-        "bundleCacheEntries",
         "rootfsCacheEntries"
       ],
       "properties": {
-        "bundleCacheBytes": {
-          "type": "integer",
-          "minimum": 0
-        },
         "rootfsCacheBytes": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "bundleCacheEntries": {
           "type": "integer",
           "minimum": 0
         },

@@ -31,37 +31,31 @@ func (c Client) Status(ctx context.Context) (fleet.AgentStatus, error) {
 	return status, status.Validate()
 }
 
-// InspectRunBundle validates immutable bundle metadata through an agent.
-func (c Client) InspectRunBundle(ctx context.Context, run fleet.BundleRun) (fleet.BundleInspection, error) {
-	var inspection fleet.BundleInspection
-	if err := c.postJSON(ctx, "/inspect-run-bundle", run, &inspection); err != nil {
-		return fleet.BundleInspection{}, err
+// InspectRunCheckpoint materializes and validates a native checkpoint through an agent.
+func (c Client) InspectRunCheckpoint(ctx context.Context, run fleet.CheckpointRun) (fleet.CheckpointInspection, error) {
+	var inspection fleet.CheckpointInspection
+	if err := c.postJSON(ctx, "/inspect-run-checkpoint", run, &inspection); err != nil {
+		return fleet.CheckpointInspection{}, err
 	}
 	return inspection, nil
 }
 
-// PrepareBundle prepares, forks, packs, and inspects a source run on the agent.
-func (c Client) PrepareBundle(ctx context.Context, run fleet.Run) (fleet.PreparedBundle, error) {
-	var prepared fleet.PreparedBundle
-	if err := c.postJSON(ctx, "/prepare-bundle", run, &prepared); err != nil {
-		return fleet.PreparedBundle{}, err
+// PrepareCheckpoint captures and verifies one warm parent on the agent.
+func (c Client) PrepareCheckpoint(ctx context.Context, run fleet.Run) (fleet.PreparedCheckpoint, error) {
+	var prepared fleet.PreparedCheckpoint
+	if err := c.postJSON(ctx, "/prepare-checkpoint", run, &prepared); err != nil {
+		return fleet.PreparedCheckpoint{}, err
 	}
 	if _, err := run.Compile(prepared); err != nil {
-		return fleet.PreparedBundle{}, err
+		return fleet.PreparedCheckpoint{}, err
 	}
 	return prepared, nil
 }
 
-// PrepareLocal prepares and forks a source run on the agent without creating a portable bundle.
-func (c Client) PrepareLocal(ctx context.Context, run fleet.Run) (fleet.PreparedBundle, error) {
-	var prepared fleet.PreparedBundle
-	if err := c.postJSON(ctx, "/prepare-local", run, &prepared); err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	if _, err := run.Compile(prepared); err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	return prepared, nil
+// ReleaseCheckpoint releases a downloaded parent after all run attempts finish.
+func (c Client) ReleaseCheckpoint(ctx context.Context, run fleet.CheckpointRun) error {
+	var result struct{}
+	return c.postJSON(ctx, "/release-checkpoint", run, &result)
 }
 
 // ReleasePrepared removes a prepared source run and releases its SporeVM pins.

@@ -50,12 +50,10 @@ func main() {
 	var resultStoreEndpoint string
 	var resultStorePathStyle bool
 	var workRoot string
-	var bundleCacheRoot string
 	var rootFSCacheRoot string
 	var region string
 	var backend string
 	var childTimeout time.Duration
-	var allowMetadataOnlyRootFS bool
 	var templateRetain int
 	var templateReconcileInterval time.Duration
 	var resetRuntimeOnStart bool
@@ -74,19 +72,23 @@ func main() {
 	flag.StringVar(&resultStoreEndpoint, "result-store-endpoint", envString("SPORE_RESULT_STORE_ENDPOINT", ""), "optional S3-compatible result store endpoint")
 	flag.BoolVar(&resultStorePathStyle, "result-store-path-style", envBool("SPORE_RESULT_STORE_PATH_STYLE", false), "use path-style S3 result store URLs")
 	flag.StringVar(&workRoot, "work-root", envString("SPORE_WORK_ROOT", "/var/lib/sporevm/work"), "local root for materialized child spores")
-	flag.StringVar(&bundleCacheRoot, "bundle-cache-root", envString("SPORE_BUNDLE_CACHE_ROOT", "/var/lib/sporevm/bundle-cache"), "bundle cache root used for status")
 	flag.StringVar(&rootFSCacheRoot, "rootfs-cache-root", envString("SPORE_ROOTFS_CACHE_ROOT", "/var/lib/sporevm/rootfs-cache"), "rootfs cache root used for status")
-	flag.StringVar(&region, "region", envString("AWS_REGION", ""), "AWS region passed to spore pull")
+	flag.StringVar(&region, "region", envString("AWS_REGION", ""), "AWS region for native SporeVM image and checkpoint access")
 	flag.StringVar(&backend, "backend", envString("SPORE_BACKEND", "kvm"), "SporeVM backend used for resume")
 	flag.DurationVar(&childTimeout, "child-timeout", envDuration("SPORE_AGENT_CHILD_TIMEOUT", 0), "optional per-child resume timeout; 0 disables the agent-side timeout")
-	flag.BoolVar(&allowMetadataOnlyRootFS, "allow-metadata-only-rootfs", envBool("SPORE_ALLOW_METADATA_ONLY_ROOTFS", false), "allow metadata-only rootfs pulls")
 	flag.IntVar(&templateRetain, "template-retain", envInt("SPORE_AGENT_TEMPLATE_RETAIN", defaultTemplateRetain), "newest completed boot templates retained on this agent")
 	flag.DurationVar(&templateReconcileInterval, "template-reconcile-interval", envDuration("SPORE_AGENT_TEMPLATE_RECONCILE_INTERVAL", defaultTemplateReconcile), "interval between boot-template reconciliation passes; 0 disables periodic reconciliation")
 	flag.BoolVar(&resetRuntimeOnStart, "reset-runtime-on-start", envBool("SPORE_AGENT_RESET_RUNTIME_ON_START", false), "remove process-local SporeVM runtime state before serving while retaining local backing authority")
 	flag.BoolVar(&cacheGC, "cache-gc", envBool("SPORE_AGENT_CACHE_GC", false), "run 'spore cache gc --force' after the agent removes saved spores; set only on the one agent that owns this node's SporeVM caches")
 	flag.Parse()
 
-	for _, root := range []string{resultStoreRoot, workRoot, bundleCacheRoot, rootFSCacheRoot} {
+	if region != "" {
+		if err := os.Setenv("AWS_REGION", region); err != nil {
+			log.Fatalf("set native SporeVM AWS region: %v", err)
+		}
+	}
+
+	for _, root := range []string{resultStoreRoot, workRoot, rootFSCacheRoot} {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			log.Fatalf("create %s: %v", root, err)
 		}
@@ -196,16 +198,13 @@ func main() {
 		}
 	}()
 	handler, err := (&agenthttp.Server{
-		Runner:                  runner,
-		Client:                  spore,
-		AgentID:                 agentID,
-		CellID:                  cellID,
-		Region:                  region,
-		Backend:                 backend,
-		BundleCacheRoot:         bundleCacheRoot,
-		RootFSCacheRoot:         rootFSCacheRoot,
-		AllowMetadataOnlyRootFS: allowMetadataOnlyRootFS,
-		Started:                 started.Load,
+		Runner:          runner,
+		Client:          spore,
+		AgentID:         agentID,
+		CellID:          cellID,
+		Backend:         backend,
+		RootFSCacheRoot: rootFSCacheRoot,
+		Started:         started.Load,
 	}).Handler()
 	if err != nil {
 		log.Fatalf("create handler: %v", err)

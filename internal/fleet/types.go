@@ -3,8 +3,8 @@ package fleet
 
 import "time"
 
-// Bundle identifies an immutable SporeVM bundle input.
-type Bundle struct {
+// Checkpoint identifies an immutable SporeVM bundle input.
+type Checkpoint struct {
 	URI    string `json:"uri"`
 	Digest string `json:"digest"`
 }
@@ -100,35 +100,32 @@ type Run struct {
 	ResultStore string      `json:"resultStore"`
 }
 
-// PreparedBundle is the prepared, forked bundle used to compile a Run.
-type PreparedBundle struct {
-	Bundle     Bundle               `json:"bundle"`
-	ChildCount int                  `json:"childCount"`
-	HostClass  HostClass            `json:"hostClass"`
-	Local      *PreparedLocalBundle `json:"local,omitempty"`
-	TimingsMS  PrepareTimings       `json:"timingsMs,omitempty"`
+// PreparedCheckpoint is the prepared, forked bundle used to compile a Run.
+type PreparedCheckpoint struct {
+	Checkpoint Checkpoint               `json:"checkpoint"`
+	ChildCount int                      `json:"childCount"`
+	HostClass  HostClass                `json:"hostClass"`
+	Local      *PreparedLocalCheckpoint `json:"local,omitempty"`
+	TimingsMS  PrepareTimings           `json:"timingsMs,omitempty"`
 }
 
-// PreparedLocalBundle identifies same-agent prepared files that are safe to
+// PreparedLocalCheckpoint identifies same-agent prepared files that are safe to
 // reference only inside the preparing agent.
-type PreparedLocalBundle struct {
-	ParentDir   string `json:"parentDir,omitempty"`
-	ChildrenDir string `json:"childrenDir,omitempty"`
-	BundleDir   string `json:"bundleDir,omitempty"`
+type PreparedLocalCheckpoint struct {
+	ParentDir string `json:"parentDir,omitempty"`
 }
 
 // PrepareTimings records source-run preparation phase latencies in milliseconds.
 type PrepareTimings struct {
-	RunSave       float64 `json:"runSave,omitempty"`
-	Fork          float64 `json:"fork,omitempty"`
-	Pack          float64 `json:"pack,omitempty"`
-	InspectBundle float64 `json:"inspectBundle,omitempty"`
+	RunSave float64 `json:"runSave,omitempty"`
+	Push    float64 `json:"push,omitempty"`
+	Inspect float64 `json:"inspect,omitempty"`
 }
 
-// BundleRun is the admitted fleet run contract.
-type BundleRun struct {
+// CheckpointRun is the admitted fleet run contract.
+type CheckpointRun struct {
 	RunID        string      `json:"runID"`
-	Bundle       Bundle      `json:"bundle"`
+	Checkpoint   Checkpoint  `json:"checkpoint"`
 	Children     ChildRange  `json:"children"`
 	ChildCommand []string    `json:"childCommand,omitempty"`
 	HostClass    HostClass   `json:"hostClass"`
@@ -146,9 +143,7 @@ type ExecutionSlots struct {
 
 // CacheStatus reports node-local cache size and entry counts.
 type CacheStatus struct {
-	BundleCacheBytes   int64 `json:"bundleCacheBytes"`
 	RootFSCacheBytes   int64 `json:"rootfsCacheBytes"`
-	BundleCacheEntries int   `json:"bundleCacheEntries"`
 	RootFSCacheEntries int   `json:"rootfsCacheEntries"`
 }
 
@@ -189,14 +184,14 @@ type AgentStatus struct {
 
 // ShardLease assigns a global child id range to one agent.
 type ShardLease struct {
-	RunID         string `json:"runID"`
-	BundleDigest  string `json:"bundleDigest"`
-	ShardID       string `json:"shardID"`
-	ChildStart    int    `json:"childStart"`
-	ChildCount    int    `json:"childCount"`
-	AttemptBudget int    `json:"attemptBudget"`
-	HostClassID   string `json:"hostClassID"`
-	AgentID       string `json:"agentID"`
+	RunID            string `json:"runID"`
+	CheckpointDigest string `json:"checkpointDigest"`
+	ShardID          string `json:"shardID"`
+	ChildStart       int    `json:"childStart"`
+	ChildCount       int    `json:"childCount"`
+	AttemptBudget    int    `json:"attemptBudget"`
+	HostClassID      string `json:"hostClassID"`
+	AgentID          string `json:"agentID"`
 }
 
 // ChildRange returns the lease's global child id range.
@@ -249,20 +244,20 @@ type AttemptOutput struct {
 
 // AttemptResult is the per-child result document stored outside the coordinator.
 type AttemptResult struct {
-	RunID        string         `json:"runID"`
-	BundleDigest string         `json:"bundleDigest"`
-	ChildID      int            `json:"childID"`
-	AttemptID    string         `json:"attemptID"`
-	AgentID      string         `json:"agentID"`
-	ShardID      string         `json:"shardID"`
-	Status       AttemptStatus  `json:"status"`
-	StartedAt    time.Time      `json:"startedAt"`
-	FinishedAt   time.Time      `json:"finishedAt"`
-	TimingsMS    AttemptTimings `json:"timingsMs"`
-	Terminal     bool           `json:"terminal"`
-	ResultURI    string         `json:"resultURI,omitempty"`
-	Output       *AttemptOutput `json:"output,omitempty"`
-	Error        *AttemptError  `json:"error,omitempty"`
+	RunID            string         `json:"runID"`
+	CheckpointDigest string         `json:"checkpointDigest"`
+	ChildID          int            `json:"childID"`
+	AttemptID        string         `json:"attemptID"`
+	AgentID          string         `json:"agentID"`
+	ShardID          string         `json:"shardID"`
+	Status           AttemptStatus  `json:"status"`
+	StartedAt        time.Time      `json:"startedAt"`
+	FinishedAt       time.Time      `json:"finishedAt"`
+	TimingsMS        AttemptTimings `json:"timingsMs"`
+	Terminal         bool           `json:"terminal"`
+	ResultURI        string         `json:"resultURI,omitempty"`
+	Output           *AttemptOutput `json:"output,omitempty"`
+	Error            *AttemptError  `json:"error,omitempty"`
 }
 
 // PlanSummary is aggregate coordinator state for a plan.
@@ -285,28 +280,27 @@ type Plan struct {
 	Lease   ShardLease  `json:"lease,omitzero"`
 }
 
-// BundleInspection is the coordinator's admission-time view of bundle metadata.
-type BundleInspection struct {
-	BundleDigest string    `json:"bundleDigest"`
-	ChildCount   int       `json:"childCount"`
-	HostClass    HostClass `json:"hostClass"`
+// CheckpointInspection is the coordinator's admission-time view of bundle metadata.
+type CheckpointInspection struct {
+	CheckpointDigest string    `json:"checkpointDigest"`
+	ChildCount       int       `json:"childCount"`
+	HostClass        HostClass `json:"hostClass"`
 }
 
 // ShardExecutionRequest is the coordinator-to-agent runtime lease request.
 type ShardExecutionRequest struct {
-	Run     BundleRun            `json:"run"`
-	Lease   ShardLease           `json:"lease"`
-	Attempt int                  `json:"attempt"`
-	Local   *PreparedLocalBundle `json:"local,omitempty"`
+	Run     CheckpointRun `json:"run"`
+	Lease   ShardLease    `json:"lease"`
+	Attempt int           `json:"attempt"`
 }
 
 // RuntimePrepareSummary reports the source-run prepare work that happened
 // before a compiled bundle run was admitted.
 type RuntimePrepareSummary struct {
-	AgentID      string         `json:"agentID"`
-	BundleDigest string         `json:"bundleDigest"`
-	ChildCount   int            `json:"childCount"`
-	TimingsMS    PrepareTimings `json:"timingsMs"`
+	AgentID          string         `json:"agentID"`
+	CheckpointDigest string         `json:"checkpointDigest"`
+	ChildCount       int            `json:"childCount"`
+	TimingsMS        PrepareTimings `json:"timingsMs"`
 }
 
 // RuntimeSummary is compact aggregate status for one coordinator run.

@@ -29,10 +29,10 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	}
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: BundleInspection{
-			BundleDigest: run.Bundle.Digest,
-			ChildCount:   run.Children.End(),
-			HostClass:    run.HostClass,
+		fakeBundleInspector{inspection: CheckpointInspection{
+			CheckpointDigest: run.Checkpoint.Digest,
+			ChildCount:       run.Children.End(),
+			HostClass:        run.HostClass,
 		}},
 		store,
 		map[string]ShardExecutor{agents[0].AgentID: executor},
@@ -72,10 +72,10 @@ func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	executor := &fakeShardExecutor{}
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: BundleInspection{
-			BundleDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-			ChildCount:   run.Children.Count,
-			HostClass:    run.HostClass,
+		fakeBundleInspector{inspection: CheckpointInspection{
+			CheckpointDigest: "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+			ChildCount:       run.Children.Count,
+			HostClass:        run.HostClass,
 		}},
 		newFakeTerminalStore(),
 		map[string]ShardExecutor{agents[0].AgentID: executor},
@@ -103,10 +103,10 @@ func TestCoordinatorRejectsInspectedHostClassMismatch(t *testing.T) {
 	hostClass.ID = "linux-aarch64-kvm-graviton2-v0"
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: BundleInspection{
-			BundleDigest: run.Bundle.Digest,
-			ChildCount:   run.Children.Count,
-			HostClass:    hostClass,
+		fakeBundleInspector{inspection: CheckpointInspection{
+			CheckpointDigest: run.Checkpoint.Digest,
+			ChildCount:       run.Children.Count,
+			HostClass:        hostClass,
 		}},
 		newFakeTerminalStore(),
 		map[string]ShardExecutor{agents[0].AgentID: executor},
@@ -257,7 +257,7 @@ func TestCoordinatorReturnsErrorWhenLeaseExhaustsAttemptsIncomplete(t *testing.T
 	}
 }
 
-func smallRuntimeRun(t *testing.T, childCount int, attempts int) BundleRun {
+func smallRuntimeRun(t *testing.T, childCount int, attempts int) CheckpointRun {
 	t.Helper()
 	run := loadExampleRun(t)
 	run.Children = ChildRange{Start: 0, Count: childCount}
@@ -268,7 +268,7 @@ func smallRuntimeRun(t *testing.T, childCount int, attempts int) BundleRun {
 
 func newTestCoordinator(
 	t *testing.T,
-	run BundleRun,
+	run CheckpointRun,
 	agents []AgentStatus,
 	store *fakeTerminalStore,
 	executors map[string]ShardExecutor,
@@ -277,10 +277,10 @@ func newTestCoordinator(
 	t.Helper()
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: BundleInspection{
-			BundleDigest: run.Bundle.Digest,
-			ChildCount:   run.Children.End(),
-			HostClass:    run.HostClass,
+		fakeBundleInspector{inspection: CheckpointInspection{
+			CheckpointDigest: run.Checkpoint.Digest,
+			ChildCount:       run.Children.End(),
+			HostClass:        run.HostClass,
 		}},
 		store,
 		executors,
@@ -293,13 +293,13 @@ func newTestCoordinator(
 }
 
 type fakeBundleInspector struct {
-	inspection BundleInspection
+	inspection CheckpointInspection
 	err        error
 }
 
-func (i fakeBundleInspector) InspectRunBundle(context.Context, BundleRun) (BundleInspection, error) {
+func (i fakeBundleInspector) InspectRunCheckpoint(context.Context, CheckpointRun) (CheckpointInspection, error) {
 	if i.err != nil {
-		return BundleInspection{}, i.err
+		return CheckpointInspection{}, i.err
 	}
 	return i.inspection, nil
 }
@@ -313,7 +313,7 @@ func newFakeTerminalStore() *fakeTerminalStore {
 	return &fakeTerminalStore{terminal: make(map[int]AttemptResult)}
 }
 
-func (s *fakeTerminalStore) TerminalResult(_ context.Context, _ BundleRun, childID int) (AttemptResult, bool, error) {
+func (s *fakeTerminalStore) TerminalResult(_ context.Context, _ CheckpointRun, childID int) (AttemptResult, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result, ok := s.terminal[childID]
@@ -348,18 +348,18 @@ func (e *fakeShardExecutor) callCount() int {
 	return len(e.calls)
 }
 
-func runtimeAttemptResult(run BundleRun, lease ShardLease, childID int, attempt int, status AttemptStatus, terminal bool) AttemptResult {
+func runtimeAttemptResult(run CheckpointRun, lease ShardLease, childID int, attempt int, status AttemptStatus, terminal bool) AttemptResult {
 	now := time.Date(2026, 6, 20, 4, 0, 1, 0, time.UTC)
 	result := AttemptResult{
-		RunID:        run.RunID,
-		BundleDigest: run.Bundle.Digest,
-		ChildID:      childID,
-		AttemptID:    FormatAttemptID(run.RunID, childID, attempt),
-		AgentID:      lease.AgentID,
-		ShardID:      lease.ShardID,
-		Status:       status,
-		StartedAt:    now,
-		FinishedAt:   now.Add(105 * time.Millisecond),
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ChildID:          childID,
+		AttemptID:        FormatAttemptID(run.RunID, childID, attempt),
+		AgentID:          lease.AgentID,
+		ShardID:          lease.ShardID,
+		Status:           status,
+		StartedAt:        now,
+		FinishedAt:       now.Add(105 * time.Millisecond),
 		TimingsMS: AttemptTimings{
 			ArtifactPull:    10,
 			Materialization: 20,

@@ -49,7 +49,6 @@ spec:
             - --spore-path=/usr/local/bin/spore
             - --result-store-root=/var/lib/sporevm/results
             - --work-root=/var/lib/sporevm/work
-            - --bundle-cache-root=/var/lib/sporevm/bundle-cache
             - --rootfs-cache-root=/var/lib/sporevm/rootfs-cache
             - --reset-runtime-on-start=true
             - --cache-gc=true
@@ -63,8 +62,6 @@ spec:
               value: /var/lib/sporevm/work/runtime
             - name: SPOREVM_KERNEL_CACHE_DIR
               value: /var/lib/sporevm/kernels
-            - name: SPOREVM_BUNDLE_CACHE_DIR
-              value: /var/lib/sporevm/bundle-cache
             - name: SPOREVM_ROOTFS_CACHE_DIR
               value: /var/lib/sporevm/rootfs-cache
           readinessProbe:

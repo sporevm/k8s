@@ -7,22 +7,18 @@
   "prepare": {
     "command": [
       "/bin/bash",
-      "/usr/local/bin/sporevm-rails-coordinator",
-      "--capture-delay",
-      "2"
+      "/usr/local/bin/sporevm-rails-coordinator"
     ],
     "captureSignal": "USR1",
-    "readyMarker": "SPOREVM_RAILS_READY"
+    "readyMarker": "SPOREVM_RAILS_READY",
+    "memory": "2gb"
   },
   "fork": {
     "count": 1000
   },
   "children": {
     "start": 0,
-    "count": 1000,
-    "command": [
-      "/usr/local/bin/sporevm-rspec-shard"
-    ]
+    "count": 1000
   },
   "execution": {
     "maxInFlightPerAgent": 100

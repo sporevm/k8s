@@ -12,7 +12,7 @@ import (
 
 func TestDecodeBundleRunRejectsUnknownFields(t *testing.T) {
 	var raw map[string]any
-	decodeExample(t, "bundle-run-1000.json", &raw)
+	decodeExample(t, "checkpoint-run-1000.json", &raw)
 	raw["unexpected"] = true
 
 	payload, err := json.Marshal(raw)
@@ -20,7 +20,7 @@ func TestDecodeBundleRunRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("marshal run: %v", err)
 	}
 
-	_, err = DecodeBundleRun(bytes.NewReader(payload))
+	_, err = DecodeCheckpointRun(bytes.NewReader(payload))
 	if err == nil {
 		t.Fatal("DecodeBundleRun succeeded with unknown field")
 	}
@@ -30,13 +30,13 @@ func TestDecodeBundleRunRejectsUnknownFields(t *testing.T) {
 }
 
 func TestDecodeBundleRunRejectsTrailingJSON(t *testing.T) {
-	payload, err := os.ReadFile(filepath.Join("..", "..", "examples", "fleet", "bundle-run-1000.json"))
+	payload, err := os.ReadFile(filepath.Join("..", "..", "examples", "fleet", "checkpoint-run-1000.json"))
 	if err != nil {
 		t.Fatalf("read run example: %v", err)
 	}
 	payload = append(payload, []byte("\n{}")...)
 
-	_, err = DecodeBundleRun(bytes.NewReader(payload))
+	_, err = DecodeCheckpointRun(bytes.NewReader(payload))
 	if err == nil {
 		t.Fatal("DecodeBundleRun succeeded with trailing JSON")
 	}
@@ -101,17 +101,17 @@ func TestBuildSingleAgentSequentialPlanRejectsHostClassMismatch(t *testing.T) {
 	}
 }
 
-func loadExampleRun(t *testing.T) BundleRun {
+func loadExampleRun(t *testing.T) CheckpointRun {
 	t.Helper()
 
-	path := filepath.Join("..", "..", "examples", "fleet", "bundle-run-1000.json")
+	path := filepath.Join("..", "..", "examples", "fleet", "checkpoint-run-1000.json")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open run example: %v", err)
 	}
 	defer f.Close()
 
-	run, err := DecodeBundleRun(f)
+	run, err := DecodeCheckpointRun(f)
 	if err != nil {
 		t.Fatalf("DecodeBundleRun: %v", err)
 	}

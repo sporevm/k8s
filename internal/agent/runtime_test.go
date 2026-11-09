@@ -171,27 +171,6 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
 		hostInfo: validHostInfo(),
-		inspectFunc: func(_ context.Context, req InspectBundleRequest) (InspectBundleResult, error) {
-			if req.ChildRange == nil || req.ChildRange.Start != 0 || req.ChildRange.End != 1000 {
-				t.Fatalf("inspect child range = %+v", req.ChildRange)
-			}
-			wantURI, err := fileURI(filepath.Join(workRoot, source.RunID, "prepare", "bundle"))
-			if err != nil {
-				t.Fatalf("fileURI: %v", err)
-			}
-			if req.Source != wantURI {
-				t.Fatalf("inspect source = %q, want %q", req.Source, wantURI)
-			}
-			return InspectBundleResult{
-				Schema:        inspectBundleSchema,
-				SchemaVersion: schemaVersion,
-				BundleDigest: DigestRef{
-					Algorithm: "sha256",
-					Hex:       "2222222222222222222222222222222222222222222222222222222222222222",
-				},
-				ChildCount: 1000,
-			}, nil
-		},
 	}
 	runner, err := NewRunner(100,
 		WithSporeClient(client),
@@ -201,28 +180,25 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	prepared, err := runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	prepared, err := runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 	if err != nil {
 		t.Fatalf("PrepareBundle: %v", err)
 	}
 	if prepared.ChildCount != 1000 {
 		t.Fatalf("child count = %d", prepared.ChildCount)
 	}
-	if prepared.Bundle.Digest != "sha256:2222222222222222222222222222222222222222222222222222222222222222" {
-		t.Fatalf("bundle digest = %q", prepared.Bundle.Digest)
+	if prepared.Checkpoint.Digest != "blake3:1111111111111111111111111111111111111111111111111111111111111111" {
+		t.Fatalf("bundle digest = %q", prepared.Checkpoint.Digest)
 	}
 	if prepared.Local == nil {
 		t.Fatal("prepared local metadata is nil")
 	}
-	if prepared.Local.ParentDir != filepath.Join(workRoot, source.RunID, "prepare", "parent.spore") ||
-		prepared.Local.ChildrenDir != filepath.Join(workRoot, source.RunID, "prepare", "children") ||
-		prepared.Local.BundleDir != filepath.Join(workRoot, source.RunID, "prepare", "bundle") {
+	if prepared.Local.ParentDir != filepath.Join(workRoot, source.RunID, "prepare", "parent.spore") {
 		t.Fatalf("prepared local metadata = %+v", prepared.Local)
 	}
 	if prepared.TimingsMS.RunSave < 0 ||
-		prepared.TimingsMS.Fork < 0 ||
-		prepared.TimingsMS.Pack < 0 ||
-		prepared.TimingsMS.InspectBundle < 0 {
+		prepared.TimingsMS.Push < 0 ||
+		prepared.TimingsMS.Inspect < 0 {
 		t.Fatalf("prepared timings = %+v", prepared.TimingsMS)
 	}
 	if _, err := source.Compile(prepared); err != nil {
@@ -243,13 +219,11 @@ func TestRunnerPrepareBundleCapturesForksPacksAndInspects(t *testing.T) {
 	}
 
 	forks := client.forkRequests()
-	if len(forks) != 1 || forks[0].ParentDir != wantParent || forks[0].Count != 1000 {
+	if len(forks) != 0 {
 		t.Fatalf("fork requests = %+v", forks)
 	}
 	packs := client.packRequests()
-	wantChildren := filepath.Join(workRoot, source.RunID, "prepare", "children")
-	wantBundle := filepath.Join(workRoot, source.RunID, "prepare", "bundle")
-	if len(packs) != 1 || packs[0].ParentDir != wantParent || packs[0].ChildrenDir != wantChildren || packs[0].OutDir != wantBundle {
+	if len(packs) != 1 || packs[0].ParentDir != wantParent || !strings.HasSuffix(packs[0].To, "/store/parent") {
 		t.Fatalf("pack requests = %+v", packs)
 	}
 }
@@ -270,7 +244,7 @@ func TestRunnerPrepareBundleReleasesPreparedStateAfterPackFailure(t *testing.T) 
 			}
 			return os.MkdirAll(filepath.Join(req.OutDir, "shared-chunks"), 0o755)
 		},
-		packFunc: func(context.Context, PackRequest) error {
+		packFunc: func(context.Context, PushRequest) error {
 			return errors.New("pack failed")
 		},
 	}
@@ -279,12 +253,12 @@ func TestRunnerPrepareBundleReleasesPreparedStateAfterPackFailure(t *testing.T) 
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, err = runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	_, err = runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 	if err == nil || !strings.Contains(err.Error(), "pack failed") {
 		t.Fatalf("PrepareBundle error = %v", err)
 	}
-	if got := len(client.removeSavedSporeRequests()); got != 3 {
-		t.Fatalf("remove saved requests = %d, want two children and parent", got)
+	if got := len(client.removeSavedSporeRequests()); got != 1 {
+		t.Fatalf("remove saved requests = %d, want parent", got)
 	}
 	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
 	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
@@ -303,8 +277,8 @@ func TestRunnerPrepareBundleReleasesPreparedStateAfterInspectFailure(t *testing.
 		forkFunc: func(_ context.Context, req ForkRequest) error {
 			return os.MkdirAll(filepath.Join(req.OutDir, "000000"), 0o755)
 		},
-		inspectFunc: func(context.Context, InspectBundleRequest) (InspectBundleResult, error) {
-			return InspectBundleResult{}, errors.New("inspect failed")
+		inspectFunc: func(context.Context, InspectCheckpointRequest) (InspectCheckpointResult, error) {
+			return InspectCheckpointResult{}, errors.New("inspect failed")
 		},
 	}
 	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
@@ -312,12 +286,12 @@ func TestRunnerPrepareBundleReleasesPreparedStateAfterInspectFailure(t *testing.
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, err = runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	_, err = runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 	if err == nil || !strings.Contains(err.Error(), "inspect failed") {
 		t.Fatalf("PrepareBundle error = %v", err)
 	}
-	if got := len(client.removeSavedSporeRequests()); got != 2 {
-		t.Fatalf("remove saved requests = %d, want child and parent", got)
+	if got := len(client.removeSavedSporeRequests()); got != 1 {
+		t.Fatalf("remove saved requests = %d, want parent", got)
 	}
 	prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
 	if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
@@ -336,7 +310,7 @@ func TestRunnerPrepareBundlePreservesStateWhenRollbackFails(t *testing.T) {
 		forkFunc: func(_ context.Context, req ForkRequest) error {
 			return os.MkdirAll(filepath.Join(req.OutDir, "000000"), 0o755)
 		},
-		packFunc: func(context.Context, PackRequest) error {
+		packFunc: func(context.Context, PushRequest) error {
 			return errors.New("pack failed")
 		},
 		removeSavedFunc: func(context.Context, RemoveSavedSporeRequest) error {
@@ -348,7 +322,7 @@ func TestRunnerPrepareBundlePreservesStateWhenRollbackFails(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, err = runner.PrepareBundle(context.Background(), PrepareBundleRequest{Run: source})
+	_, err = runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 	if err == nil || !strings.Contains(err.Error(), "pack failed") || !strings.Contains(err.Error(), "pin release failed") {
 		t.Fatalf("PrepareBundle error = %v", err)
 	}
@@ -358,63 +332,105 @@ func TestRunnerPrepareBundlePreservesStateWhenRollbackFails(t *testing.T) {
 	}
 }
 
-func TestRunnerPrepareLocalCapturesAndForksWithoutPacking(t *testing.T) {
+func TestRunnerPreparedCheckpointReusesParentAcrossRetries(t *testing.T) {
 	source := testRun()
-	source.Fork.Count = 3
+	source.Fork.Count = 20
+	source.Children.Start = 17
 	source.Children.Count = 3
 	source.Execution.MaxInFlightPerAgent = 3
+	source.RetryPolicy.MaxAttemptsPerChild = 2
 	workRoot := t.TempDir()
 	client := &fakeSporeClient{
 		hostInfo: validHostInfo(),
-		inspectFunc: func(context.Context, InspectBundleRequest) (InspectBundleResult, error) {
-			t.Fatal("PrepareLocal called InspectBundle")
-			return InspectBundleResult{}, nil
-		},
-		packFunc: func(context.Context, PackRequest) error {
-			t.Fatal("PrepareLocal called Pack")
-			return nil
+		pullFunc: func(context.Context, PullRequest) (PullResult, error) {
+			t.Fatal("local prepared checkpoint was downloaded")
+			return PullResult{}, nil
 		},
 	}
 	runner, err := NewRunner(100,
 		WithSporeClient(client),
 		WithWorkRoot(workRoot),
+		WithResultStore(newTestResultStore(t)),
 	)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	prepared, err := runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+	prepared, err := runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 	if err != nil {
 		t.Fatalf("PrepareLocal: %v", err)
 	}
-	if prepared.ChildCount != 3 {
-		t.Fatalf("child count = %d, want 3", prepared.ChildCount)
+	if prepared.ChildCount != 20 {
+		t.Fatalf("child count = %d, want aggregate fork capacity 20", prepared.ChildCount)
 	}
-	if prepared.Bundle.URI != "local://prepared/"+source.RunID {
-		t.Fatalf("bundle URI = %q", prepared.Bundle.URI)
+	if !strings.HasPrefix(prepared.Checkpoint.URI, "file://") {
+		t.Fatalf("bundle URI = %q", prepared.Checkpoint.URI)
 	}
-	if !strings.HasPrefix(prepared.Bundle.Digest, "sha256:") {
-		t.Fatalf("bundle digest = %q", prepared.Bundle.Digest)
+	if !strings.HasPrefix(prepared.Checkpoint.Digest, "blake3:") {
+		t.Fatalf("bundle digest = %q", prepared.Checkpoint.Digest)
 	}
 	if prepared.Local == nil {
 		t.Fatal("prepared local metadata is nil")
 	}
-	if prepared.Local.ParentDir != filepath.Join(workRoot, source.RunID, "prepare", "parent.spore") ||
-		prepared.Local.ChildrenDir != filepath.Join(workRoot, source.RunID, "prepare", "children") ||
-		prepared.Local.BundleDir != "" {
+	if prepared.Local.ParentDir != filepath.Join(workRoot, source.RunID, "prepare", "parent.spore") {
 		t.Fatalf("prepared local metadata = %+v", prepared.Local)
 	}
 	if prepared.TimingsMS.RunSave < 0 ||
-		prepared.TimingsMS.Fork < 0 ||
-		prepared.TimingsMS.Pack != 0 ||
-		prepared.TimingsMS.InspectBundle != 0 {
+		prepared.TimingsMS.Push < 0 ||
+		prepared.TimingsMS.Inspect < 0 {
 		t.Fatalf("prepared timings = %+v", prepared.TimingsMS)
 	}
-	if _, err := source.Compile(prepared); err != nil {
+	run, err := source.Compile(prepared)
+	if err != nil {
 		t.Fatalf("Compile prepared local run: %v", err)
 	}
-	if got := len(client.packRequests()); got != 0 {
-		t.Fatalf("pack requests = %d, want 0", got)
+	client.runFromFunc = func(_ context.Context, req RunFromRequest) ([]RunEvent, error) {
+		if req.SporeDir != prepared.Local.ParentDir {
+			t.Errorf("child restored %q, want shared parent %q", req.SporeDir, prepared.Local.ParentDir)
+		}
+		data, err := os.ReadFile(req.GenerationPath)
+		if err != nil {
+			return nil, err
+		}
+		var generation struct {
+			ChildID          int    `json:"child_id"`
+			Index            int    `json:"parallel_index"`
+			Count            int    `json:"parallel_count"`
+			ParentGeneration uint64 `json:"parent_generation"`
+			Generation       uint64 `json:"generation"`
+		}
+		if err := json.Unmarshal(data, &generation); err != nil {
+			return nil, err
+		}
+		if generation.ParentGeneration != 17 || generation.Generation != 18 {
+			t.Errorf("saved-process barrier cannot advance: %+v", generation)
+		}
+		if generation.Count != 3 || generation.Index != generation.ChildID-17 {
+			t.Errorf("generation = %+v; want global child ID with zero-based index in three shards", generation)
+		}
+		if generation.ChildID == 18 && strings.Contains(req.GenerationPath, "attempt-01") {
+			return nil, errors.New("interrupted child")
+		}
+		return []RunEvent{exitEvent(0)}, nil
+	}
+	lease := testLease(run)
+	lease.ChildStart, lease.ChildCount = 17, 3
+	for attempt := 1; attempt <= 2; attempt++ {
+		results, err := runner.RunShard(context.Background(), RunShardRequest{Run: run, Lease: lease, Attempt: attempt, Pressure: normalPressure()})
+		if (err != nil) != (attempt == 1) {
+			t.Fatalf("attempt %d error = %v", attempt, err)
+		}
+		for _, result := range results {
+			if attempt == 2 && result.ChildID != 18 && result.Status != fleet.AttemptSkippedTerminalExists {
+				t.Fatalf("committed shard reran: %+v", result)
+			}
+			if attempt == 2 && result.ChildID == 18 && result.Status != fleet.AttemptSucceeded {
+				t.Fatalf("interrupted shard did not recover: %+v", result)
+			}
+		}
+	}
+	if len(client.runFromRequests()) != 4 || len(client.pullRequests()) != 0 || len(client.runCaptureRequests()) != 1 {
+		t.Fatalf("want one warm capture, no downloads and four child attempts; captures=%d pulls=%d attempts=%d", len(client.runCaptureRequests()), len(client.pullRequests()), len(client.runFromRequests()))
 	}
 }
 
@@ -427,7 +443,7 @@ func TestRunnerReleasePreparedRunRemovesChildrenAndParent(t *testing.T) {
 		filepath.Join(prepareRoot, "children", "000001"),
 		filepath.Join(prepareRoot, "children", "shared-chunks"),
 		filepath.Join(prepareRoot, "parent.spore"),
-		filepath.Join(prepareRoot, "bundle"),
+		filepath.Join(prepareRoot, "store"),
 	} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("create prepared path: %v", err)
@@ -511,6 +527,50 @@ func TestRunnerReleasePreparedRunRetriesCheckpointStillInUse(t *testing.T) {
 	}
 }
 
+func TestRunnerReleasePreparedRunAfterIncompleteCapture(t *testing.T) {
+	for _, manifestExists := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manifestExists=%t", manifestExists), func(t *testing.T) {
+			source := testRun()
+			workRoot := t.TempDir()
+			prepareRoot := filepath.Join(workRoot, source.RunID, "prepare")
+			parentDir := filepath.Join(prepareRoot, "parent.spore")
+			if err := os.MkdirAll(filepath.Join(parentDir, "chunks"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if manifestExists {
+				if err := os.WriteFile(filepath.Join(parentDir, "manifest.json"), []byte("corrupt"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client := &fakeSporeClient{removeSavedFunc: func(context.Context, RemoveSavedSporeRequest) error {
+				return &MachineError{Envelope: MachineErrorEnvelope{Error: MachineErrorBody{
+					Code: "object.invalid", Source: "InvalidSporeDir",
+				}}}
+			}}
+			runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(workRoot))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = runner.ReleasePreparedRun(context.Background(), source)
+			if manifestExists {
+				if err == nil {
+					t.Fatal("corrupt save was not retained for investigation")
+				}
+				if _, err := os.Stat(parentDir); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("release incomplete capture: %v", err)
+				}
+				if _, err := os.Stat(prepareRoot); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("incomplete capture still exists: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestRunnerReleasePreparedRunKeepsFailedStateForRetry(t *testing.T) {
 	source := testRun()
 	workRoot := t.TempDir()
@@ -578,7 +638,7 @@ func TestRunnerReleasePreparedRunSerializesWithPrepare(t *testing.T) {
 	}
 	prepareDone := make(chan error, 1)
 	go func() {
-		_, err := runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+		_, err := runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 		prepareDone <- err
 	}()
 	<-started
@@ -628,7 +688,7 @@ func TestRunnerReleasePreparedRunGateHonorsCancellation(t *testing.T) {
 	}
 	prepareDone := make(chan error, 1)
 	go func() {
-		_, err := runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+		_, err := runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 		prepareDone <- err
 	}()
 	<-started
@@ -789,7 +849,7 @@ func TestRunnerPrepareLocalReleasesPartialStateOnFailure(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, err = runner.PrepareLocal(context.Background(), PrepareBundleRequest{Run: source})
+	_, err = runner.PrepareCheckpoint(context.Background(), PrepareCheckpointRequest{Run: source})
 	if err == nil || !strings.Contains(err.Error(), "capture failed") {
 		t.Fatalf("PrepareLocal error = %v", err)
 	}
@@ -874,8 +934,8 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	if !ok || terminal.AttemptID != result.AttemptID {
 		t.Fatalf("terminal = %+v ok=%v", terminal, ok)
 	}
-	if _, err := os.Stat(client.lastOutDir()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("work dir still exists or stat failed differently: %v", err)
+	if err := runner.ReleaseCheckpoint(context.Background(), run); err != nil {
+		t.Fatalf("release checkpoint: %v", err)
 	}
 	if _, err := os.Stat(generationPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("generation file still exists or stat failed differently: %v", err)
@@ -885,18 +945,15 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 	if len(pulls) != 1 {
 		t.Fatalf("pull count = %d", len(pulls))
 	}
-	if pulls[0].Source != run.Bundle.URI+"@"+run.Bundle.Digest {
+	if pulls[0].Source != bundleSource(run) {
 		t.Fatalf("pull source = %q", pulls[0].Source)
-	}
-	if pulls[0].ChildID != "42" {
-		t.Fatalf("pull child = %q", pulls[0].ChildID)
 	}
 
 	observed := metrics.all()
 	if len(observed) != 1 {
 		t.Fatalf("metrics count = %d", len(observed))
 	}
-	if observed[0].OriginBytesRead != 8192 || observed[0].ChunkCacheHits != 8 || observed[0].RootFSCacheMisses != 1 {
+	if observed[0].OriginBytesRead != 1056768 || observed[0].ChunkCacheHits != 8 || observed[0].RootFSCacheMisses != 1 {
 		t.Fatalf("metrics = %+v", observed[0])
 	}
 	if !observed[0].TerminalCommitAttempted || !observed[0].TerminalCommitSuccessful {
@@ -934,13 +991,13 @@ func TestRunnerRunChildUsesPreparedLocalChildWithoutPull(t *testing.T) {
 	}
 	run := testBundleRun()
 
+	runner.checkpoints.Store(run.RunID, materializedCheckpoint{Checkpoint: run.Checkpoint, ParentDir: childDir, HostClass: run.HostClass})
 	result, err := runner.RunChild(context.Background(), RunChildRequest{
-		Run:              run,
-		Lease:            testLease(run),
-		ChildID:          42,
-		Attempt:          1,
-		Pressure:         normalPressure(),
-		LocalChildrenDir: childrenDir,
+		Run:      run,
+		Lease:    testLease(run),
+		ChildID:  42,
+		Attempt:  1,
+		Pressure: normalPressure(),
 	})
 	if err != nil {
 		t.Fatalf("RunChild: %v", err)
@@ -948,7 +1005,7 @@ func TestRunnerRunChildUsesPreparedLocalChildWithoutPull(t *testing.T) {
 	if result.Status != fleet.AttemptSucceeded {
 		t.Fatalf("result = %+v", result)
 	}
-	if result.TimingsMS.ArtifactPull != 0 || result.TimingsMS.LocalChild < 0 {
+	if result.TimingsMS.ArtifactPull < 0 {
 		t.Fatalf("timings = %+v", result.TimingsMS)
 	}
 	if len(client.pullRequests()) != 0 {
@@ -1409,7 +1466,7 @@ func TestRunnerRunShardExecutesEveryChildAndReleasesSlots(t *testing.T) {
 	store := newTestResultStore(t)
 	client := &fakeSporeClient{
 		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
-			return pullResult(req.OutDir, req.ChildID), nil
+			return pullResult(req.OutDir, ""), nil
 		},
 		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
 			return []RunEvent{exitEvent(0)}, nil
@@ -1455,7 +1512,7 @@ func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
 	store := newTestResultStore(t)
 	client := &fakeSporeClient{
 		pullFunc: func(_ context.Context, req PullRequest) (PullResult, error) {
-			return pullResult(req.OutDir, req.ChildID), nil
+			return pullResult(req.OutDir, ""), nil
 		},
 		resumeFunc: func(_ context.Context, req ResumeRequest) ([]RunEvent, error) {
 			return []RunEvent{exitEvent(0)}, nil
@@ -1489,8 +1546,8 @@ func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
 	if len(results) != 5 {
 		t.Fatalf("results len = %d, want 5", len(results))
 	}
-	if got := len(client.pullRequests()); got != 5 {
-		t.Fatalf("pull requests = %d, want 5", got)
+	if got := len(client.pullRequests()); got != 1 {
+		t.Fatalf("pull requests = %d, want one shared parent for five children", got)
 	}
 	if runner.AvailableSlots() != 2 {
 		t.Fatalf("available slots = %d, want 2", runner.AvailableSlots())
@@ -1499,53 +1556,74 @@ func TestRunnerRunShardReservesOnlyInFlightSlots(t *testing.T) {
 
 func TestBundleSourceRequiresExactDigestSuffix(t *testing.T) {
 	run := testBundleRun()
-	run.Bundle.URI = "s3://example-sporevm-artifacts/runs/ruby@base.bundle"
-	if got, want := bundleSource(run), run.Bundle.URI+"@"+run.Bundle.Digest; got != want {
+	run.Checkpoint.URI = "s3://example-sporevm-artifacts/runs/ruby@base.bundle"
+	if got, want := bundleSource(run), run.Checkpoint.URI+"/"+run.Checkpoint.Digest; got != want {
 		t.Fatalf("bundleSource = %q, want %q", got, want)
 	}
 
-	run.Bundle.URI = run.Bundle.URI + "@" + run.Bundle.Digest
-	if got, want := bundleSource(run), run.Bundle.URI; got != want {
+	run.Checkpoint.URI = run.Checkpoint.URI + "/" + run.Checkpoint.Digest
+	if got, want := bundleSource(run), run.Checkpoint.URI; got != want {
 		t.Fatalf("bundleSource = %q, want %q", got, want)
 	}
 }
 
 func TestBundleSourceKeepsLocalFileURIUnpinned(t *testing.T) {
 	run := testBundleRun()
-	run.Bundle.URI = "file:///var/lib/sporevm/k8s-smoke/bundle"
-	if got, want := bundleSource(run), run.Bundle.URI; got != want {
+	run.Checkpoint.URI = "file:///var/lib/sporevm/k8s-smoke/bundle"
+	if got, want := bundleSource(run), run.Checkpoint.URI+"/"+run.Checkpoint.Digest; got != want {
 		t.Fatalf("bundleSource = %q, want %q", got, want)
 	}
 }
 
-func TestRunBundleInspectorUsesDigestPinnedSourceAndRange(t *testing.T) {
+func TestRunBundleInspectorMaterializesParentOnce(t *testing.T) {
 	run := testBundleRun()
-	client := &fakeSporeClient{
-		inspectFunc: func(_ context.Context, req InspectBundleRequest) (InspectBundleResult, error) {
-			if req.Source != run.Bundle.URI+"@"+run.Bundle.Digest {
-				t.Fatalf("inspect source = %q", req.Source)
-			}
-			if req.ChildRange == nil || req.ChildRange.Start != run.Children.Start || req.ChildRange.End != run.Children.End() {
-				t.Fatalf("child range = %+v", req.ChildRange)
-			}
-			return InspectBundleResult{
-				Schema:        inspectBundleSchema,
-				SchemaVersion: schemaVersion,
-				BundleDigest: DigestRef{
-					Algorithm: "sha256",
-					Hex:       "1111111111111111111111111111111111111111111111111111111111111111",
-				},
-				ChildCount: run.Children.Count,
-			}, nil
-		},
+	client := &fakeSporeClient{hostInfo: validHostInfo()}
+	runner := newConfiguredRunner(t, client, newTestResultStore(t))
+	for range 2 {
+		inspection, err := (RunCheckpointInspector{Runner: runner}).InspectRunCheckpoint(context.Background(), run)
+		if err != nil || inspection.CheckpointDigest != run.Checkpoint.Digest || !inspection.HostClass.Equal(run.HostClass) {
+			t.Fatalf("inspection = %+v, error = %v", inspection, err)
+		}
 	}
+	if len(client.pullRequests()) != 1 || client.pullRequests()[0].Source != bundleSource(run) {
+		t.Fatalf("pulls = %+v", client.pullRequests())
+	}
+}
 
-	inspection, err := (RunBundleInspector{Client: client}).InspectRunBundle(context.Background(), run)
-	if err != nil {
-		t.Fatalf("InspectRunBundle: %v", err)
-	}
-	if inspection.BundleDigest != run.Bundle.Digest || inspection.ChildCount != run.Children.Count {
-		t.Fatalf("inspection = %+v", inspection)
+func TestCheckpointAdmissionRejectsIncompatibleSavedPlatform(t *testing.T) {
+	for _, field := range []string{"architecture", "cpu", "devices", "ram", "gic", "counter", "format", "session"} {
+		t.Run(field, func(t *testing.T) {
+			client := &fakeSporeClient{inspectFunc: func(context.Context, InspectCheckpointRequest) (InspectCheckpointResult, error) {
+				checkpoint := InspectCheckpointResult{Schema: inspectBundleSchema, SchemaVersion: 1, Version: 8, VMStatePresent: true, CanAttach: true, CanRunFrom: true, Platform: validHostInfo().Platform}
+				switch field {
+				case "architecture":
+					checkpoint.Platform.Arch = "x86_64"
+				case "cpu":
+					checkpoint.Platform.CPUProfile = "another-cpu"
+				case "devices":
+					checkpoint.Platform.DeviceModelVersion++
+				case "ram":
+					checkpoint.Platform.RAMBase++
+				case "gic":
+					checkpoint.Platform.GICRedistBase++
+				case "counter":
+					checkpoint.Platform.CounterFrequencyHz++
+				case "format":
+					checkpoint.Version = 7
+				case "session":
+					checkpoint.CanAttach = false
+				}
+				return checkpoint, nil
+			}}
+			runner := newConfiguredRunner(t, client, newTestResultStore(t))
+			_, err := (RunCheckpointInspector{Runner: runner}).InspectRunCheckpoint(context.Background(), testBundleRun())
+			if err == nil {
+				t.Fatal("incompatible checkpoint passed admission")
+			}
+			if len(client.resumeRequests()) != 0 || len(client.runFromRequests()) != 0 {
+				t.Fatal("incompatible checkpoint started a child")
+			}
+		})
 	}
 }
 
@@ -1566,10 +1644,10 @@ type fakeSporeClient struct {
 	versionCalls     int
 	executable       string
 	hostInfo         HostInfo
-	inspectFunc      func(context.Context, InspectBundleRequest) (InspectBundleResult, error)
+	inspectFunc      func(context.Context, InspectCheckpointRequest) (InspectCheckpointResult, error)
 	runFunc          func(context.Context, RunCaptureRequest) ([]RunEvent, error)
 	forkFunc         func(context.Context, ForkRequest) error
-	packFunc         func(context.Context, PackRequest) error
+	packFunc         func(context.Context, PushRequest) error
 	pullFunc         func(context.Context, PullRequest) (PullResult, error)
 	resumeFunc       func(context.Context, ResumeRequest) ([]RunEvent, error)
 	restoreNamedFunc func(context.Context, RestoreNamedRequest) (NamedLifecycleResult, error)
@@ -1579,7 +1657,7 @@ type fakeSporeClient struct {
 	removeSavedFunc  func(context.Context, RemoveSavedSporeRequest) error
 	runCaptures      []RunCaptureRequest
 	forks            []ForkRequest
-	packs            []PackRequest
+	packs            []PushRequest
 	pulls            []PullRequest
 	resumes          []ResumeRequest
 	restoreNameds    []RestoreNamedRequest
@@ -1620,12 +1698,15 @@ func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {
 	c.mu.Lock()
 	c.hostInfoCalls++
 	c.mu.Unlock()
+	if c.hostInfo.Schema == "" {
+		return validHostInfo(), nil
+	}
 	return c.hostInfo, nil
 }
 
-func (c *fakeSporeClient) InspectBundle(ctx context.Context, req InspectBundleRequest) (InspectBundleResult, error) {
+func (c *fakeSporeClient) InspectCheckpoint(ctx context.Context, req InspectCheckpointRequest) (InspectCheckpointResult, error) {
 	if c.inspectFunc == nil {
-		return InspectBundleResult{}, nil
+		return InspectCheckpointResult{Schema: inspectBundleSchema, SchemaVersion: 1, Version: 8, VMStatePresent: true, CanAttach: true, CanRunFrom: true, Platform: validHostInfo().Platform, Generation: 17}, nil
 	}
 	return c.inspectFunc(ctx, req)
 }
@@ -1656,14 +1737,17 @@ func (c *fakeSporeClient) Fork(ctx context.Context, req ForkRequest) error {
 	return c.forkFunc(ctx, req)
 }
 
-func (c *fakeSporeClient) Pack(ctx context.Context, req PackRequest) error {
+func (c *fakeSporeClient) Push(ctx context.Context, req PushRequest) (PushResult, error) {
 	c.mu.Lock()
 	c.packs = append(c.packs, req)
 	c.mu.Unlock()
-	if c.packFunc == nil {
-		return nil
+	if c.packFunc != nil {
+		if err := c.packFunc(ctx, req); err != nil {
+			return PushResult{}, err
+		}
 	}
-	return c.packFunc(ctx, req)
+	digest := "blake3:1111111111111111111111111111111111111111111111111111111111111111"
+	return PushResult{Schema: "spore.push.result.v2", SchemaVersion: 2, SporeDigest: digest, DigestRef: strings.TrimSuffix(req.To, "/parent") + "/" + digest}, nil
 }
 
 func (c *fakeSporeClient) Pull(ctx context.Context, req PullRequest) (PullResult, error) {
@@ -1672,7 +1756,12 @@ func (c *fakeSporeClient) Pull(ctx context.Context, req PullRequest) (PullResult
 	c.outDir = req.OutDir
 	c.mu.Unlock()
 	if c.pullFunc == nil {
-		return pullResult(req.OutDir, req.ChildID), nil
+		if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
+			return PullResult{}, err
+		}
+		result := pullResult(req.OutDir, "")
+		result.Ref = req.Source
+		return result, nil
 	}
 	return c.pullFunc(ctx, req)
 }
@@ -1765,10 +1854,10 @@ func (c *fakeSporeClient) forkRequests() []ForkRequest {
 	return append([]ForkRequest(nil), c.forks...)
 }
 
-func (c *fakeSporeClient) packRequests() []PackRequest {
+func (c *fakeSporeClient) packRequests() []PushRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]PackRequest(nil), c.packs...)
+	return append([]PushRequest(nil), c.packs...)
 }
 
 func (c *fakeSporeClient) pullRequests() []PullRequest {
@@ -1869,16 +1958,16 @@ func newTestResultStore(t *testing.T) *LocalResultStore {
 	return store
 }
 
-func testBundleRun() fleet.BundleRun {
-	return fleet.BundleRun{
+func testBundleRun() fleet.CheckpointRun {
+	return fleet.CheckpointRun{
 		RunID: "ruby-counter-20260620",
-		Bundle: fleet.Bundle{
+		Checkpoint: fleet.Checkpoint{
 			URI:    "s3://example-sporevm-artifacts/runs/ruby.bundle",
-			Digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Digest: "blake3:1111111111111111111111111111111111111111111111111111111111111111",
 		},
 		Children: fleet.ChildRange{Start: 0, Count: 100},
 		HostClass: fleet.HostClass{
-			ID:                   "linux-aarch64-kvm-graviton1-v0",
+			ID:                   "linux-arm64-kvm-graviton1-v0",
 			SporePlatformVersion: "v0",
 			Architecture:         "aarch64",
 			Backend:              "kvm",
@@ -1931,16 +2020,16 @@ func testRun() fleet.Run {
 	}
 }
 
-func testLease(run fleet.BundleRun) fleet.ShardLease {
+func testLease(run fleet.CheckpointRun) fleet.ShardLease {
 	return fleet.ShardLease{
-		RunID:         run.RunID,
-		BundleDigest:  run.Bundle.Digest,
-		ShardID:       run.RunID + "-shard-0000",
-		ChildStart:    run.Children.Start,
-		ChildCount:    run.Children.Count,
-		AttemptBudget: run.RetryPolicy.MaxAttemptsPerChild,
-		HostClassID:   run.HostClass.ID,
-		AgentID:       "spore-agent-us-east-1a-0001",
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ShardID:          run.RunID + "-shard-0000",
+		ChildStart:       run.Children.Start,
+		ChildCount:       run.Children.Count,
+		AttemptBudget:    run.RetryPolicy.MaxAttemptsPerChild,
+		HostClassID:      run.HostClass.ID,
+		AgentID:          "spore-agent-us-east-1a-0001",
 	}
 }
 
@@ -1957,8 +2046,8 @@ func validHostInfo() HostInfo {
 	bundlePath := "/cache/bundles"
 	runtimePath := "/run/sporevm"
 	return HostInfo{
-		Schema:        hostInfoV2Schema,
-		SchemaVersion: 2,
+		Schema:        hostInfoV3Schema,
+		SchemaVersion: 3,
 		HostClass:     "linux-arm64-kvm",
 		Platform: PlatformFacts{
 			OS:                 "linux",
@@ -1981,42 +2070,12 @@ func validHostInfo() HostInfo {
 func pullResult(outDir, childID string) PullResult {
 	return PullResult{
 		Schema:        pullResultSchema,
-		SchemaVersion: schemaVersion,
+		SchemaVersion: 2,
 		OutDir:        outDir,
-		BundleDigest: DigestRef{
-			Algorithm: "sha256",
-			Hex:       "1111111111111111111111111111111111111111111111111111111111111111",
-		},
-		Materialization: ChunkMaterializationSummary{
-			ChunkCount:             10,
-			MaterializedChunkCount: 10,
-			PayloadBytes:           40960,
-			LinkedChunkCount:       8,
-			CopiedChunkCount:       2,
-			Cache: CacheState{
-				HitCount:     8,
-				MissCount:    2,
-				BytesFetched: 8192,
-			},
-		},
-		RootFS: RootFSMaterializationSummary{
-			ArtifactCount: 1,
-			PayloadBytes:  1048576,
-			Cache: CacheState{
-				HitCount:     0,
-				MissCount:    1,
-				BytesFetched: 1048576,
-			},
-		},
-		Remote: RemoteBundleCache{
-			CacheHit:        false,
-			OriginBytesRead: 8192,
-			PeerBytesRead:   0,
-		},
-		Children: BundleChildrenSummary{
-			Count:         100,
-			SelectedChild: &childID,
-		},
+		SporeDigest:   "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+		Ref:           bundleSource(testBundleRun()),
+		RAM:           PullObjects{Objects: 10, ObjectsFetched: 2, BytesFetched: 8192},
+		Disk:          PullObjects{Objects: 1, ObjectsFetched: 1, BytesFetched: 1048576},
 	}
 }
 

@@ -73,7 +73,7 @@ func TestBuildBundleSubmitResourcesUsesBundleRunArg(t *testing.T) {
 		t.Fatalf("expected per-run names, got configmap=%s job=%s", names.ConfigMap, names.Job)
 	}
 	configMap := resources.Items[0].(configMap)
-	if got := configMap.Data["bundle-run.json"]; got != string(runBytes) {
+	if got := configMap.Data["checkpoint-run.json"]; got != string(runBytes) {
 		t.Fatalf("bundle run configmap data = %q", got)
 	}
 	payload, err := json.Marshal(resources)
@@ -86,8 +86,8 @@ func TestBuildBundleSubmitResourcesUsesBundleRunArg(t *testing.T) {
 		`"kind":"Job"`,
 		`"name":"` + names.ConfigMap + `"`,
 		`"name":"` + names.Job + `"`,
-		`"bundle-run.json":"{\"runID\":\"ruby-counter-20260620\"}"`,
-		`"--bundle-run=/etc/sporevm/run/bundle-run.json"`,
+		`"checkpoint-run.json":"{\"runID\":\"ruby-counter-20260620\"}"`,
+		`"--checkpoint-run=/etc/sporevm/run/checkpoint-run.json"`,
 		`"--agent-url=http://spore-agent.sporevm-system.svc.cluster.local:8080"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -135,7 +135,7 @@ func TestBuildSubmitResourcesUsesRunArg(t *testing.T) {
 			t.Fatalf("resource JSON missing %s:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, `--bundle-run=/etc/sporevm/run/bundle-run.json`) {
+	if strings.Contains(body, `--checkpoint-run=/etc/sporevm/run/checkpoint-run.json`) {
 		t.Fatalf("run resource JSON included bundle run arg:\n%s", body)
 	}
 }
@@ -187,7 +187,7 @@ func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 	}
 
 	configMap := resources.Items[0].(configMap)
-	if got := configMap.Data["bundle-run.json"]; got != string(runBytes) {
+	if got := configMap.Data["checkpoint-run.json"]; got != string(runBytes) {
 		t.Fatalf("bundle run configmap data = %q", got)
 	}
 	payload, err := json.Marshal(resources)
@@ -195,7 +195,7 @@ func TestBuildSubmitResourcesFromOptionsInfersBundleRun(t *testing.T) {
 		t.Fatalf("marshal resources: %v", err)
 	}
 	body := string(payload)
-	if !strings.Contains(body, `--bundle-run=/etc/sporevm/run/bundle-run.json`) {
+	if !strings.Contains(body, `--checkpoint-run=/etc/sporevm/run/checkpoint-run.json`) {
 		t.Fatalf("bundle resource JSON missing coordinator bundle-run arg:\n%s", body)
 	}
 }
@@ -222,7 +222,7 @@ func TestBuildSubmitResourcesFromOptionsInfersRun(t *testing.T) {
 	if !strings.Contains(body, `--run=/etc/sporevm/run/run.json`) {
 		t.Fatalf("run resource JSON missing coordinator run arg:\n%s", body)
 	}
-	if strings.Contains(body, `--bundle-run=/etc/sporevm/run/bundle-run.json`) {
+	if strings.Contains(body, `--checkpoint-run=/etc/sporevm/run/checkpoint-run.json`) {
 		t.Fatalf("run resource JSON included bundle run arg:\n%s", body)
 	}
 }
@@ -235,8 +235,13 @@ func TestDetectSubmitRunKindRejectsAmbiguousOrUnknownRunShape(t *testing.T) {
 	}{
 		{
 			name: "mixed",
-			body: `{"runID":"mixed","bundle":{},"source":{}}`,
-			want: "mixes bundle run fields with run fields",
+			body: `{"runID":"mixed","checkpoint":{},"source":{}}`,
+			want: "mixes checkpoint run fields with run fields",
+		},
+		{
+			name: "removed bundle contract",
+			body: `{"runID":"legacy","bundle":{},"hostClass":{}}`,
+			want: "bundles were removed",
 		},
 		{
 			name: "unknown",
@@ -420,12 +425,12 @@ func writeRunFile(t *testing.T, runBytes []byte) string {
 	return path
 }
 
-func testBundleRun(id string) fleet.BundleRun {
-	return fleet.BundleRun{
+func testBundleRun(id string) fleet.CheckpointRun {
+	return fleet.CheckpointRun{
 		RunID: id,
-		Bundle: fleet.Bundle{
+		Checkpoint: fleet.Checkpoint{
 			URI:    "s3://example-sporevm-artifacts/runs/ruby-counter.bundle",
-			Digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Digest: "blake3:1111111111111111111111111111111111111111111111111111111111111111",
 		},
 		Children: fleet.ChildRange{Start: 0, Count: 1000},
 		HostClass: fleet.HostClass{
