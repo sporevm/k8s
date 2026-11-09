@@ -29,11 +29,11 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	}
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+		map[string]CheckpointInspector{agents[0].AgentID: fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: run.Checkpoint.Digest,
 			ChildCount:       run.Children.End(),
 			HostClass:        run.HostClass,
-		}},
+		}}},
 		store,
 		map[string]ShardExecutor{agents[0].AgentID: executor},
 		CoordinatorOptions{},
@@ -63,6 +63,41 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	}
 	if report.Timings.StagePercentilesMS.Resume.P50 != 30 {
 		t.Fatalf("resume p50 = %v, want 30", report.Timings.StagePercentilesMS.Resume.P50)
+	}
+}
+
+func TestCoordinatorTimingIncludesEveryDestinationAdmission(t *testing.T) {
+	run := smallRuntimeRun(t, 2, 1)
+	agents := makeAgents(t, 2, 1, run.HostClass)
+	store := newFakeTerminalStore()
+	clock := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	inspector := fakeBundleInspector{
+		inspection: CheckpointInspection{CheckpointDigest: run.Checkpoint.Digest, HostClass: run.HostClass},
+		onInspect:  func() { clock = clock.Add(9 * time.Second) },
+	}
+	executor := &fakeShardExecutor{fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+		result := runtimeAttemptResult(run, req.Lease, req.Lease.ChildStart, req.Attempt, AttemptSucceeded, true)
+		result.StartedAt, result.FinishedAt = clock, clock
+		result.TimingsMS = AttemptTimings{}
+		store.commit(result)
+		return []AttemptResult{result}, nil
+	}}
+	coordinator, err := NewCoordinator(agents,
+		map[string]CheckpointInspector{agents[0].AgentID: inspector, agents[1].AgentID: inspector},
+		store, map[string]ShardExecutor{agents[0].AgentID: executor, agents[1].AgentID: executor},
+		CoordinatorOptions{Now: func() time.Time { return clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := coordinator.Run(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := report.Summary.FinishedAt.Sub(report.Summary.StartedAt); elapsed != 18*time.Second {
+		t.Fatalf("aggregate duration = %v, want both nine-second admissions", elapsed)
+	}
+	if report.Timings == nil || report.Timings.ChildReadyMS.P50 != 18000 {
+		t.Fatalf("child-ready timings = %+v, want admission-inclusive 18000ms", report.Timings)
 	}
 }
 
@@ -149,11 +184,11 @@ func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	executor := &fakeShardExecutor{}
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+		map[string]CheckpointInspector{agents[0].AgentID: fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: "blake3:2222222222222222222222222222222222222222222222222222222222222222",
 			ChildCount:       run.Children.Count,
 			HostClass:        run.HostClass,
-		}},
+		}}},
 		newFakeTerminalStore(),
 		map[string]ShardExecutor{agents[0].AgentID: executor},
 		CoordinatorOptions{},
@@ -180,11 +215,11 @@ func TestCoordinatorRejectsInspectedHostClassMismatch(t *testing.T) {
 	hostClass.ID = "linux-aarch64-kvm-graviton2-v0"
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+		map[string]CheckpointInspector{agents[0].AgentID: fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: run.Checkpoint.Digest,
 			ChildCount:       run.Children.Count,
 			HostClass:        hostClass,
-		}},
+		}}},
 		newFakeTerminalStore(),
 		map[string]ShardExecutor{agents[0].AgentID: executor},
 		CoordinatorOptions{},
@@ -352,13 +387,17 @@ func newTestCoordinator(
 	now func() time.Time,
 ) *Coordinator {
 	t.Helper()
-	coordinator, err := NewCoordinator(
-		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+	inspectors := make(map[string]CheckpointInspector, len(agents))
+	for _, agent := range agents {
+		inspectors[agent.AgentID] = fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: run.Checkpoint.Digest,
 			ChildCount:       run.Children.End(),
 			HostClass:        run.HostClass,
-		}},
+		}}
+	}
+	coordinator, err := NewCoordinator(
+		agents,
+		inspectors,
 		store,
 		executors,
 		CoordinatorOptions{Now: now},
@@ -372,9 +411,13 @@ func newTestCoordinator(
 type fakeBundleInspector struct {
 	inspection CheckpointInspection
 	err        error
+	onInspect  func()
 }
 
 func (i fakeBundleInspector) InspectRunCheckpoint(context.Context, CheckpointRun) (CheckpointInspection, error) {
+	if i.onInspect != nil {
+		i.onInspect()
+	}
 	if i.err != nil {
 		return CheckpointInspection{}, i.err
 	}

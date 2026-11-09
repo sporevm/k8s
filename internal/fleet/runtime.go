@@ -44,22 +44,22 @@ type CoordinatorOptions struct {
 
 // Coordinator owns run admission and static single-cell shard execution.
 type Coordinator struct {
-	agents    []AgentStatus
-	inspector CheckpointInspector
-	terminal  TerminalResultReader
-	executors map[string]ShardExecutor
-	now       func() time.Time
+	agents     []AgentStatus
+	inspectors map[string]CheckpointInspector
+	terminal   TerminalResultReader
+	executors  map[string]ShardExecutor
+	now        func() time.Time
 }
 
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
 func NewCoordinator(
 	agents []AgentStatus,
-	inspector CheckpointInspector,
+	inspectors map[string]CheckpointInspector,
 	terminal TerminalResultReader,
 	executors map[string]ShardExecutor,
 	opts CoordinatorOptions,
 ) (*Coordinator, error) {
-	if inspector == nil || terminal == nil {
+	if len(inspectors) == 0 || terminal == nil {
 		return nil, ErrCoordinatorNotConfigured
 	}
 	if len(executors) == 0 {
@@ -70,6 +70,13 @@ func NewCoordinator(
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	copiedAgents := append([]AgentStatus(nil), agents...)
+	copiedInspectors := make(map[string]CheckpointInspector, len(inspectors))
+	for agentID, inspector := range inspectors {
+		if inspector == nil {
+			return nil, ErrCoordinatorNotConfigured
+		}
+		copiedInspectors[agentID] = inspector
+	}
 	copiedExecutors := make(map[string]ShardExecutor, len(executors))
 	for agentID, executor := range executors {
 		if executor == nil {
@@ -78,11 +85,11 @@ func NewCoordinator(
 		copiedExecutors[agentID] = executor
 	}
 	return &Coordinator{
-		agents:    copiedAgents,
-		inspector: inspector,
-		terminal:  terminal,
-		executors: copiedExecutors,
-		now:       now,
+		agents:     copiedAgents,
+		inspectors: copiedInspectors,
+		terminal:   terminal,
+		executors:  copiedExecutors,
+		now:        now,
 	}, nil
 }
 
@@ -92,17 +99,24 @@ func (c *Coordinator) Run(ctx context.Context, run CheckpointRun) (RuntimeReport
 	if err := run.Validate(); err != nil {
 		return RuntimeReport{}, err
 	}
-	inspection, err := c.inspector.InspectRunCheckpoint(ctx, run)
-	if err != nil {
-		return RuntimeReport{}, err
-	}
-	if err := inspection.Validate(run); err != nil {
-		return RuntimeReport{}, err
-	}
-
 	plan, err := BuildPlan(run, c.agents)
 	if err != nil {
 		return RuntimeReport{Plan: plan}, err
+	}
+	// Admit every destination before dispatch, and include transfer/validation
+	// in aggregate elapsed time and time-to-child-ready measurements.
+	for _, lease := range plan.Leases {
+		inspector, ok := c.inspectors[lease.AgentID]
+		if !ok {
+			return RuntimeReport{Plan: plan}, fmt.Errorf("%w: inspector for %s", ErrCoordinatorNotConfigured, lease.AgentID)
+		}
+		inspection, err := inspector.InspectRunCheckpoint(ctx, run)
+		if err == nil {
+			err = inspection.Validate(run)
+		}
+		if err != nil {
+			return RuntimeReport{Plan: plan}, fmt.Errorf("admit agent %s: %w", lease.AgentID, err)
+		}
 	}
 
 	state := newRuntimeState(run, plan, startedAt)

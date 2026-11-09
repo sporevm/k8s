@@ -474,11 +474,13 @@ func runBundle(ctx context.Context, run fleet.CheckpointRun, store fleet.Termina
 		return fleet.RuntimeReport{Plan: plan}, errors.New("multi-agent execution requires a shared S3 checkpoint store")
 	}
 	selected := make([]agentEndpoint, 0, len(plan.Leases))
+	inspectors := make(map[string]fleet.CheckpointInspector, len(plan.Leases))
 	executors := make(map[string]fleet.ShardExecutor, len(plan.Leases))
 	for _, lease := range plan.Leases {
 		for _, endpoint := range endpoints {
 			if endpoint.Status.AgentID == lease.AgentID {
 				selected = append(selected, endpoint)
+				inspectors[lease.AgentID] = endpoint.Client
 				executors[lease.AgentID] = endpoint.Client
 				break
 			}
@@ -491,20 +493,9 @@ func runBundle(ctx context.Context, run fleet.CheckpointRun, store fleet.Termina
 			cancel()
 		}
 	}()
-	// Admit every destination before starting any child. Each agent retains its
-	// verified parent until all leases have stopped, including failed admissions.
-	for _, endpoint := range selected {
-		inspection, inspectErr := endpoint.Client.InspectRunCheckpoint(ctx, run)
-		if inspectErr != nil {
-			return fleet.RuntimeReport{Plan: plan}, fmt.Errorf("admit agent %s: %w", endpoint.Status.AgentID, inspectErr)
-		}
-		if inspectErr := inspection.Validate(run); inspectErr != nil {
-			return fleet.RuntimeReport{Plan: plan}, fmt.Errorf("admit agent %s: %w", endpoint.Status.AgentID, inspectErr)
-		}
-	}
 	coordinator, err := fleet.NewCoordinator(
 		agents,
-		selected[0].Client,
+		inspectors,
 		store,
 		executors,
 		fleet.CoordinatorOptions{},
