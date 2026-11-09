@@ -29,6 +29,95 @@ and coarse admission. CI fan-out is the first useful workload and the
 first proof path, but it should sit on the run contract rather than
 define it.
 
+## SporeVM 0.18.0 migration
+
+The released runtime is [v0.18.0](https://github.com/sporevm/sporevm/releases/tag/v0.18.0),
+source `1197f65baec9bf4618334d113e145a6833763fa8`. Its Linux ARM64 archive
+SHA-256 is `184ff27b58e8994ed61b94b01ca78e5533fa0ef81b3111d8e8f45925a8fd15df`.
+This is a breaking migration, not a runtime-pin update. The older design
+sections below describe the bundle-based implementation until this section's
+replacement is implemented and verified.
+
+### Delivery slices
+
+1. Adapt the agent's capture, local fork, saved-process resume, new-command
+   execution, named VM lifecycle and GC calls to the released CLI. Use global
+   `--json`, preserve the stable `attach`/`exec` wire identifiers, and retain
+   exactly-one-completion and guest-exit validation. Retain runtime timeout
+   defaults in this spelling-only slice. Explicit execution-budget changes
+   require separate validation. Do not change the deployed runtime pin yet.
+2. Replace checkpoint bundles with one immutable parent checkpoint and
+   aggregate run-owned child generation metadata. Replace the old bundle
+   machine schemas, `inspect-bundle`, `pack`, child-selecting pull and
+   metadata-only rootfs behavior, rather than translating their names. A
+   checkpoint's identity is BLAKE3; OCI image identity remains SHA-256.
+   Explicitly migrate the fleet JSON schemas, examples, admission and metrics.
+   Old bundle inputs must fail clearly, not be misinterpreted as checkpoints.
+3. Materialize a remote parent through `checkpoint pull REF --output DIR`
+   once on the selected agent, on the rootfs cache filesystem; inspect the
+   local parent and enforce host compatibility before scheduling children.
+   Child count/range belongs to the aggregate run, not the checkpoint.
+   Supply generation JSON on each child execution and retry. Retain the
+   parent until all attempts finish, then remove it through SporeVM before GC.
+   Local source runs should reuse their captured parent without downloading
+   RAM or constructing a portable artifact per child. Keep one agent per cell.
+4. Provide AWS CLI v2 in the runtime image and use SporeVM 0.18.0's renewable
+   provider chain for all native S3 image/checkpoint reads and writes. Do not
+   export one-time role credentials into a lazy reader. Keep result-store AWS
+   SDK behavior separate. Update the runtime version and verified archive
+   checksum only with the complete migration, including charts, smoke scripts
+   and upgrade documentation.
+
+### Acceptance and rollout gates
+
+- Run Go tests/vet, Python script tests, Helm lint and the public leak scan for
+  each slice. Fake CLI tests prove argv and parser behavior only.
+- On real ARM64 KVM, use the published archive and isolated cache/runtime/work
+  directories. Exercise cold and warm `/runs`, named sandbox exec/removal,
+  signal capture and saved-process generation-aware resume, nonzero guest
+  exits, bounded concurrency, retry/terminal-result behavior, and cleanup/GC.
+- Exercise a directory store first, then private S3 image and checkpoint
+  transfer into a fresh cache, followed by offline execution of the fully
+  materialized checkpoint. Record exact revisions, command outcomes and any
+  skipped path; do not claim fake-spore or macOS tests validate Kubernetes.
+- Cluster probes must not share runtime state or GC ownership with an old
+  agent. Review the existing dev probe's shared-cache mounts before using it.
+- Stop old named VMs before upgrading. Recreate every old checkpoint and boot
+  template under format v8; changing manifest version fields is not migration.
+  Keep old deployments pinned until acceptance passes. Rollback requires the
+  old binary and its old state; do not restore v8 state with the old runtime.
+- Human approval is required before merge, release, deployment, dev-node
+  scaling or other infrastructure changes. No such action is authorized by
+  this plan. Request a bounded hardware test window and cleanup proposal
+  separately; keep private infrastructure details out of this public repo.
+
+### Decisions awaiting review
+
+- Recommend keeping [#50](https://github.com/sporevm/k8s/pull/50) separate rather
+  than folding its capture-only credential exporter into this migration.
+  Its claim that SporeVM cannot use profiles/roles is obsolete in 0.18.0;
+  importing it would also leave checkpoint pulls and renewable reads uncovered.
+  Leave #50 untouched until its owner chooses whether to supersede it.
+- Recommend a clean checkpoint input contract rather than silently reusing
+  the old `bundle` JSON fields for unrelated store semantics. Existing source
+  run inputs can retain their aggregate child/fork counts; prebuilt bundle
+  submissions must be recreated as checkpoint submissions.
+
+### Current implementation state
+
+The CLI adaptation in slice 1 is implemented with updated subprocess tests.
+Bundle preparation/materialization and the runtime pin still use the old
+contract. The migration branch is not deployable or ready to merge; native
+checkpoint and hardware acceptance work remains.
+
+Validation for slice 1: `go test ./...`, `go vet ./...`, `mise run scripts:test`,
+`mise run chart:lint`, `mise run public:leak-scan` and `git diff --check` pass.
+The exact release source builds with `mise run build:release` on Linux AMD64.
+Its live version/system-info/GC results and absent-VM exec/removal JSON match
+the adapter contracts. Capture reaches the missing-KVM check; checkpoint
+fork/resume, named restore and run-from reach the explicit unsupported-x86
+saved-state gates. These are parser/error-path checks, not VM acceptance.
+
 ## Problem
 
 The easy implementation is to map each child VM to a Pod, Job, CRD, or

@@ -53,10 +53,10 @@ func (c CommandClient) Version(ctx context.Context) (string, error) {
 	return result.Version, nil
 }
 
-// HostInfo runs `spore --json host-info`.
+// HostInfo runs `spore --json system info`.
 func (c CommandClient) HostInfo(ctx context.Context) (HostInfo, error) {
 	var result HostInfo
-	if err := c.runJSON(ctx, &result, "--json", "host-info"); err != nil {
+	if err := c.runJSON(ctx, &result, "--json", "system", "info"); err != nil {
 		return HostInfo{}, err
 	}
 	return result, result.Validate()
@@ -106,19 +106,19 @@ func (c CommandClient) Pull(ctx context.Context, req PullRequest) (PullResult, e
 	return result, result.Validate()
 }
 
-// RunCapture runs `spore run --save` to prepare a warm parent.
+// RunCapture runs `spore run --save-checkpoint` to prepare a warm parent.
 func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([]RunEvent, error) {
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"run", "--events=jsonl"}
+	args := []string{"--json", "run"}
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
 	if req.Memory != "" {
 		args = append(args, "--memory", req.Memory)
 	}
-	args = append(args, "--image", req.Image, "--save", req.CaptureDir)
+	args = append(args, "--image", req.Image, "--save-checkpoint", req.CaptureDir)
 	if req.CaptureSignal != "" {
 		args = append(args, "--save-on", req.CaptureSignal)
 	}
@@ -143,12 +143,12 @@ func (c CommandClient) RunCapture(ctx context.Context, req RunCaptureRequest) ([
 	return events, nil
 }
 
-// Fork runs `spore fork`.
+// Fork runs `spore checkpoint fork`.
 func (c CommandClient) Fork(ctx context.Context, req ForkRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
-	_, stderr, err := c.run(ctx, "fork", req.ParentDir, "--count", strconv.Itoa(req.Count), "--out", req.OutDir)
+	_, stderr, err := c.run(ctx, "--json", "checkpoint", "fork", req.ParentDir, "--count", strconv.Itoa(req.Count), "--output", req.OutDir)
 	if err != nil {
 		return commandError(err, stderr)
 	}
@@ -172,8 +172,8 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	commandName := "spore attach"
-	args := []string{"attach", "--events=jsonl"}
+	commandName := "spore checkpoint resume"
+	args := []string{"--json", "checkpoint", "resume"}
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
@@ -190,12 +190,12 @@ func (c CommandClient) Resume(ctx context.Context, req ResumeRequest) ([]RunEven
 	return events, nil
 }
 
-// RestoreNamed runs `spore --json restore` and returns only after the VM is exec-ready.
+// RestoreNamed runs `spore --json vm restore` and waits for exec readiness.
 func (c CommandClient) RestoreNamed(ctx context.Context, req RestoreNamedRequest) (NamedLifecycleResult, error) {
 	if err := req.validate(); err != nil {
 		return NamedLifecycleResult{}, err
 	}
-	args := []string{"--json", "restore", req.SporeDir, "--name", req.Name}
+	args := []string{"--json", "vm", "restore", req.Name, "--checkpoint", req.SporeDir}
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
@@ -214,11 +214,11 @@ func (c CommandClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEv
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"run", "--events=jsonl"}
+	args := []string{"--json", "run"}
 	if req.Backend != "" {
 		args = append(args, "--backend", req.Backend)
 	}
-	args = append(args, "--from", req.SporeDir)
+	args = append(args, "--checkpoint", req.SporeDir)
 	if req.GenerationPath != "" {
 		args = append(args, "--generation", req.GenerationPath)
 	}
@@ -226,19 +226,19 @@ func (c CommandClient) RunFrom(ctx context.Context, req RunFromRequest) ([]RunEv
 	args = append(args, req.Command...)
 
 	stdout, stderr, err := c.run(ctx, args...)
-	events, _, decodeErr := decodeRunEventsAfterCommand("spore run --from", stdout, stderr, err, false)
+	events, _, decodeErr := decodeRunEventsAfterCommand("spore run --checkpoint", stdout, stderr, err, false)
 	if decodeErr != nil {
 		return events, decodeErr
 	}
 	return events, nil
 }
 
-// Exec runs `spore exec` against a named resumed VM.
+// Exec runs `spore vm exec` against a named resumed VM.
 func (c CommandClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, error) {
 	if err := req.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"exec", "--events=jsonl", req.Name, "--"}
+	args := []string{"--json", "vm", "exec", req.Name, "--"}
 	args = append(args, req.Command...)
 
 	stdout, stderr, err := c.run(ctx, args...)
@@ -252,12 +252,12 @@ func (c CommandClient) Exec(ctx context.Context, req ExecRequest) ([]RunEvent, e
 	return events, nil
 }
 
-// RemoveVM runs `spore rm` against a named VM.
+// RemoveVM runs `spore vm rm` against a named VM.
 func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
-	_, stderr, err := c.run(ctx, "--json", "rm", req.Name)
+	_, stderr, err := c.run(ctx, "--json", "vm", "rm", req.Name)
 	if err != nil {
 		var machineErr *MachineError
 		if errors.As(machineErrorFromStderr(stderr), &machineErr) && machineErr.Envelope.Error.Code == "object.not_found" {
@@ -268,30 +268,26 @@ func (c CommandClient) RemoveVM(ctx context.Context, req RemoveVMRequest) error 
 	return nil
 }
 
-// RemoveSavedSpore runs `spore rm --spore`. It refuses only a spore a running
-// VM restored with a saved-spore lease (pulled or unpacked spores); it removes
-// a cache-pinned save such as a boot template even while a VM restored from it
-// runs, since that VM's rootfs-cache lease roots the storage. SporeVM 0.17 also
-// releases the durable cache pin; newer SporeVM leaves the pin and its storage
-// to `spore cache gc --force`.
+// RemoveSavedSpore removes a checkpoint; live VM leases retain its storage
+// until `spore system gc --force` can reclaim it.
 func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSporeRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
 	var result removedSavedSporeResult
-	if err := c.runJSON(ctx, &result, "--json", "rm", "--spore", req.SporeDir); err != nil {
+	if err := c.runJSON(ctx, &result, "--json", "checkpoint", "rm", req.SporeDir); err != nil {
 		return err
 	}
 	return result.Validate()
 }
 
-// CollectCache runs `spore --json cache gc --force`, which deletes cache
+// CollectCache runs `spore --json system gc --force`, which deletes cache
 // storage and orphaned saved-spore pins that nothing references. It roots only
 // the VM leases under this process's runtime directory, and holds the rootfs
 // cache lock exclusively for its whole run.
 func (c CommandClient) CollectCache(ctx context.Context) (CacheGCResult, error) {
 	var result CacheGCResult
-	if err := c.runJSON(ctx, &result, "--json", "cache", "gc", "--force"); err != nil {
+	if err := c.runJSON(ctx, &result, "--json", "system", "gc", "--force"); err != nil {
 		return CacheGCResult{}, err
 	}
 	return result, result.Validate()
