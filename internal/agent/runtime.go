@@ -3,7 +3,9 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1239,31 +1241,41 @@ func bundleSource(run fleet.CheckpointRun) string {
 }
 
 type generationPayload struct {
-	RunID            string `json:"run_id"`
-	ChildID          int    `json:"child_id"`
-	ParallelIndex    int    `json:"parallel_index"`
-	ParallelCount    int    `json:"parallel_count"`
-	ForkIndex        int    `json:"fork_index"`
-	ForkCount        int    `json:"fork_count"`
-	ForkBatchID      string `json:"fork_batch_id"`
-	VMID             string `json:"vm_id"`
-	ParentGeneration uint64 `json:"parent_generation"`
-	Generation       uint64 `json:"generation"`
+	RunID             string `json:"run_id"`
+	ChildID           int    `json:"child_id"`
+	ParallelIndex     int    `json:"parallel_index"`
+	ParallelCount     int    `json:"parallel_count"`
+	ForkIndex         int    `json:"fork_index"`
+	ForkCount         int    `json:"fork_count"`
+	ForkBatchID       string `json:"fork_batch_id"`
+	VMID              string `json:"vm_id"`
+	ParentGeneration  uint64 `json:"parent_generation"`
+	Generation        uint64 `json:"generation"`
+	ResumeEntropySeed string `json:"resume_entropy_seed"`
+	ResumeTimeUnixNS  int64  `json:"resume_time_unix_ns"`
 }
 
 func writeGenerationFile(path string, run fleet.CheckpointRun, childID int, parentGeneration uint64) error {
+	// Explicit generation payloads replace SporeVM's automatic resume fields.
+	// Mint these on the destination after materialization, never in the parent.
+	var seed [16]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		return err
+	}
 	index := childID - run.Children.Start
 	payload := generationPayload{
-		RunID:            run.RunID,
-		ChildID:          childID,
-		ParallelIndex:    index,
-		ParallelCount:    run.Children.Count,
-		ForkIndex:        index,
-		ForkCount:        run.Children.Count,
-		ForkBatchID:      run.RunID,
-		VMID:             run.RunID + "-child-" + strconv.Itoa(childID),
-		ParentGeneration: parentGeneration,
-		Generation:       parentGeneration + 1,
+		RunID:             run.RunID,
+		ChildID:           childID,
+		ParallelIndex:     index,
+		ParallelCount:     run.Children.Count,
+		ForkIndex:         index,
+		ForkCount:         run.Children.Count,
+		ForkBatchID:       run.RunID,
+		VMID:              run.RunID + "-child-" + strconv.Itoa(childID),
+		ParentGeneration:  parentGeneration,
+		Generation:        parentGeneration + 1,
+		ResumeEntropySeed: hex.EncodeToString(seed[:]),
+		ResumeTimeUnixNS:  time.Now().UnixNano(),
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

@@ -887,6 +887,9 @@ func TestRunnerRunChildSuccessCommitsTerminalAndAttempt(t *testing.T) {
 			if err := json.Unmarshal(data, &generation); err != nil {
 				t.Fatalf("decode generation file: %v", err)
 			}
+			if len(generation.ResumeEntropySeed) != 32 || time.Since(time.Unix(0, generation.ResumeTimeUnixNS)).Abs() > time.Minute {
+				t.Fatal("generation must carry fresh entropy and a current host clock sample")
+			}
 			if generation.RunID != "ruby-counter-20260620" ||
 				generation.ChildID != 42 ||
 				generation.ParallelIndex != 42 ||
