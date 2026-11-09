@@ -35,8 +35,8 @@ The released runtime is [v0.18.0](https://github.com/sporevm/sporevm/releases/ta
 source `1197f65baec9bf4618334d113e145a6833763fa8`. Its Linux ARM64 archive
 SHA-256 is `184ff27b58e8994ed61b94b01ca78e5533fa0ef81b3111d8e8f45925a8fd15df`.
 This is a breaking migration, not a runtime-pin update. The older design
-sections below describe the bundle-based implementation until this section's
-replacement is implemented and verified.
+sections below retain historical bundle-based design context; this section
+describes the native checkpoint replacement and its remaining acceptance gates.
 
 ### Target workload and acceptance boundary
 
@@ -179,23 +179,61 @@ contracts and `internal/fleet/coordinator.go`'s single-agent planner.
 
 ### Current implementation state
 
-The native checkpoint adapter and v0.18.0 runtime pin are implemented locally.
+The native checkpoint adapter and v0.18.0 runtime pin are implemented in
+[#51](https://github.com/sporevm/k8s/pull/51).
 Source preparation captures and publishes one parent, and all child attempts
 reuse that parent with distinct generation metadata. Remote submissions pull
 once and compare the checkpoint's saved platform facts with the selected
 host before admission. Cleanup retains the parent through retries and removes
 it through SporeVM when aggregate execution finishes. Legacy bundle inputs and
 machine-schema fallbacks are removed; AWS CLI v2 is included for native stores.
-The migration branch is not ready to merge: image-build, real ARM64 saved-state
-acceptance, multi-service isolation and private-store acceptance remain gates.
+Saved-process resumes use the checkpoint's saved generation and its successor
+alongside global shard identity; without that barrier a warm process can remain
+asleep instead of running its shard. Source runs may omit `children.command`
+to resume the captured process rather than replace it with a new command.
 
-Local validation: `go test ./...`, `go vet ./...`, `mise run scripts:test`,
-`mise run chart:lint`, `mise run public:leak-scan` and `git diff --check` pass.
-The exact release source builds with `mise run build:release` on Linux AMD64.
-Its live version/system-info/GC results and absent-VM exec/removal JSON match
-the adapter contracts. Capture reaches the missing-KVM check; checkpoint
-fork/resume, named restore and run-from reach the explicit unsupported-x86
-saved-state gates. These are parser/error-path checks, not VM acceptance.
+Local validation passes: Go tests with the race detector, vet, Python script
+tests, Helm lint, the public leak scan, example schema checks and whitespace
+checks. CI passes for runtime commit
+[`8c38fb1`](https://github.com/sporevm/k8s/commit/8c38fb1e38419725125472066d69d560d7a892a5).
+The ARM64 Docker image builds with the published archive's checksum verified;
+the included AWS CLI executable runs inside that image.
+
+Real Linux ARM64/KVM acceptance at that runtime commit establishes:
+
+- Cold and warm interactive runs, named sandbox repeated exec/removal and
+  recovery of both execution slots.
+- One warm Rails/PostgreSQL guest from
+  [`sporevm/examples@7bfe0e3`](https://github.com/sporevm/examples/commit/7bfe0e3f62d55ed5e0bf2544e449aab21d22b591),
+  captured once and resumed as three disjoint RSpec shards at concurrency two.
+  Each child reports its distinct index, count three, HTTP 200 and one passing
+  example; all three examples are covered. Additional children independently
+  create the same PostgreSQL table and disk marker and read only their own
+  values.
+- Replay of the completed run produces zero new attempts. Interrupting a
+  different shard after two children commit leaves only the unfinished child
+  to execute on retry. A separate child exiting seven becomes a terminal
+  failure while its siblings succeed.
+- A directory-store handoff into a second container with a fresh cache and
+  runtime, with networking disabled, passes all three Rails shards using the
+  same parent digest. Parent release and execution-slot recovery succeed.
+  This is same-host isolated-container evidence, not a Kubernetes pod test or
+  cross-node portability proof.
+
+The sample separates 9.315 seconds of warm/capture from 57.545 seconds of
+native local publication and 0.408 seconds of already-prepared shard execution.
+The fresh-container handoff takes 13.420 seconds including admission-time pull
+and all three shards. These are single samples, not benchmark percentiles or
+evidence of large-suite speedup. Child `artifactPull`/`materialization` timings
+do not include the initial admission pull; retain overall elapsed time when
+evaluating cold handoff and add explicit admission-phase transfer accounting
+before using child timings for distributed performance comparisons.
+
+The PR remains draft pending actual Kubernetes and private-S3 image/checkpoint
+acceptance with renewable credentials. The full Buildkite browser workload and
+cross-node execution are not proven. Distributed scheduling remains a separate
+PR as agreed; external services and named-fork networking retain the limits
+above. Published runtime image tags and chart defaults remain unchanged.
 
 ## Problem
 
