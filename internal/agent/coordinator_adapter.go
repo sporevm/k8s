@@ -30,33 +30,33 @@ func (i RunCheckpointInspector) InspectRunCheckpoint(ctx context.Context, run fl
 	}, nil
 }
 
-func (r *Runner) inspectCheckpoint(ctx context.Context, path string, attach bool) (fleet.HostClass, error) {
+func (r *Runner) inspectCheckpoint(ctx context.Context, path string, attach bool) (fleet.HostClass, uint64, error) {
 	checkpoint, err := r.client.InspectCheckpoint(ctx, InspectCheckpointRequest{Source: path})
 	if err != nil {
-		return fleet.HostClass{}, err
+		return fleet.HostClass{}, 0, err
 	}
 	if err := checkpoint.Validate(); err != nil {
-		return fleet.HostClass{}, err
+		return fleet.HostClass{}, 0, err
 	}
 	if attach && !checkpoint.CanAttach {
-		return fleet.HostClass{}, invalidMachineOutput("checkpoint has no saved session; childCommand is required")
+		return fleet.HostClass{}, 0, invalidMachineOutput("checkpoint has no saved session; childCommand is required")
 	}
 	info, err := r.client.HostInfo(ctx)
 	if err != nil {
-		return fleet.HostClass{}, err
+		return fleet.HostClass{}, 0, err
 	}
 	hostClass, err := info.FleetHostClass(r.backend)
 	if err != nil {
-		return fleet.HostClass{}, err
+		return fleet.HostClass{}, 0, err
 	}
 	p, h := checkpoint.Platform, info.Platform
 	if p.Arch != h.Arch || p.CPUProfile != h.CPUProfile ||
 		p.DeviceModelVersion != h.DeviceModelVersion || p.RAMBase != h.RAMBase ||
 		p.GICDistBase != h.GICDistBase || p.GICRedistBase != h.GICRedistBase ||
 		p.CounterFrequencyHz != h.CounterFrequencyHz {
-		return fleet.HostClass{}, fmt.Errorf("%w: checkpoint platform does not match this host", fleet.ErrPlatformMismatch)
+		return fleet.HostClass{}, 0, fmt.Errorf("%w: checkpoint platform does not match this host", fleet.ErrPlatformMismatch)
 	}
-	return hostClass, nil
+	return hostClass, checkpoint.Generation, nil
 }
 
 // materializeCheckpoint retains one verified parent across children and retries.
@@ -107,14 +107,14 @@ func (r *Runner) materializeCheckpoint(ctx context.Context, run fleet.Checkpoint
 	if pull.SporeDigest != run.Checkpoint.Digest || pull.OutDir != parentDir || pull.Ref != bundleSource(run) {
 		return cleanup(invalidMachineOutput("pulled checkpoint identity or output directory does not match request"))
 	}
-	hostClass, err := r.inspectCheckpoint(ctx, parentDir, len(run.ChildCommand) == 0)
+	hostClass, generation, err := r.inspectCheckpoint(ctx, parentDir, len(run.ChildCommand) == 0)
 	if err != nil {
 		return cleanup(err)
 	}
 	if !hostClass.Equal(run.HostClass) {
 		return cleanup(fmt.Errorf("%w: requested host class does not match inspected checkpoint", fleet.ErrPlatformMismatch))
 	}
-	parent := materializedCheckpoint{Checkpoint: run.Checkpoint, ParentDir: parentDir, HostClass: hostClass}
+	parent := materializedCheckpoint{Checkpoint: run.Checkpoint, ParentDir: parentDir, HostClass: hostClass, Generation: generation}
 	r.checkpoints.Store(run.RunID, parent)
 	return parent, pull, nil
 }

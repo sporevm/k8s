@@ -393,12 +393,17 @@ func TestRunnerPreparedCheckpointReusesParentAcrossRetries(t *testing.T) {
 			return nil, err
 		}
 		var generation struct {
-			ChildID int `json:"child_id"`
-			Index   int `json:"parallel_index"`
-			Count   int `json:"parallel_count"`
+			ChildID          int    `json:"child_id"`
+			Index            int    `json:"parallel_index"`
+			Count            int    `json:"parallel_count"`
+			ParentGeneration uint64 `json:"parent_generation"`
+			Generation       uint64 `json:"generation"`
 		}
 		if err := json.Unmarshal(data, &generation); err != nil {
 			return nil, err
+		}
+		if generation.ParentGeneration != 17 || generation.Generation != 18 {
+			t.Errorf("saved-process barrier cannot advance: %+v", generation)
 		}
 		if generation.Count != 3 || generation.Index != generation.ChildID-17 {
 			t.Errorf("generation = %+v; want global child ID with zero-based index in three shards", generation)
@@ -1657,7 +1662,7 @@ func (c *fakeSporeClient) HostInfo(context.Context) (HostInfo, error) {
 
 func (c *fakeSporeClient) InspectCheckpoint(ctx context.Context, req InspectCheckpointRequest) (InspectCheckpointResult, error) {
 	if c.inspectFunc == nil {
-		return InspectCheckpointResult{Schema: inspectBundleSchema, SchemaVersion: 1, Version: 8, VMStatePresent: true, CanAttach: true, CanRunFrom: true, Platform: validHostInfo().Platform}, nil
+		return InspectCheckpointResult{Schema: inspectBundleSchema, SchemaVersion: 1, Version: 8, VMStatePresent: true, CanAttach: true, CanRunFrom: true, Platform: validHostInfo().Platform, Generation: 17}, nil
 	}
 	return c.inspectFunc(ctx, req)
 }

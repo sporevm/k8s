@@ -231,6 +231,7 @@ type materializedCheckpoint struct {
 	Checkpoint fleet.Checkpoint
 	ParentDir  string
 	HostClass  fleet.HostClass
+	Generation uint64
 }
 
 type prepareOperation struct {
@@ -419,7 +420,7 @@ func (r *Runner) prepareBundle(ctx context.Context, req PrepareCheckpointRequest
 	prepared.TimingsMS.Push = elapsedMS(packStart, r.now())
 
 	inspectStart := r.now()
-	hostClass, err := r.inspectCheckpoint(ctx, prepared.ParentDir, len(req.Run.Children.Command) == 0)
+	hostClass, generation, err := r.inspectCheckpoint(ctx, prepared.ParentDir, len(req.Run.Children.Command) == 0)
 	prepared.TimingsMS.Inspect = elapsedMS(inspectStart, r.now())
 	if err != nil {
 		return fleet.PreparedCheckpoint{}, err
@@ -439,7 +440,7 @@ func (r *Runner) prepareBundle(ctx context.Context, req PrepareCheckpointRequest
 	if _, err := req.Run.Compile(result); err != nil {
 		return fleet.PreparedCheckpoint{}, err
 	}
-	r.checkpoints.Store(req.Run.RunID, materializedCheckpoint{Checkpoint: result.Checkpoint, ParentDir: prepared.ParentDir, HostClass: hostClass})
+	r.checkpoints.Store(req.Run.RunID, materializedCheckpoint{Checkpoint: result.Checkpoint, ParentDir: prepared.ParentDir, HostClass: hostClass, Generation: generation})
 	return result, nil
 }
 
@@ -985,7 +986,7 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	outDir := parent.ParentDir
 	generationPath := filepath.Join(filepath.Dir(outDir), attemptID+".generation.json")
 	defer os.Remove(generationPath)
-	if err := writeGenerationFile(generationPath, req.Run, req.ChildID); err != nil {
+	if err := writeGenerationFile(generationPath, req.Run, req.ChildID, parent.Generation); err != nil {
 		return r.failAttempt(ctx, req.Run, result, "agent.generation_failed", err.Error(), false)
 	}
 
@@ -1226,27 +1227,31 @@ func bundleSource(run fleet.CheckpointRun) string {
 }
 
 type generationPayload struct {
-	RunID         string `json:"run_id"`
-	ChildID       int    `json:"child_id"`
-	ParallelIndex int    `json:"parallel_index"`
-	ParallelCount int    `json:"parallel_count"`
-	ForkIndex     int    `json:"fork_index"`
-	ForkCount     int    `json:"fork_count"`
-	ForkBatchID   string `json:"fork_batch_id"`
-	VMID          string `json:"vm_id"`
+	RunID            string `json:"run_id"`
+	ChildID          int    `json:"child_id"`
+	ParallelIndex    int    `json:"parallel_index"`
+	ParallelCount    int    `json:"parallel_count"`
+	ForkIndex        int    `json:"fork_index"`
+	ForkCount        int    `json:"fork_count"`
+	ForkBatchID      string `json:"fork_batch_id"`
+	VMID             string `json:"vm_id"`
+	ParentGeneration uint64 `json:"parent_generation"`
+	Generation       uint64 `json:"generation"`
 }
 
-func writeGenerationFile(path string, run fleet.CheckpointRun, childID int) error {
+func writeGenerationFile(path string, run fleet.CheckpointRun, childID int, parentGeneration uint64) error {
 	index := childID - run.Children.Start
 	payload := generationPayload{
-		RunID:         run.RunID,
-		ChildID:       childID,
-		ParallelIndex: index,
-		ParallelCount: run.Children.Count,
-		ForkIndex:     index,
-		ForkCount:     run.Children.Count,
-		ForkBatchID:   run.RunID,
-		VMID:          run.RunID + "-child-" + strconv.Itoa(childID),
+		RunID:            run.RunID,
+		ChildID:          childID,
+		ParallelIndex:    index,
+		ParallelCount:    run.Children.Count,
+		ForkIndex:        index,
+		ForkCount:        run.Children.Count,
+		ForkBatchID:      run.RunID,
+		VMID:             run.RunID + "-child-" + strconv.Itoa(childID),
+		ParentGeneration: parentGeneration,
+		Generation:       parentGeneration + 1,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

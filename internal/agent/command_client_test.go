@@ -183,8 +183,12 @@ exit 2
 	}
 }
 
-func TestCommandClientInspectBundle(t *testing.T) {
+func TestCommandClientInspectCheckpoint(t *testing.T) {
 	argsFile := filepath.Join(t.TempDir(), "args")
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "manifest.json"), []byte(`{"generation":{"generation":17}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	spore := fakeSpore(t, `
 printf '%s\n' "$*" > "$SPORE_ARGS_FILE"
 if [ "$1" = "--json" ] && [ "$2" = "checkpoint" ] && [ "$3" = "inspect" ]; then
@@ -207,17 +211,17 @@ exit 2
 
 	client := CommandClient{Path: spore, Env: append(os.Environ(), "SPORE_ARGS_FILE="+argsFile)}
 	result, err := client.InspectCheckpoint(context.Background(), InspectCheckpointRequest{
-		Source: "/work/parent.spore",
+		Source: parent,
 	})
 	if err != nil {
 		t.Fatalf("InspectBundle: %v", err)
 	}
-	if result.CanAttach || result.Platform.CounterFrequencyHz != 24000000 {
+	if result.CanAttach || result.Platform.CounterFrequencyHz != 24000000 || result.Generation != 17 {
 		t.Fatalf("checkpoint = %+v", result)
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	if args != "--json checkpoint inspect /work/parent.spore" {
+	if args != "--json checkpoint inspect "+parent {
 		t.Fatalf("args = %q", args)
 	}
 }

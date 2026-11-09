@@ -73,7 +73,29 @@ func (c CommandClient) InspectCheckpoint(ctx context.Context, req InspectCheckpo
 	if err := c.runJSON(ctx, &result, args...); err != nil {
 		return InspectCheckpointResult{}, err
 	}
-	return result, result.Validate()
+	if err := result.Validate(); err != nil {
+		return InspectCheckpointResult{}, err
+	}
+	// The released inspect summary omits the saved generation. Read only this
+	// identity field from the format-v8 manifest after SporeVM has validated it.
+	path := filepath.Join(req.Source, "manifest.json")
+	if !filepath.IsAbs(path) && c.Dir != "" {
+		path = filepath.Join(c.Dir, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return InspectCheckpointResult{}, fmt.Errorf("read checkpoint generation: %w", err)
+	}
+	var manifest struct {
+		Generation struct {
+			Generation uint64 `json:"generation"`
+		} `json:"generation"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return InspectCheckpointResult{}, fmt.Errorf("decode checkpoint generation: %w", err)
+	}
+	result.Generation = manifest.Generation.Generation
+	return result, nil
 }
 
 // Pull runs `spore --json checkpoint pull`.

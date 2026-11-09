@@ -265,6 +265,7 @@ type InspectCheckpointResult struct {
 	CanAttach      bool          `json:"can_attach"`
 	CanRunFrom     bool          `json:"can_run_from"`
 	Platform       PlatformFacts `json:"platform"`
+	Generation     uint64        `json:"-"` // Verified local manifest; v0.18 inspect omits this field.
 }
 
 // Validate requires the released checkpoint format and executable VM state.
