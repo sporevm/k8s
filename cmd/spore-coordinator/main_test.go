@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	testBundleDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	testBundleDigest = "blake3:2222222222222222222222222222222222222222222222222222222222222222"
 	testPinnedImage  = "docker.io/library/node@sha256:6db9be2ebb4bafb687a078ef5ba1b1dd256e8004d246a31fd210b6b848ab6be2"
 )
 
@@ -55,26 +55,25 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	}
 	if report.Prepare == nil ||
 		report.Prepare.TimingsMS.RunSave < 0 ||
-		report.Prepare.TimingsMS.Fork < 0 ||
-		report.Prepare.TimingsMS.Pack != 0 ||
-		report.Prepare.TimingsMS.InspectBundle != 0 {
+		report.Prepare.TimingsMS.Push < 0 ||
+		report.Prepare.TimingsMS.Inspect < 0 {
 		t.Fatalf("prepare summary = %+v", report.Prepare)
 	}
 
 	if got := spore.runCaptureCount(); got != 1 {
 		t.Fatalf("run capture count = %d, want 1", got)
 	}
-	if got := spore.packCount(); got != 0 {
-		t.Fatalf("pack count = %d, want 0", got)
+	if got := spore.packCount(); got != 1 {
+		t.Fatalf("push count = %d, want 1", got)
 	}
-	if got := spore.inspectCount(); got != 0 {
-		t.Fatalf("inspect count = %d, want 0", got)
+	if got := spore.inspectCount(); got != 1 {
+		t.Fatalf("inspect count = %d, want 1", got)
 	}
 	if pulls := spore.pullRequests(); len(pulls) != 0 {
 		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
 	}
-	if got := len(spore.removeSavedRequests()); got != 2 {
-		t.Fatalf("remove saved requests = %d, want child and parent", got)
+	if got := len(spore.removeSavedRequests()); got != 1 {
+		t.Fatalf("remove saved requests = %d, want parent", got)
 	}
 }
 
@@ -253,7 +252,7 @@ func TestRunCoordinatorRunUsesPortableBundleWhenRetriesAreEnabled(t *testing.T) 
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("decode report: %v\n%s", err, stdout.String())
 	}
-	if report.Prepare == nil || report.Prepare.BundleDigest != testBundleDigest {
+	if report.Prepare == nil || report.Prepare.CheckpointDigest != testBundleDigest {
 		t.Fatalf("prepare summary = %+v", report.Prepare)
 	}
 	if got := spore.packCount(); got != 1 {
@@ -292,8 +291,8 @@ func TestRunCoordinatorRunReturnsErrorForFailedRuntimeReport(t *testing.T) {
 	if report.Summary.State != "failed" || report.Summary.FailedChildren != 1 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
-	if got := len(spore.removeSavedRequests()); got != 2 {
-		t.Fatalf("remove saved requests = %d, want cleanup after failed child", got)
+	if got := len(spore.removeSavedRequests()); got != 1 {
+		t.Fatalf("remove saved requests = %d, want cleanup of shared parent after failed child", got)
 	}
 }
 
@@ -332,7 +331,7 @@ func TestRunSourceAttemptsCleanupWhenPrepareResponseFails(t *testing.T) {
 	releaseCalled := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/prepare-local":
+		case "/prepare-checkpoint":
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"prepare response lost"}`))
@@ -493,7 +492,6 @@ func newTestAgentServer(t *testing.T, spore *fakeSporeClient, slots int) *httpte
 		Client:  spore,
 		AgentID: "spore-agent-test-0001",
 		CellID:  "test-cell-0001",
-		Region:  "us-east-1",
 		Backend: "kvm",
 		Now:     func() time.Time { return time.Date(2026, 6, 24, 8, 0, 0, 0, time.UTC) },
 	}).Handler()
@@ -586,8 +584,8 @@ func (c *fakeSporeClient) Version(context.Context) (string, error) {
 
 func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	return agent.HostInfo{
-		Schema:        "spore.host-info.v2",
-		SchemaVersion: 2,
+		Schema:        "spore.host-info.v3",
+		SchemaVersion: 3,
 		HostClass:     "linux-arm64-kvm",
 		Platform: agent.PlatformFacts{
 			OS:                 "linux",
@@ -603,19 +601,16 @@ func (c *fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	}, nil
 }
 
-func (c *fakeSporeClient) InspectBundle(context.Context, agent.InspectBundleRequest) (agent.InspectBundleResult, error) {
+func (c *fakeSporeClient) InspectCheckpoint(context.Context, agent.InspectCheckpointRequest) (agent.InspectCheckpointResult, error) {
 	c.mu.Lock()
 	c.inspects++
 	c.mu.Unlock()
-	childCount := c.childCount
-	if childCount == 0 {
-		childCount = 1
-	}
-	return agent.InspectBundleResult{
-		Schema:        "spore.bundle.inspect.v1",
+	info, _ := c.HostInfo(context.Background())
+	return agent.InspectCheckpointResult{
+		Schema:        "spore.inspect.result.v1",
 		SchemaVersion: 1,
-		BundleDigest:  testDigest(c.digest),
-		ChildCount:    childCount,
+		Version:       8, VMStatePresent: true, CanAttach: true, CanRunFrom: true,
+		Platform: info.Platform,
 	}, nil
 }
 
@@ -657,11 +652,11 @@ func (c *fakeSporeClient) Fork(_ context.Context, req agent.ForkRequest) error {
 	return nil
 }
 
-func (c *fakeSporeClient) Pack(context.Context, agent.PackRequest) error {
+func (c *fakeSporeClient) Push(_ context.Context, req agent.PushRequest) (agent.PushResult, error) {
 	c.mu.Lock()
 	c.packs++
 	c.mu.Unlock()
-	return nil
+	return agent.PushResult{Schema: "spore.push.result.v2", SchemaVersion: 2, SporeDigest: c.digest, DigestRef: req.To + "/" + c.digest}, nil
 }
 
 func (c *fakeSporeClient) Pull(_ context.Context, req agent.PullRequest) (agent.PullResult, error) {
@@ -669,10 +664,11 @@ func (c *fakeSporeClient) Pull(_ context.Context, req agent.PullRequest) (agent.
 	c.pulls = append(c.pulls, req)
 	c.mu.Unlock()
 	return agent.PullResult{
-		Schema:        "spore.pull.result.v1",
-		SchemaVersion: 1,
+		Schema:        "spore.pull.result.v2",
+		SchemaVersion: 2,
 		OutDir:        req.OutDir,
-		BundleDigest:  testDigest(c.digest),
+		SporeDigest:   c.digest,
+		Ref:           req.Source,
 	}, nil
 }
 
@@ -768,11 +764,4 @@ func (c *fakeSporeClient) removeSavedRequests() []agent.RemoveSavedSporeRequest 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]agent.RemoveSavedSporeRequest(nil), c.removeSaveds...)
-}
-
-func testDigest(raw string) agent.DigestRef {
-	return agent.DigestRef{
-		Algorithm: "sha256",
-		Hex:       raw[len("sha256:"):],
-	}
 }

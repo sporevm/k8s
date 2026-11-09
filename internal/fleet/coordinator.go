@@ -25,7 +25,7 @@ func RequiredInFlightSlots(childCount int, execution Execution) int {
 }
 
 // ShardSlotDemand returns the execution slots a lease can consume at once.
-func ShardSlotDemand(run BundleRun, lease ShardLease) int {
+func ShardSlotDemand(run CheckpointRun, lease ShardLease) int {
 	return RequiredInFlightSlots(lease.ChildCount, run.Execution)
 }
 
@@ -33,7 +33,7 @@ func ShardSlotDemand(run BundleRun, lease ShardLease) int {
 // because a cell runs one agent until multi-agent bundle handoff exists. The
 // lease may cover more children than the agent can run concurrently; execution
 // remains bounded by RequiredInFlightSlots.
-func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus) (Plan, error) {
+func BuildSingleAgentSequentialPlan(run CheckpointRun, agents []AgentStatus) (Plan, error) {
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -60,14 +60,14 @@ func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus) (Plan, 
 
 	candidate := candidates[candidateIndex]
 	lease := ShardLease{
-		RunID:         run.RunID,
-		BundleDigest:  run.Bundle.Digest,
-		ShardID:       fmt.Sprintf("%s-shard-%04d", run.RunID, 0),
-		ChildStart:    run.Children.Start,
-		ChildCount:    run.Children.Count,
-		AttemptBudget: run.RetryPolicy.MaxAttemptsPerChild,
-		HostClassID:   run.HostClass.ID,
-		AgentID:       candidate.status.AgentID,
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ShardID:          fmt.Sprintf("%s-shard-%04d", run.RunID, 0),
+		ChildStart:       run.Children.Start,
+		ChildCount:       run.Children.Count,
+		AttemptBudget:    run.RetryPolicy.MaxAttemptsPerChild,
+		HostClassID:      run.HostClass.ID,
+		AgentID:          candidate.status.AgentID,
 	}
 
 	summary.AssignedShards = 1
@@ -76,7 +76,7 @@ func BuildSingleAgentSequentialPlan(run BundleRun, agents []AgentStatus) (Plan, 
 	return Plan{Summary: summary, Lease: lease}, nil
 }
 
-func candidateAgents(run BundleRun, agents []AgentStatus) ([]candidateAgent, PlanSummary, error) {
+func candidateAgents(run CheckpointRun, agents []AgentStatus) ([]candidateAgent, PlanSummary, error) {
 	summary := PlanSummary{AgentCount: len(agents)}
 	candidates := make([]candidateAgent, 0, len(agents))
 

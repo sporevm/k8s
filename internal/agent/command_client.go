@@ -62,42 +62,26 @@ func (c CommandClient) HostInfo(ctx context.Context) (HostInfo, error) {
 	return result, result.Validate()
 }
 
-// InspectBundle runs `spore --json inspect-bundle`.
-func (c CommandClient) InspectBundle(ctx context.Context, req InspectBundleRequest) (InspectBundleResult, error) {
+// InspectCheckpoint runs `spore --json checkpoint inspect`.
+func (c CommandClient) InspectCheckpoint(ctx context.Context, req InspectCheckpointRequest) (InspectCheckpointResult, error) {
 	if err := req.validate(); err != nil {
-		return InspectBundleResult{}, err
+		return InspectCheckpointResult{}, err
 	}
-	args := []string{"--json", "inspect-bundle", req.Source}
-	if req.ChildID != "" {
-		args = append(args, "--child", req.ChildID)
-	}
-	if req.ChildRange != nil {
-		args = append(args, "--child-range", strconv.Itoa(req.ChildRange.Start)+".."+strconv.Itoa(req.ChildRange.End))
-	}
+	args := []string{"--json", "checkpoint", "inspect", req.Source}
 
-	var result InspectBundleResult
+	var result InspectCheckpointResult
 	if err := c.runJSON(ctx, &result, args...); err != nil {
-		return InspectBundleResult{}, err
+		return InspectCheckpointResult{}, err
 	}
 	return result, result.Validate()
 }
 
-// Pull runs `spore --json pull`.
+// Pull runs `spore --json checkpoint pull`.
 func (c CommandClient) Pull(ctx context.Context, req PullRequest) (PullResult, error) {
 	if err := req.validate(); err != nil {
 		return PullResult{}, err
 	}
-	args := []string{"--json", "pull", req.Source}
-	if req.ChildID != "" {
-		args = append(args, "--child", req.ChildID)
-	}
-	if req.AllowMetadataOnlyRootFS {
-		args = append(args, "--allow-metadata-only-rootfs")
-	}
-	args = append(args, "--out", req.OutDir)
-	if req.Region != "" {
-		args = append(args, "--region", req.Region)
-	}
+	args := []string{"--json", "checkpoint", "pull", req.Source, "--output", req.OutDir}
 
 	var result PullResult
 	if err := c.runJSON(ctx, &result, args...); err != nil {
@@ -155,16 +139,16 @@ func (c CommandClient) Fork(ctx context.Context, req ForkRequest) error {
 	return nil
 }
 
-// Pack runs `spore pack`.
-func (c CommandClient) Pack(ctx context.Context, req PackRequest) error {
+// Push publishes a native parent checkpoint and returns its immutable identity.
+func (c CommandClient) Push(ctx context.Context, req PushRequest) (PushResult, error) {
 	if err := req.validate(); err != nil {
-		return err
+		return PushResult{}, err
 	}
-	_, stderr, err := c.run(ctx, "pack", req.ParentDir, "--children", req.ChildrenDir, "--out", req.OutDir)
-	if err != nil {
-		return commandError(err, stderr)
+	var result PushResult
+	if err := c.runJSON(ctx, &result, "--json", "checkpoint", "push", req.ParentDir, "--to", req.To); err != nil {
+		return PushResult{}, err
 	}
-	return nil
+	return result, result.Validate()
 }
 
 // Resume attaches or restores a saved spore session.
@@ -276,6 +260,10 @@ func (c CommandClient) RemoveSavedSpore(ctx context.Context, req RemoveSavedSpor
 	}
 	var result removedSavedSporeResult
 	if err := c.runJSON(ctx, &result, "--json", "checkpoint", "rm", req.SporeDir); err != nil {
+		var machineErr *MachineError
+		if errors.As(err, &machineErr) && machineErr.Envelope.Error.Code == "object.not_found" {
+			return nil
+		}
 		return err
 	}
 	return result.Validate()

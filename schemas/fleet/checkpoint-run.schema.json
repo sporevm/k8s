@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sporevm.dev/schemas/fleet/bundle-run.schema.json",
-  "title": "SporeVM fleet bundle run",
+  "$id": "https://sporevm.dev/schemas/fleet/checkpoint-run.schema.json",
+  "title": "SporeVM fleet checkpoint run",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "runID",
-    "bundle",
+    "checkpoint",
     "children",
     "hostClass",
     "execution",
@@ -19,7 +19,7 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
     },
-    "bundle": {
+    "checkpoint": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -33,7 +33,7 @@
         },
         "digest": {
           "type": "string",
-          "pattern": "^sha256:[a-f0-9]{64}$"
+          "pattern": "^blake3:[a-f0-9]{64}$"
         }
       }
     },

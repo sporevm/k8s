@@ -19,13 +19,13 @@ import (
 )
 
 const (
-	defaultNamespace          = "sporevm-system"
-	defaultImage              = "ghcr.io/sporevm/k8s-runtime:0.1.19"
-	defaultResultRoot         = "/var/lib/sporevm/coordinator-results"
-	defaultRunMountPath       = "/etc/sporevm/run/run.json"
-	defaultBundleRunMountPath = "/etc/sporevm/run/bundle-run.json"
-	defaultRuntimePolicy      = "Always"
-	submitUsage               = "usage: sporectl submit [flags] RUN.json"
+	defaultNamespace              = "sporevm-system"
+	defaultImage                  = "ghcr.io/sporevm/k8s-runtime:0.1.19"
+	defaultResultRoot             = "/var/lib/sporevm/coordinator-results"
+	defaultRunMountPath           = "/etc/sporevm/run/run.json"
+	defaultCheckpointRunMountPath = "/etc/sporevm/run/checkpoint-run.json"
+	defaultRuntimePolicy          = "Always"
+	submitUsage                   = "usage: sporectl submit [flags] RUN.json"
 )
 
 type submitOptions struct {
@@ -243,7 +243,7 @@ func buildSubmitResourcesFromOptions(opts submitOptions) (resourceList, resource
 
 	switch kind {
 	case submitRunKindBundle:
-		run, err := fleet.DecodeBundleRun(bytes.NewReader(runBytes))
+		run, err := fleet.DecodeCheckpointRun(bytes.NewReader(runBytes))
 		if err != nil {
 			return resourceList{}, resourceNames{}, submitDetails{}, err
 		}
@@ -310,7 +310,7 @@ func buildkiteRunAnnotation(details submitDetails, report fleet.RuntimeReport, r
 type submitRunKind string
 
 const (
-	submitRunKindBundle submitRunKind = "bundle"
+	submitRunKindBundle submitRunKind = "checkpoint"
 	submitRunKindRun    submitRunKind = "run"
 )
 
@@ -328,7 +328,10 @@ func detectSubmitRunKind(data []byte) (submitRunKind, error) {
 		return "", fmt.Errorf("%w: decode trailing run input data: %v", fleet.ErrInvalidContract, err)
 	}
 
-	_, hasBundle := fields["bundle"]
+	if _, legacy := fields["bundle"]; legacy {
+		return "", fmt.Errorf("%w: bundles were removed; recreate a native v0.18 checkpoint and submit checkpoint fields", fleet.ErrInvalidContract)
+	}
+	_, hasBundle := fields["checkpoint"]
 	_, hasHostClass := fields["hostClass"]
 	_, hasSource := fields["source"]
 	_, hasPrepare := fields["prepare"]
@@ -337,7 +340,7 @@ func detectSubmitRunKind(data []byte) (submitRunKind, error) {
 	hasBundleRunFields := hasBundle || hasHostClass
 	hasRunFields := hasSource || hasPrepare || hasFork
 	if hasBundleRunFields && hasRunFields {
-		return "", fmt.Errorf("%w: run input mixes bundle run fields with run fields", fleet.ErrInvalidContract)
+		return "", fmt.Errorf("%w: run input mixes checkpoint run fields with run fields", fleet.ErrInvalidContract)
 	}
 	if hasRunFields {
 		return submitRunKindRun, nil
@@ -345,7 +348,7 @@ func detectSubmitRunKind(data []byte) (submitRunKind, error) {
 	if hasBundleRunFields {
 		return submitRunKindBundle, nil
 	}
-	return "", fmt.Errorf("%w: run input must include either run fields (source, prepare, fork) or bundle run fields (bundle, hostClass)", fleet.ErrInvalidContract)
+	return "", fmt.Errorf("%w: run input must include either run fields (source, prepare, fork) or checkpoint run fields (checkpoint, hostClass)", fleet.ErrInvalidContract)
 }
 
 type resourceNames struct {
@@ -361,15 +364,15 @@ type submitPayload struct {
 	Bytes           []byte
 }
 
-func buildBundleSubmitResources(run fleet.BundleRun, runBytes []byte, opts submitOptions) (resourceList, resourceNames, error) {
+func buildBundleSubmitResources(run fleet.CheckpointRun, runBytes []byte, opts submitOptions) (resourceList, resourceNames, error) {
 	if err := run.Validate(); err != nil {
 		return resourceList{}, resourceNames{}, err
 	}
 	return buildSubmitResourcesForPayload(submitPayload{
 		RunID:           run.RunID,
-		ConfigMapKey:    "bundle-run.json",
-		CoordinatorFlag: "bundle-run",
-		MountPath:       defaultBundleRunMountPath,
+		ConfigMapKey:    "checkpoint-run.json",
+		CoordinatorFlag: "checkpoint-run",
+		MountPath:       defaultCheckpointRunMountPath,
 		Bytes:           runBytes,
 	}, opts)
 }

@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": [
     "runID",
-    "bundleDigest",
+    "checkpointDigest",
     "shardID",
     "childStart",
     "childCount",
@@ -19,9 +19,9 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
     },
-    "bundleDigest": {
+    "checkpointDigest": {
       "type": "string",
-      "pattern": "^sha256:[a-f0-9]{64}$"
+      "pattern": "^blake3:[a-f0-9]{64}$"
     },
     "shardID": {
       "type": "string",

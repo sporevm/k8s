@@ -3,9 +3,7 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,10 +52,10 @@ type SporeClient interface {
 	Executable() (string, error)
 	Version(context.Context) (string, error)
 	HostInfo(context.Context) (HostInfo, error)
-	InspectBundle(context.Context, InspectBundleRequest) (InspectBundleResult, error)
+	InspectCheckpoint(context.Context, InspectCheckpointRequest) (InspectCheckpointResult, error)
 	RunCapture(context.Context, RunCaptureRequest) ([]RunEvent, error)
 	Fork(context.Context, ForkRequest) error
-	Pack(context.Context, PackRequest) error
+	Push(context.Context, PushRequest) (PushResult, error)
 	Pull(context.Context, PullRequest) (PullResult, error)
 	Resume(context.Context, ResumeRequest) ([]RunEvent, error)
 	RestoreNamed(context.Context, RestoreNamedRequest) (NamedLifecycleResult, error)
@@ -131,7 +129,7 @@ type MetricsSink interface {
 // AttemptMetrics is the agent-local metric surface for one child attempt.
 type AttemptMetrics struct {
 	RunID                    string
-	BundleDigest             string
+	CheckpointDigest         string
 	ChildID                  int
 	AttemptID                string
 	AgentID                  string
@@ -226,6 +224,13 @@ type Runner struct {
 	sandboxes        map[string]func()
 	prepareOpsMu     sync.Mutex
 	prepareOps       map[string]*prepareOperation
+	checkpoints      sync.Map // run ID -> materializedCheckpoint; operations use the run gate
+}
+
+type materializedCheckpoint struct {
+	Checkpoint fleet.Checkpoint
+	ParentDir  string
+	HostClass  fleet.HostClass
 }
 
 type prepareOperation struct {
@@ -310,8 +315,8 @@ type StatusRequest struct {
 	ObservedAt time.Time
 }
 
-// PrepareBundleRequest describes one local run preparation.
-type PrepareBundleRequest struct {
+// PrepareCheckpointRequest describes one local run preparation.
+type PrepareCheckpointRequest struct {
 	Run     fleet.Run
 	Backend string
 }
@@ -323,11 +328,9 @@ type PreparedRunCleanup struct {
 }
 
 type localPreparation struct {
-	HostClass   fleet.HostClass
-	ParentDir   string
-	ChildrenDir string
-	BundleDir   string
-	TimingsMS   fleet.PrepareTimings
+	HostClass fleet.HostClass
+	ParentDir string
+	TimingsMS fleet.PrepareTimings
 }
 
 // Status reports live capacity with the process-stable SporeVM host class.
@@ -382,109 +385,65 @@ func (r *Runner) hostClass(ctx context.Context, backend string) (fleet.HostClass
 	return hostClass, nil
 }
 
-// PrepareLocal prepares and forks a source run without building a portable bundle.
-func (r *Runner) PrepareLocal(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
+// PrepareCheckpoint captures one parent for isolated execution across all children.
+func (r *Runner) PrepareCheckpoint(ctx context.Context, req PrepareCheckpointRequest) (result fleet.PreparedCheckpoint, err error) {
 	unlock, err := r.lockPrepareOperation(ctx, req.Run.RunID)
 	if err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	defer unlock()
-	return r.prepareLocal(ctx, req)
-}
-
-func (r *Runner) prepareLocal(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
-	prepared, err := r.prepareChildren(ctx, req)
-	if err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	defer func() {
-		err = r.releasePreparedAfterError(ctx, req.Run, err)
-	}()
-	result = fleet.PreparedBundle{
-		Bundle: fleet.Bundle{
-			URI:    "local://prepared/" + req.Run.RunID,
-			Digest: localPreparedDigest(req.Run, prepared.HostClass),
-		},
-		ChildCount: req.Run.Fork.Count,
-		HostClass:  prepared.HostClass,
-		Local: &fleet.PreparedLocalBundle{
-			ParentDir:   prepared.ParentDir,
-			ChildrenDir: prepared.ChildrenDir,
-		},
-		TimingsMS: prepared.TimingsMS,
-	}
-	if _, err := req.Run.Compile(result); err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	return result, nil
-}
-
-// PrepareBundle prepares, forks, packs, and inspects a source run bundle locally.
-func (r *Runner) PrepareBundle(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
-	unlock, err := r.lockPrepareOperation(ctx, req.Run.RunID)
-	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return fleet.PreparedCheckpoint{}, err
 	}
 	defer unlock()
 	return r.prepareBundle(ctx, req)
 }
 
-func (r *Runner) prepareBundle(ctx context.Context, req PrepareBundleRequest) (result fleet.PreparedBundle, err error) {
+func (r *Runner) prepareBundle(ctx context.Context, req PrepareCheckpointRequest) (result fleet.PreparedCheckpoint, err error) {
 	prepared, err := r.prepareChildren(ctx, req)
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return fleet.PreparedCheckpoint{}, err
 	}
 	defer func() {
 		err = r.releasePreparedAfterError(ctx, req.Run, err)
 	}()
 
 	packStart := r.now()
-	if err := r.client.Pack(ctx, PackRequest{
-		ParentDir:   prepared.ParentDir,
-		ChildrenDir: prepared.ChildrenDir,
-		OutDir:      prepared.BundleDir,
-	}); err != nil {
-		return fleet.PreparedBundle{}, err
-	}
-	prepared.TimingsMS.Pack = elapsedMS(packStart, r.now())
-
-	bundleURI, err := fileURI(prepared.BundleDir)
+	storeURI, err := fileURI(filepath.Join(filepath.Dir(prepared.ParentDir), "store", "parent"))
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return fleet.PreparedCheckpoint{}, err
 	}
-	inspectStart := r.now()
-	inspection, err := r.client.InspectBundle(ctx, InspectBundleRequest{
-		Source: bundleURI,
-		ChildRange: &ChildRangeSelection{
-			Start: req.Run.Children.Start,
-			End:   req.Run.Children.ChildRange().End(),
-		},
+	pushed, err := r.client.Push(ctx, PushRequest{
+		ParentDir: prepared.ParentDir,
+		To:        storeURI,
 	})
-	prepared.TimingsMS.InspectBundle = elapsedMS(inspectStart, r.now())
 	if err != nil {
-		return fleet.PreparedBundle{}, err
+		return fleet.PreparedCheckpoint{}, err
 	}
-	result = fleet.PreparedBundle{
-		Bundle: fleet.Bundle{
-			URI:    bundleURI,
-			Digest: inspection.BundleDigest.String(),
+	prepared.TimingsMS.Push = elapsedMS(packStart, r.now())
+
+	inspectStart := r.now()
+	hostClass, err := r.inspectCheckpoint(ctx, prepared.ParentDir, len(req.Run.Children.Command) == 0)
+	prepared.TimingsMS.Inspect = elapsedMS(inspectStart, r.now())
+	if err != nil {
+		return fleet.PreparedCheckpoint{}, err
+	}
+	result = fleet.PreparedCheckpoint{
+		Checkpoint: fleet.Checkpoint{
+			URI:    pushed.DigestRef,
+			Digest: pushed.SporeDigest,
 		},
-		ChildCount: inspection.ChildCount,
-		HostClass:  prepared.HostClass,
-		Local: &fleet.PreparedLocalBundle{
-			ParentDir:   prepared.ParentDir,
-			ChildrenDir: prepared.ChildrenDir,
-			BundleDir:   prepared.BundleDir,
+		ChildCount: req.Run.Fork.Count,
+		HostClass:  hostClass,
+		Local: &fleet.PreparedLocalCheckpoint{
+			ParentDir: prepared.ParentDir,
 		},
 		TimingsMS: prepared.TimingsMS,
 	}
 	if _, err := req.Run.Compile(result); err != nil {
-		return fleet.PreparedBundle{}, err
+		return fleet.PreparedCheckpoint{}, err
 	}
+	r.checkpoints.Store(req.Run.RunID, materializedCheckpoint{Checkpoint: result.Checkpoint, ParentDir: prepared.ParentDir, HostClass: hostClass})
 	return result, nil
 }
 
-func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) (prepared localPreparation, err error) {
+func (r *Runner) prepareChildren(ctx context.Context, req PrepareCheckpointRequest) (prepared localPreparation, err error) {
 	if r.client == nil {
 		return localPreparation{}, ErrSporeClientNotConfigured
 	}
@@ -506,8 +465,6 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 
 	root := r.prepareWorkDir(req.Run)
 	parentDir := filepath.Join(root, "parent.spore")
-	childrenDir := filepath.Join(root, "children")
-	bundleDir := filepath.Join(root, "bundle")
 	if _, err := r.releasePreparedRun(ctx, req.Run); err != nil {
 		return localPreparation{}, err
 	}
@@ -540,22 +497,10 @@ func (r *Runner) prepareChildren(ctx context.Context, req PrepareBundleRequest) 
 	if !terminal.Captured || terminal.CapturePath == nil {
 		return localPreparation{}, invalidMachineOutput("prepare did not capture parent")
 	}
-	forkStart := r.now()
-	if err := r.client.Fork(ctx, ForkRequest{
-		ParentDir: parentDir,
-		Count:     req.Run.Fork.Count,
-		OutDir:    childrenDir,
-	}); err != nil {
-		return localPreparation{}, err
-	}
-	timings.Fork = elapsedMS(forkStart, r.now())
-
 	return localPreparation{
-		HostClass:   hostClass,
-		ParentDir:   parentDir,
-		ChildrenDir: childrenDir,
-		BundleDir:   bundleDir,
-		TimingsMS:   timings,
+		HostClass: hostClass,
+		ParentDir: parentDir,
+		TimingsMS: timings,
 	}, nil
 }
 
@@ -629,6 +574,7 @@ func (r *Runner) releasePreparedRun(ctx context.Context, run fleet.Run) (Prepare
 	if err := os.RemoveAll(root); err != nil {
 		return result, err
 	}
+	r.checkpoints.Delete(run.RunID)
 	return result, nil
 }
 
@@ -810,7 +756,7 @@ func validatePreparedTree(root string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() != "children" && entry.Name() != "parent.spore" && entry.Name() != "bundle" && entry.Name() != preparedCleanupLedgerName && entry.Name() != preparedCleanupLedgerTempName {
+		if entry.Name() != "children" && entry.Name() != "parent.spore" && entry.Name() != "store" && entry.Name() != preparedCleanupLedgerName && entry.Name() != preparedCleanupLedgerTempName {
 			return fmt.Errorf("unexpected prepared entry %s", entry.Name())
 		}
 		ledgerFile := entry.Name() == preparedCleanupLedgerName || entry.Name() == preparedCleanupLedgerTempName
@@ -899,27 +845,21 @@ func isPreparedChildDir(name string) bool {
 
 // RunChildRequest describes one child execution attempt inside a shard lease.
 type RunChildRequest struct {
-	Run                     fleet.BundleRun
-	Lease                   fleet.ShardLease
-	ChildID                 int
-	Attempt                 int
-	Pressure                fleet.Pressure
-	Region                  string
-	AllowMetadataOnlyRootFS bool
-	Backend                 string
-	LocalChildrenDir        string
+	Run      fleet.CheckpointRun
+	Lease    fleet.ShardLease
+	ChildID  int
+	Attempt  int
+	Pressure fleet.Pressure
+	Backend  string
 }
 
 // RunShardRequest describes execution of every child assigned by a shard lease.
 type RunShardRequest struct {
-	Run                     fleet.BundleRun
-	Lease                   fleet.ShardLease
-	Attempt                 int
-	Pressure                fleet.Pressure
-	Region                  string
-	AllowMetadataOnlyRootFS bool
-	Backend                 string
-	LocalChildrenDir        string
+	Run      fleet.CheckpointRun
+	Lease    fleet.ShardLease
+	Attempt  int
+	Pressure fleet.Pressure
+	Backend  string
 }
 
 // RunChild runs one child attempt with a single execution slot reservation.
@@ -967,15 +907,12 @@ func (r *Runner) RunShard(ctx context.Context, req RunShardRequest) ([]fleet.Att
 			defer wg.Done()
 			for childID := range jobs {
 				childReq := RunChildRequest{
-					Run:                     req.Run,
-					Lease:                   req.Lease,
-					ChildID:                 childID,
-					Attempt:                 req.Attempt,
-					Pressure:                req.Pressure,
-					Region:                  req.Region,
-					AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
-					Backend:                 req.Backend,
-					LocalChildrenDir:        req.LocalChildrenDir,
+					Run:      req.Run,
+					Lease:    req.Lease,
+					ChildID:  childID,
+					Attempt:  req.Attempt,
+					Pressure: req.Pressure,
+					Backend:  req.Backend,
 				}
 				result, err := r.runChild(ctx, childReq)
 				results[childID-req.Lease.ChildStart] = result
@@ -1008,15 +945,15 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 	startedAt := r.now()
 	attemptID := fleet.FormatAttemptID(req.Run.RunID, req.ChildID, req.Attempt)
 	result := fleet.AttemptResult{
-		RunID:        req.Run.RunID,
-		BundleDigest: req.Run.Bundle.Digest,
-		ChildID:      req.ChildID,
-		AttemptID:    attemptID,
-		AgentID:      req.Lease.AgentID,
-		ShardID:      req.Lease.ShardID,
-		Status:       fleet.AttemptFailed,
-		StartedAt:    startedAt,
-		FinishedAt:   startedAt,
+		RunID:            req.Run.RunID,
+		CheckpointDigest: req.Run.Checkpoint.Digest,
+		ChildID:          req.ChildID,
+		AttemptID:        attemptID,
+		AgentID:          req.Lease.AgentID,
+		ShardID:          req.Lease.ShardID,
+		Status:           fleet.AttemptFailed,
+		StartedAt:        startedAt,
+		FinishedAt:       startedAt,
 	}
 
 	existing, ok, err := r.results.TerminalResult(ctx, req.Run, req.ChildID)
@@ -1039,42 +976,13 @@ func (r *Runner) runChild(ctx context.Context, req RunChildRequest) (fleet.Attem
 		return result, nil
 	}
 
-	outDir := ""
-	var pull PullResult
-	if req.LocalChildrenDir != "" && req.Attempt == 1 {
-		localStart := r.now()
-		outDir = preparedChildSporeDir(req.LocalChildrenDir, req.ChildID)
-		if err := validatePreparedChildDir(r.workRoot, outDir); err != nil {
-			return r.failAttempt(ctx, req.Run, result, "agent.local_child_missing", err.Error(), false)
-		}
-		result.TimingsMS.LocalChild = elapsedMS(localStart, r.now())
-	} else {
-		outDir = r.childWorkDir(req.Run, req.Lease, req.ChildID, attemptID)
-		if err := os.RemoveAll(outDir); err != nil {
-			return r.failAttempt(ctx, req.Run, result, "agent.cleanup_failed", err.Error(), false)
-		}
-		defer os.RemoveAll(outDir)
-		if err := os.MkdirAll(filepath.Dir(outDir), 0o755); err != nil {
-			return r.failAttempt(ctx, req.Run, result, "agent.workdir_failed", err.Error(), false)
-		}
-
-		pullStart := r.now()
-		var err error
-		pull, err = r.client.Pull(ctx, PullRequest{
-			Source:                  bundleSource(req.Run),
-			OutDir:                  outDir,
-			ChildID:                 strconv.Itoa(req.ChildID),
-			Region:                  req.Region,
-			AllowMetadataOnlyRootFS: req.AllowMetadataOnlyRootFS,
-		})
-		result.TimingsMS.ArtifactPull = elapsedMS(pullStart, r.now())
-		if err != nil {
-			return r.failAttemptFromError(ctx, req.Run, result, err, false)
-		}
-		if pull.BundleDigest.String() != req.Run.Bundle.Digest {
-			return r.failAttemptWithPull(ctx, req.Run, result, "object.invalid", "pull result bundle digest did not match run bundle digest", false, pull)
-		}
+	pullStart := r.now()
+	parent, pull, err := r.materializeCheckpoint(ctx, req.Run)
+	result.TimingsMS.ArtifactPull = elapsedMS(pullStart, r.now())
+	if err != nil {
+		return r.failAttemptFromError(ctx, req.Run, result, err, false)
 	}
+	outDir := parent.ParentDir
 	generationPath := filepath.Join(filepath.Dir(outDir), attemptID+".generation.json")
 	defer os.Remove(generationPath)
 	if err := writeGenerationFile(generationPath, req.Run, req.ChildID); err != nil {
@@ -1223,7 +1131,7 @@ func (r *Runner) validateRunChildRequest(req RunChildRequest) error {
 	return nil
 }
 
-func (r *Runner) failAttemptFromError(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, err error, terminal bool) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptFromError(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult, err error, terminal bool) (fleet.AttemptResult, error) {
 	attemptErr := attemptError(err)
 	status := fleet.AttemptFailed
 	var machineErr *MachineError
@@ -1233,19 +1141,19 @@ func (r *Runner) failAttemptFromError(ctx context.Context, run fleet.BundleRun, 
 	return r.failAttemptWithCause(ctx, run, result, status, attemptErr.Code, attemptErr.Message, terminal, PullResult{}, err)
 }
 
-func (r *Runner) failAttempt(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, code string, message string, terminal bool) (fleet.AttemptResult, error) {
+func (r *Runner) failAttempt(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult, code string, message string, terminal bool) (fleet.AttemptResult, error) {
 	return r.failAttemptWithStatus(ctx, run, result, fleet.AttemptFailed, code, message, terminal, PullResult{})
 }
 
-func (r *Runner) failAttemptWithPull(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptWithPull(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
 	return r.failAttemptWithStatus(ctx, run, result, fleet.AttemptFailed, code, message, terminal, pull)
 }
 
-func (r *Runner) failAttemptWithStatus(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptWithStatus(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult) (fleet.AttemptResult, error) {
 	return r.failAttemptWithCause(ctx, run, result, status, code, message, terminal, pull, errors.New(message))
 }
 
-func (r *Runner) failAttemptWithCause(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult, cause error) (fleet.AttemptResult, error) {
+func (r *Runner) failAttemptWithCause(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult, status fleet.AttemptStatus, code string, message string, terminal bool, pull PullResult, cause error) (fleet.AttemptResult, error) {
 	result.Status = status
 	result.Terminal = terminal
 	result.FinishedAt = r.now()
@@ -1279,28 +1187,6 @@ func resultWriteContext(ctx context.Context) (context.Context, context.CancelFun
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
-func (r *Runner) childWorkDir(run fleet.BundleRun, lease fleet.ShardLease, childID int, attemptID string) string {
-	return filepath.Join(r.workRoot, run.RunID, lease.ShardID, "child-"+strconv.Itoa(childID), attemptID+".spore")
-}
-
-func preparedChildSporeDir(childrenDir string, childID int) string {
-	return filepath.Join(childrenDir, fmt.Sprintf("%06d", childID))
-}
-
-func validatePreparedChildDir(workRoot string, path string) error {
-	if err := validatePathWithin(workRoot, path); err != nil {
-		return err
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", path)
-	}
-	return nil
-}
-
 func validatePathWithin(root string, path string) error {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -1332,31 +1218,11 @@ func fileURI(path string) (string, error) {
 	return (&url.URL{Scheme: "file", Path: abs}).String(), nil
 }
 
-func localPreparedDigest(run fleet.Run, hostClass fleet.HostClass) string {
-	payload, err := json.Marshal(struct {
-		Schema    string          `json:"schema"`
-		Run       fleet.Run       `json:"run"`
-		HostClass fleet.HostClass `json:"hostClass"`
-	}{
-		Schema:    "sporevm-k8s.local-prepared.v1",
-		Run:       run,
-		HostClass: hostClass,
-	})
-	if err != nil {
-		payload = []byte(run.RunID)
+func bundleSource(run fleet.CheckpointRun) string {
+	if strings.HasSuffix(run.Checkpoint.URI, "/"+run.Checkpoint.Digest) {
+		return run.Checkpoint.URI
 	}
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-func bundleSource(run fleet.BundleRun) string {
-	if strings.HasPrefix(run.Bundle.URI, "file://") {
-		return run.Bundle.URI
-	}
-	if strings.HasSuffix(run.Bundle.URI, "@"+run.Bundle.Digest) {
-		return run.Bundle.URI
-	}
-	return run.Bundle.URI + "@" + run.Bundle.Digest
+	return strings.TrimRight(run.Checkpoint.URI, "/") + "/" + run.Checkpoint.Digest
 }
 
 type generationPayload struct {
@@ -1370,7 +1236,7 @@ type generationPayload struct {
 	VMID          string `json:"vm_id"`
 }
 
-func writeGenerationFile(path string, run fleet.BundleRun, childID int) error {
+func writeGenerationFile(path string, run fleet.CheckpointRun, childID int) error {
 	index := childID - run.Children.Start
 	payload := generationPayload{
 		RunID:         run.RunID,
@@ -1498,22 +1364,19 @@ func (r *Runner) observeAttempt(result fleet.AttemptResult, pull PullResult, ter
 	}
 	r.metrics.ObserveAttempt(AttemptMetrics{
 		RunID:                    result.RunID,
-		BundleDigest:             result.BundleDigest,
+		CheckpointDigest:         result.CheckpointDigest,
 		ChildID:                  result.ChildID,
 		AttemptID:                result.AttemptID,
 		AgentID:                  result.AgentID,
 		ShardID:                  result.ShardID,
 		Status:                   result.Status,
 		TimingsMS:                result.TimingsMS,
-		OriginBytesRead:          pull.Remote.OriginBytesRead,
-		PeerBytesRead:            pull.Remote.PeerBytesRead,
-		ChunkCacheHits:           pull.Materialization.Cache.HitCount,
-		ChunkCacheMisses:         pull.Materialization.Cache.MissCount,
-		RootFSCacheHits:          pull.RootFS.Cache.HitCount,
-		RootFSCacheMisses:        pull.RootFS.Cache.MissCount,
-		MaterializedChunkCount:   pull.Materialization.MaterializedChunkCount,
-		LinkedChunkCount:         pull.Materialization.LinkedChunkCount,
-		CopiedChunkCount:         pull.Materialization.CopiedChunkCount,
+		OriginBytesRead:          pull.RAM.BytesFetched + pull.Disk.BytesFetched,
+		ChunkCacheHits:           pull.RAM.Objects - pull.RAM.ObjectsFetched,
+		ChunkCacheMisses:         pull.RAM.ObjectsFetched,
+		RootFSCacheHits:          pull.Disk.Objects - pull.Disk.ObjectsFetched,
+		RootFSCacheMisses:        pull.Disk.ObjectsFetched,
+		MaterializedChunkCount:   pull.RAM.ObjectsFetched,
 		PlatformMismatch:         result.Status == fleet.AttemptPlatformMismatch,
 		TerminalCommitAttempted:  terminalCommitAttempted,
 		TerminalCommitSuccessful: terminalCommitSuccessful,

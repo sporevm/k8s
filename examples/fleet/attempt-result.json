@@ -1,6 +1,6 @@
 {
   "runID": "ruby-counter-20260620",
-  "bundleDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "checkpointDigest": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
   "childID": 742,
   "attemptID": "ruby-counter-20260620-child-742-attempt-01",
   "agentID": "spore-agent-us-east-1a-0001",

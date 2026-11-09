@@ -77,7 +77,7 @@ func NewS3ResultStore(ctx context.Context, opts S3ResultStoreOptions) (*S3Result
 }
 
 // TerminalResult reads a previously committed terminal result if present.
-func (s *S3ResultStore) TerminalResult(ctx context.Context, run fleet.BundleRun, childID int) (fleet.AttemptResult, bool, error) {
+func (s *S3ResultStore) TerminalResult(ctx context.Context, run fleet.CheckpointRun, childID int) (fleet.AttemptResult, bool, error) {
 	if err := run.Validate(); err != nil {
 		return fleet.AttemptResult{}, false, err
 	}
@@ -104,7 +104,7 @@ func (s *S3ResultStore) TerminalResult(ctx context.Context, run fleet.BundleRun,
 }
 
 // WriteAttemptResult writes an append-only attempt result document.
-func (s *S3ResultStore) WriteAttemptResult(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult) error {
+func (s *S3ResultStore) WriteAttemptResult(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult) error {
 	if err := result.Validate(run); err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func (s *S3ResultStore) WriteAttemptResult(ctx context.Context, run fleet.Bundle
 }
 
 // CommitTerminalResult atomically creates the terminal object when it does not exist.
-func (s *S3ResultStore) CommitTerminalResult(ctx context.Context, run fleet.BundleRun, result fleet.AttemptResult) (bool, error) {
+func (s *S3ResultStore) CommitTerminalResult(ctx context.Context, run fleet.CheckpointRun, result fleet.AttemptResult) (bool, error) {
 	if err := result.Validate(run); err != nil {
 		return false, err
 	}
@@ -159,7 +159,7 @@ func (s *S3ResultStore) putJSONCreateOnly(ctx context.Context, uri string, value
 	return true, nil
 }
 
-func decodeTerminalResult(reader io.Reader, run fleet.BundleRun) (fleet.AttemptResult, error) {
+func decodeTerminalResult(reader io.Reader, run fleet.CheckpointRun) (fleet.AttemptResult, error) {
 	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
 	var result fleet.AttemptResult

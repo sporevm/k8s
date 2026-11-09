@@ -62,7 +62,6 @@ spec:
             {{- end }}
             - --result-store-path-style={{ .Values.agent.resultStore.pathStyle }}
             - --work-root={{ .Values.agent.cache.workDir }}
-            - --bundle-cache-root={{ .Values.agent.cache.bundleDir }}
             - --rootfs-cache-root={{ .Values.agent.cache.rootfsDir }}
             - --template-retain={{ .Values.agent.cache.templateRetain }}
             - --template-reconcile-interval={{ .Values.agent.cache.templateReconcileInterval }}
@@ -84,8 +83,6 @@ spec:
               value: {{ printf "%s/runtime" .Values.agent.cache.workDir | quote }}
             - name: SPOREVM_KERNEL_CACHE_DIR
               value: {{ .Values.agent.cache.kernelDir | quote }}
-            - name: SPOREVM_BUNDLE_CACHE_DIR
-              value: {{ .Values.agent.cache.bundleDir | quote }}
             - name: SPOREVM_ROOTFS_CACHE_DIR
               value: {{ .Values.agent.cache.rootfsDir | quote }}
           readinessProbe:

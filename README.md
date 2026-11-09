@@ -14,6 +14,38 @@ Private infrastructure belongs in an ops repo. Keep cloud accounts, live
 cluster roots, state backends, private image repositories, queues, and operator
 runbooks out of this repository.
 
+## SporeVM 0.18 migration
+
+The source runtime image now builds with SporeVM 0.18.0 and AWS CLI v2. This
+does not change already-published image tags. Deploy a newly built image
+explicitly; the chart's existing published default is not a v0.18 upgrade.
+
+This is a clean break. Stop old named VMs before replacing the runtime and
+recreate old checkpoints and boot templates as format v8. Old bundles cannot
+be converted by editing their manifest version. Keep the old binary and state
+separate if rollback is required.
+
+Batch runs now reuse one immutable native checkpoint, with per-child generation
+JSON and independent writable state. Prebuilt submissions use `checkpoint`
+and a `blake3:` digest, not `bundle` or an OCI `sha256:` digest. The coordinator
+accepts `--checkpoint-run` / `SPORE_CHECKPOINT_RUN_PATH`; lease, inspection and
+result documents use `checkpointDigest`. See
+[the checkpoint example](examples/fleet/checkpoint-run-1000.json).
+The agent's preparation and inspection endpoints are `/prepare-checkpoint`
+and `/inspect-run-checkpoint`. Legacy bundle, metadata-only rootfs and bundle
+cache options are removed.
+
+Native S3 image and checkpoint access uses SporeVM's renewable AWS CLI provider
+chain. Configure its AWS region and workload identity in the environment;
+do not freeze role credentials into an agent process. Result storage keeps its
+separate AWS SDK configuration.
+
+The current coordinator still executes a run on one compatible agent. Warming
+the application, database and cache inside the guest provides forkable service
+state; external services are not checkpointed. Cross-node scheduling is the
+next delivery slice, not a feature enabled by this upgrade. The acceptance
+milestones and networking limits are in [the design plan](docs/plans/design.md#sporevm-0180-migration).
+
 ## Chart
 
 Install the reusable cell components with Helm:

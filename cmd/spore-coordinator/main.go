@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	defaultRunPath         = "/etc/sporevm/run/run.json"
-	defaultBundleRunPath   = "/etc/sporevm/run/bundle-run.json"
-	preparedCleanupTimeout = 2 * time.Minute
+	defaultRunPath           = "/etc/sporevm/run/run.json"
+	defaultCheckpointRunPath = "/etc/sporevm/run/checkpoint-run.json"
+	preparedCleanupTimeout   = 2 * time.Minute
 )
 
 type agentURLsFlag []string
@@ -46,7 +46,7 @@ func (f *agentURLsFlag) Set(value string) error {
 
 type coordinatorConfig struct {
 	RunPath              string
-	BundleRunPath        string
+	CheckpointRunPath    string
 	Listen               string
 	ResultStoreRoot      string
 	ResultStoreBackend   string
@@ -68,7 +68,7 @@ func main() {
 	cfg := coordinatorConfig{}
 
 	flag.StringVar(&cfg.RunPath, "run", envString("SPORE_RUN_PATH", ""), "fleet run JSON path")
-	flag.StringVar(&cfg.BundleRunPath, "bundle-run", envString("SPORE_BUNDLE_RUN_PATH", ""), "prebuilt bundle run JSON path")
+	flag.StringVar(&cfg.CheckpointRunPath, "checkpoint-run", envString("SPORE_CHECKPOINT_RUN_PATH", ""), "native checkpoint run JSON path")
 	flag.StringVar(&cfg.Listen, "listen", envString("SPORE_COORDINATOR_LISTEN", ""), "HTTP listen address for the resident coordinator API")
 	flag.Var(&cfg.AgentURLs, "agent-url", "agent base URL; may be repeated or comma-separated")
 	flag.StringVar(&cfg.ResultStoreRoot, "result-store-root", envString("SPORE_COORDINATOR_RESULT_STORE_ROOT", "/var/lib/sporevm/coordinator-results"), "local root for coordinator terminal prechecks")
@@ -88,7 +88,7 @@ func main() {
 		}
 		return
 	}
-	if cfg.RunPath == "" && cfg.BundleRunPath == "" {
+	if cfg.RunPath == "" && cfg.CheckpointRunPath == "" {
 		cfg.RunPath = defaultRunPath
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -293,10 +293,10 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 	if len(cfg.AgentURLs) == 0 {
 		return errors.New("at least one --agent-url or SPORE_AGENT_URLS entry is required")
 	}
-	if cfg.RunPath != "" && cfg.BundleRunPath != "" {
-		return errors.New("only one of --run or --bundle-run may be set")
+	if cfg.RunPath != "" && cfg.CheckpointRunPath != "" {
+		return errors.New("only one of --run or --checkpoint-run may be set")
 	}
-	if cfg.RunPath == "" && cfg.BundleRunPath == "" {
+	if cfg.RunPath == "" && cfg.CheckpointRunPath == "" {
 		cfg.RunPath = defaultRunPath
 	}
 	if cfg.Timeout <= 0 {
@@ -306,13 +306,13 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	var run fleet.BundleRun
+	var run fleet.CheckpointRun
 	var sourceRun fleet.Run
 	var err error
 	if cfg.RunPath != "" {
 		sourceRun, err = readRun(cfg.RunPath)
 	} else {
-		run, err = readBundleRun(cfg.BundleRunPath)
+		run, err = readBundleRun(cfg.CheckpointRunPath)
 	}
 	if err != nil {
 		return err
@@ -338,7 +338,7 @@ func runCoordinator(ctx context.Context, cfg coordinatorConfig, stdout io.Writer
 	if cfg.RunPath != "" {
 		report, runErr = runSource(runCtx, sourceRun, store, endpoints)
 	} else {
-		report, runErr = runBundle(runCtx, run, store, endpoints, endpoints[0].Client, nil)
+		report, runErr = runBundle(runCtx, run, store, endpoints)
 	}
 	if !hasRuntimeReport(report) {
 		if runErr != nil {
@@ -410,15 +410,15 @@ func writeHTTPError(w http.ResponseWriter, status int, err error) {
 	writeResponseJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-func readBundleRun(path string) (fleet.BundleRun, error) {
+func readBundleRun(path string) (fleet.CheckpointRun, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return fleet.BundleRun{}, fmt.Errorf("open bundle run: %w", err)
+		return fleet.CheckpointRun{}, fmt.Errorf("open bundle run: %w", err)
 	}
 	defer file.Close()
-	run, err := fleet.DecodeBundleRun(file)
+	run, err := fleet.DecodeCheckpointRun(file)
 	if err != nil {
-		return fleet.BundleRun{}, err
+		return fleet.CheckpointRun{}, err
 	}
 	return run, nil
 }
@@ -458,25 +458,35 @@ func discoverAgentEndpoints(ctx context.Context, urls []string, httpClient *http
 	return endpoints, nil
 }
 
-func runBundle(ctx context.Context, run fleet.BundleRun, store fleet.TerminalResultReader, endpoints []agentEndpoint, inspector fleet.BundleInspector, overrides map[string]fleet.ShardExecutor) (fleet.RuntimeReport, error) {
-	if len(endpoints) == 0 || inspector == nil {
+func runBundle(ctx context.Context, run fleet.CheckpointRun, store fleet.TerminalResultReader, endpoints []agentEndpoint) (report fleet.RuntimeReport, err error) {
+	if len(endpoints) == 0 {
 		return fleet.RuntimeReport{}, fleet.ErrCoordinatorNotConfigured
 	}
 	agents := make([]fleet.AgentStatus, 0, len(endpoints))
-	executors := make(map[string]fleet.ShardExecutor, len(endpoints))
 	for _, endpoint := range endpoints {
 		agents = append(agents, endpoint.Status)
-		if override, ok := overrides[endpoint.Status.AgentID]; ok {
-			executors[endpoint.Status.AgentID] = override
-		} else {
-			executors[endpoint.Status.AgentID] = endpoint.Client
+	}
+	plan, err := fleet.BuildSingleAgentSequentialPlan(run, agents)
+	if err != nil {
+		return fleet.RuntimeReport{Plan: plan}, err
+	}
+	var selected agentEndpoint
+	for _, endpoint := range endpoints {
+		if endpoint.Status.AgentID == plan.Lease.AgentID {
+			selected = endpoint
+			break
 		}
 	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preparedCleanupTimeout)
+		defer cancel()
+		err = errors.Join(err, selected.Client.ReleaseCheckpoint(cleanupCtx, run))
+	}()
 	coordinator, err := fleet.NewCoordinator(
-		agents,
-		inspector,
+		[]fleet.AgentStatus{selected.Status},
+		selected.Client,
 		store,
-		executors,
+		map[string]fleet.ShardExecutor{selected.Status.AgentID: selected.Client},
 		fleet.CoordinatorOptions{},
 	)
 	if err != nil {
@@ -490,12 +500,7 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
-	localPrepare := source.RetryPolicy.MaxAttemptsPerChild == 1
-	prepareMode := "local"
-	if !localPrepare {
-		prepareMode = "bundle"
-	}
-	log.Printf("run prepare selected run_id=%s agent_id=%s url=%s mode=%s", source.RunID, endpoint.Status.AgentID, endpoint.URL, prepareMode)
+	log.Printf("run prepare selected run_id=%s agent_id=%s url=%s", source.RunID, endpoint.Status.AgentID, endpoint.URL)
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preparedCleanupTimeout)
 		defer cancel()
@@ -507,12 +512,7 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 		log.Printf("run prepare released run_id=%s agent_id=%s children=%d", source.RunID, endpoint.Status.AgentID, cleanup.RemovedChildren)
 	}()
 
-	var prepared fleet.PreparedBundle
-	if localPrepare {
-		prepared, err = endpoint.Client.PrepareLocal(ctx, source)
-	} else {
-		prepared, err = endpoint.Client.PrepareBundle(ctx, source)
-	}
+	prepared, err := endpoint.Client.PrepareCheckpoint(ctx, source)
 	if err != nil {
 		return fleet.RuntimeReport{}, err
 	}
@@ -521,49 +521,16 @@ func runSource(ctx context.Context, source fleet.Run, store fleet.TerminalResult
 		return fleet.RuntimeReport{}, err
 	}
 	endpoint.Status.HostClass = prepared.HostClass
-	executors := map[string]fleet.ShardExecutor{}
-	if prepared.Local != nil && prepared.Local.ChildrenDir != "" {
-		executors[endpoint.Status.AgentID] = preparedLocalShardExecutor{
-			Client: endpoint.Client,
-			Local:  *prepared.Local,
-		}
-	}
-	inspector := fleet.BundleInspector(endpoint.Client)
-	if localPrepare {
-		inspector = preparedLocalInspector{Prepared: prepared}
-	}
-	report, err = runBundle(ctx, run, store, []agentEndpoint{endpoint}, inspector, executors)
+	report, err = runBundle(ctx, run, store, []agentEndpoint{endpoint})
 	if report.Summary.RunID != "" {
 		report.Prepare = &fleet.RuntimePrepareSummary{
-			AgentID:      endpoint.Status.AgentID,
-			BundleDigest: prepared.Bundle.Digest,
-			ChildCount:   prepared.ChildCount,
-			TimingsMS:    prepared.TimingsMS,
+			AgentID:          endpoint.Status.AgentID,
+			CheckpointDigest: prepared.Checkpoint.Digest,
+			ChildCount:       prepared.ChildCount,
+			TimingsMS:        prepared.TimingsMS,
 		}
 	}
 	return report, err
-}
-
-type preparedLocalInspector struct {
-	Prepared fleet.PreparedBundle
-}
-
-func (i preparedLocalInspector) InspectRunBundle(_ context.Context, run fleet.BundleRun) (fleet.BundleInspection, error) {
-	return fleet.BundleInspection{
-		BundleDigest: i.Prepared.Bundle.Digest,
-		ChildCount:   i.Prepared.ChildCount,
-		HostClass:    i.Prepared.HostClass,
-	}, nil
-}
-
-type preparedLocalShardExecutor struct {
-	Client agenthttp.Client
-	Local  fleet.PreparedLocalBundle
-}
-
-func (e preparedLocalShardExecutor) RunShard(ctx context.Context, req fleet.ShardExecutionRequest) ([]fleet.AttemptResult, error) {
-	req.Local = &e.Local
-	return e.Client.RunShard(ctx, req)
 }
 
 func selectPrepareEndpoint(source fleet.Run, endpoints []agentEndpoint) (agentEndpoint, error) {

@@ -12,14 +12,11 @@ import (
 
 const (
 	versionSchema       = "spore.version.result.v1"
-	hostInfoV2Schema    = "spore.host-info.v2"
 	hostInfoV3Schema    = "spore.host-info.v3"
 	lifecycleSchema     = "spore.lifecycle.v1"
-	inspectBundleSchema = "spore.bundle.inspect.v1"
-	pullResultSchema    = "spore.pull.result.v1"
-	removeSavedV1Schema = "spore.saved.remove.result.v1"
+	inspectBundleSchema = "spore.inspect.result.v1"
+	pullResultSchema    = "spore.pull.result.v2"
 	removeSavedV2Schema = "spore.saved.remove.result.v2"
-	cacheGCV1Schema     = "spore.cache.gc.result.v1"
 	cacheGCV2Schema     = "spore.cache.gc.result.v2"
 	errorSchema         = "spore.error.v1"
 	runEventsSchema     = "spore.automation.event.v1"
@@ -100,7 +97,7 @@ type PathFact struct {
 	Source   string  `json:"source"`
 }
 
-// UnmarshalJSON accepts both SporeVM host-info schemas and normalizes their
+// UnmarshalJSON normalizes SporeVM's v3 system-info
 // architecture-specific platform facts into the fleet adapter's shared view.
 func (h *HostInfo) UnmarshalJSON(data []byte) error {
 	var header struct {
@@ -112,15 +109,6 @@ func (h *HostInfo) UnmarshalJSON(data []byte) error {
 	}
 
 	switch {
-	case header.Schema == hostInfoV2Schema && header.SchemaVersion == 2:
-		type hostInfoV2 HostInfo
-		var decoded hostInfoV2
-		if err := json.Unmarshal(data, &decoded); err != nil {
-			return err
-		}
-		decoded.Platform.Arch = normalizeMachineArchitecture(decoded.Platform.Arch)
-		*h = HostInfo(decoded)
-		return nil
 	case header.Schema == hostInfoV3Schema && header.SchemaVersion == 3:
 		var decoded struct {
 			Schema        string                `json:"schema"`
@@ -210,17 +198,6 @@ func (p hostInfoV3Platform) normalize(architecture string) (PlatformFacts, error
 	}
 }
 
-func normalizeMachineArchitecture(architecture string) string {
-	switch architecture {
-	case "arm64":
-		return "aarch64"
-	case "amd64":
-		return "x86_64"
-	default:
-		return architecture
-	}
-}
-
 // AvailableBackend returns a supported and available backend by name.
 func (h HostInfo) AvailableBackend(name string) (BackendAvailability, bool) {
 	for _, backend := range h.Backends {
@@ -255,8 +232,7 @@ func (h HostInfo) FleetHostClass(backend string) (fleet.HostClass, error) {
 
 // Validate checks the host-info schema identity.
 func (h HostInfo) Validate() error {
-	if (h.Schema != hostInfoV2Schema || h.SchemaVersion != 2) &&
-		(h.Schema != hostInfoV3Schema || h.SchemaVersion != 3) {
+	if h.Schema != hostInfoV3Schema || h.SchemaVersion != 3 {
 		return invalidMachineOutput("host-info schema = %q v%d", h.Schema, h.SchemaVersion)
 	}
 	if h.HostClass == "" {
@@ -268,132 +244,44 @@ func (h HostInfo) Validate() error {
 	return nil
 }
 
-// DigestRef is SporeVM's shared digest reference.
-type DigestRef struct {
-	Algorithm string `json:"algorithm"`
-	Hex       string `json:"hex"`
+// InspectCheckpointRequest inspects a locally materialized native checkpoint.
+type InspectCheckpointRequest struct {
+	Source string
 }
 
-// String returns the digest in algorithm:hex form.
-func (d DigestRef) String() string {
-	if d.Algorithm == "" || d.Hex == "" {
-		return ""
-	}
-	return d.Algorithm + ":" + d.Hex
-}
-
-// CacheState reports cache hits, misses, and fetched bytes.
-type CacheState struct {
-	HitCount     int   `json:"hit_count"`
-	MissCount    int   `json:"miss_count"`
-	BytesFetched int64 `json:"bytes_fetched"`
-}
-
-// ChunkMaterializationSummary reports spore chunk materialization.
-type ChunkMaterializationSummary struct {
-	ChunkCount             int        `json:"chunk_count"`
-	MaterializedChunkCount int        `json:"materialized_chunk_count"`
-	PayloadBytes           int64      `json:"payload_bytes"`
-	LinkedChunkCount       int        `json:"linked_chunk_count"`
-	CopiedChunkCount       int        `json:"copied_chunk_count"`
-	Cache                  CacheState `json:"cache"`
-}
-
-// RootFSMaterializationSummary reports rootfs materialization.
-type RootFSMaterializationSummary struct {
-	ArtifactCount int        `json:"artifact_count"`
-	PayloadBytes  int64      `json:"payload_bytes"`
-	Cache         CacheState `json:"cache"`
-}
-
-// InspectBundleRequest is the agent-owned bundle inspection request.
-type InspectBundleRequest struct {
-	Source     string
-	ChildID    string
-	ChildRange *ChildRangeSelection
-}
-
-func (r InspectBundleRequest) validate() error {
+func (r InspectCheckpointRequest) validate() error {
 	if r.Source == "" {
-		return invalidSporeRequest("inspect-bundle source is required")
-	}
-	if r.ChildID != "" && r.ChildRange != nil {
-		return invalidSporeRequest("inspect-bundle cannot select both child id and child range")
-	}
-	if r.ChildRange != nil && (r.ChildRange.Start < 0 || r.ChildRange.Start >= r.ChildRange.End) {
-		return invalidSporeRequest("inspect-bundle child range must be non-empty and non-negative")
+		return invalidSporeRequest("checkpoint inspect source is required")
 	}
 	return nil
 }
 
-// ChildRangeSelection mirrors `spore --json inspect-bundle --child-range`.
-type ChildRangeSelection struct {
-	Start int
-	End   int
+// InspectCheckpointResult is the native checkpoint inspect result.
+type InspectCheckpointResult struct {
+	Schema         string        `json:"schema"`
+	SchemaVersion  int           `json:"schema_version"`
+	Version        int           `json:"version"`
+	VMStatePresent bool          `json:"vm_state_present"`
+	CanAttach      bool          `json:"can_attach"`
+	CanRunFrom     bool          `json:"can_run_from"`
+	Platform       PlatformFacts `json:"platform"`
 }
 
-// InspectBundleResult is the `spore --json inspect-bundle` result.
-type InspectBundleResult struct {
-	Schema         string                 `json:"schema"`
-	SchemaVersion  int                    `json:"schema_version"`
-	Source         string                 `json:"source"`
-	BundleDir      string                 `json:"bundle_dir"`
-	BundleDigest   DigestRef              `json:"bundle_digest"`
-	ParentManifest string                 `json:"parent_manifest"`
-	ChunkpackIndex string                 `json:"chunkpack_index"`
-	Chunkpack      ChunkpackSummary       `json:"chunkpack"`
-	ChildCount     int                    `json:"child_count"`
-	Children       []BundleChildSummary   `json:"children"`
-	Selection      BundleSelectionSummary `json:"selection"`
-	RootFS         RootFSBundleSummary    `json:"rootfs"`
-}
-
-// ChunkpackSummary reports bundle chunkpack size.
-type ChunkpackSummary struct {
-	ChunkCount   int   `json:"chunk_count"`
-	PackCount    int   `json:"pack_count"`
-	PayloadBytes int64 `json:"payload_bytes"`
-}
-
-// BundleChildSummary identifies a child manifest inside an indexed bundle.
-type BundleChildSummary struct {
-	ID       string `json:"id"`
-	Manifest string `json:"manifest"`
-}
-
-// BundleSelectionSummary reports an inspect-bundle child selection.
-type BundleSelectionSummary struct {
-	Kind          string               `json:"kind"`
-	SelectedCount int                  `json:"selected_count"`
-	Children      []BundleChildSummary `json:"children"`
-}
-
-// RootFSBundleSummary reports rootfs artifacts referenced by a bundle.
-type RootFSBundleSummary struct {
-	ArtifactCount     int   `json:"artifact_count"`
-	ExactBytesCount   int   `json:"exact_bytes_count"`
-	MetadataOnlyCount int   `json:"metadata_only_count"`
-	PayloadBytes      int64 `json:"payload_bytes"`
-}
-
-// Validate checks the inspect-bundle schema identity.
-func (r InspectBundleResult) Validate() error {
+// Validate requires the released checkpoint format and executable VM state.
+func (r InspectCheckpointResult) Validate() error {
 	if r.Schema != inspectBundleSchema || r.SchemaVersion != schemaVersion {
-		return invalidMachineOutput("inspect-bundle schema = %q v%d", r.Schema, r.SchemaVersion)
+		return invalidMachineOutput("checkpoint inspect schema = %q v%d", r.Schema, r.SchemaVersion)
 	}
-	if r.BundleDigest.String() == "" {
-		return invalidMachineOutput("inspect-bundle bundle_digest is empty")
+	if r.Version != 8 || !r.VMStatePresent || !r.CanRunFrom {
+		return invalidMachineOutput("checkpoint must contain runnable format-v8 VM state")
 	}
 	return nil
 }
 
 // PullRequest is the agent-owned materialization request.
 type PullRequest struct {
-	Source                  string
-	OutDir                  string
-	ChildID                 string
-	Region                  string
-	AllowMetadataOnlyRootFS bool
+	Source string
+	OutDir string
 }
 
 func (r PullRequest) validate() error {
@@ -406,40 +294,31 @@ func (r PullRequest) validate() error {
 	return nil
 }
 
-// PullResult is the `spore --json pull` result.
+// PullResult is the `spore --json checkpoint pull` v2 result.
 type PullResult struct {
-	Schema          string                       `json:"schema"`
-	SchemaVersion   int                          `json:"schema_version"`
-	Source          string                       `json:"source"`
-	BundleDir       string                       `json:"bundle_dir"`
-	OutDir          string                       `json:"out_dir"`
-	BundleDigest    DigestRef                    `json:"bundle_digest"`
-	Materialization ChunkMaterializationSummary  `json:"materialization"`
-	RootFS          RootFSMaterializationSummary `json:"rootfs"`
-	Remote          RemoteBundleCache            `json:"remote"`
-	Children        BundleChildrenSummary        `json:"children"`
+	Schema        string      `json:"schema"`
+	SchemaVersion int         `json:"schema_version"`
+	Ref           string      `json:"ref"`
+	SporeDigest   string      `json:"spore_digest"`
+	OutDir        string      `json:"out_dir"`
+	RAM           PullObjects `json:"ram"`
+	Disk          PullObjects `json:"disk"`
 }
 
-// RemoteBundleCache reports remote bundle source bytes.
-type RemoteBundleCache struct {
-	CacheHit        bool  `json:"cache_hit"`
-	OriginBytesRead int64 `json:"origin_bytes_read"`
-	PeerBytesRead   int64 `json:"peer_bytes_read"`
-}
-
-// BundleChildrenSummary reports selected child materialization.
-type BundleChildrenSummary struct {
-	Count         int     `json:"count"`
-	SelectedChild *string `json:"selected_child"`
+// PullObjects records verified native-store object transfer.
+type PullObjects struct {
+	Objects        int   `json:"objects"`
+	ObjectsFetched int   `json:"objects_fetched"`
+	BytesFetched   int64 `json:"bytes_fetched"`
 }
 
 // Validate checks the pull-result schema identity.
 func (r PullResult) Validate() error {
-	if r.Schema != pullResultSchema || r.SchemaVersion != schemaVersion {
+	if r.Schema != pullResultSchema || r.SchemaVersion != 2 {
 		return invalidMachineOutput("pull schema = %q v%d", r.Schema, r.SchemaVersion)
 	}
-	if r.BundleDigest.String() == "" {
-		return invalidMachineOutput("pull bundle_digest is empty")
+	if !validCheckpointDigest(r.SporeDigest) || !strings.HasSuffix(r.Ref, "/"+r.SporeDigest) {
+		return invalidMachineOutput("pull checkpoint identity is invalid")
 	}
 	if r.OutDir == "" {
 		return invalidMachineOutput("pull out_dir is empty")
@@ -505,24 +384,48 @@ func (r ForkRequest) validate() error {
 	return nil
 }
 
-// PackRequest is the agent-owned bundle pack request.
-type PackRequest struct {
-	ParentDir   string
-	ChildrenDir string
-	OutDir      string
+// PushRequest publishes one parent checkpoint to a native store.
+type PushRequest struct {
+	ParentDir string
+	To        string
 }
 
-func (r PackRequest) validate() error {
+func (r PushRequest) validate() error {
 	if r.ParentDir == "" {
-		return invalidSporeRequest("pack parent dir is required")
+		return invalidSporeRequest("checkpoint push parent dir is required")
 	}
-	if r.ChildrenDir == "" {
-		return invalidSporeRequest("pack children dir is required")
-	}
-	if r.OutDir == "" {
-		return invalidSporeRequest("pack out dir is required")
+	if r.To == "" {
+		return invalidSporeRequest("checkpoint push destination is required")
 	}
 	return nil
+}
+
+// PushResult identifies the immutable native checkpoint published by SporeVM.
+type PushResult struct {
+	Schema        string `json:"schema"`
+	SchemaVersion int    `json:"schema_version"`
+	DigestRef     string `json:"digest_ref"`
+	SporeDigest   string `json:"spore_digest"`
+}
+
+func (r PushResult) Validate() error {
+	if r.Schema != "spore.push.result.v2" || r.SchemaVersion != 2 ||
+		!validCheckpointDigest(r.SporeDigest) || !strings.HasSuffix(r.DigestRef, "/"+r.SporeDigest) {
+		return invalidMachineOutput("checkpoint push identity or schema is invalid")
+	}
+	return nil
+}
+
+func validCheckpointDigest(value string) bool {
+	if !strings.HasPrefix(value, "blake3:") || len(value) != 71 {
+		return false
+	}
+	for _, c := range value[7:] {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // ResumeRequest is the agent-owned resume request.
@@ -665,11 +568,9 @@ type removedSavedSporeResult struct {
 	Action        string `json:"action"`
 }
 
-// Validate accepts SporeVM 0.17's v1 result and the v2 result that newer
-// SporeVM prints without pin fields.
+// Validate checks the native checkpoint removal result.
 func (r removedSavedSporeResult) Validate() error {
-	if (r.Schema != removeSavedV1Schema || r.SchemaVersion != 1) &&
-		(r.Schema != removeSavedV2Schema || r.SchemaVersion != 2) {
+	if r.Schema != removeSavedV2Schema || r.SchemaVersion != 2 {
 		return invalidMachineOutput("remove saved spore schema = %q v%d", r.Schema, r.SchemaVersion)
 	}
 	if r.Action != "removed_spore" {
@@ -687,11 +588,9 @@ type CacheGCResult struct {
 	DeletedBytes  uint64 `json:"deleted_bytes"`
 }
 
-// Validate accepts SporeVM 0.17's v1 result and the v2 result newer SporeVM
-// prints, and rejects a dry run.
+// Validate checks the native GC result and rejects a dry run.
 func (r CacheGCResult) Validate() error {
-	if (r.Schema != cacheGCV1Schema || r.SchemaVersion != 1) &&
-		(r.Schema != cacheGCV2Schema || r.SchemaVersion != 2) {
+	if r.Schema != cacheGCV2Schema || r.SchemaVersion != 2 {
 		return invalidMachineOutput("cache gc schema = %q v%d", r.Schema, r.SchemaVersion)
 	}
 	if r.DryRun {

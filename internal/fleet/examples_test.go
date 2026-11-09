@@ -10,12 +10,12 @@ import (
 func TestExamplesValidate(t *testing.T) {
 	run := loadExampleRun(t)
 	validators := map[string]func(io.Reader) error{
-		"agent-status.json":      validateExample(AgentStatus.Validate),
-		"attempt-result.json":    validateExample(func(r AttemptResult) error { return r.Validate(run) }),
-		"bundle-run-1000.json":   validateExample(BundleRun.Validate),
-		"run-busybox-smoke.json": validateExample(Run.Validate),
-		"run-rails-rspec.json":   validateExample(Run.Validate),
-		"shard-lease.json":       validateExample(func(l ShardLease) error { return l.Validate(run) }),
+		"agent-status.json":        validateExample(AgentStatus.Validate),
+		"attempt-result.json":      validateExample(func(r AttemptResult) error { return r.Validate(run) }),
+		"checkpoint-run-1000.json": validateExample(CheckpointRun.Validate),
+		"run-busybox-smoke.json":   validateExample(Run.Validate),
+		"run-rails-rspec.json":     validateExample(Run.Validate),
+		"shard-lease.json":         validateExample(func(l ShardLease) error { return l.Validate(run) }),
 	}
 
 	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "fleet", "*"))

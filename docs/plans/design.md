@@ -38,6 +38,71 @@ This is a breaking migration, not a runtime-pin update. The older design
 sections below describe the bundle-based implementation until this section's
 replacement is implemented and verified.
 
+### Target workload and acceptance boundary
+
+The target is a complex test environment such as the Buildkite application:
+start the application and its databases, caches and other test services once,
+wait for readiness, checkpoint the warm guest, and execute disjoint test-suite
+shards in isolated children. The Rails example is the pattern, not the final
+workload. Put forkable service state inside the guest; an external database,
+cache or queue is not captured or isolated by a VM checkpoint.
+
+The intended fleet shape is one immutable parent transferred through a native
+checkpoint store to compatible node agents, then bounded child execution per
+agent with globally assigned shard identities and aggregate results. Pods own
+node agents or shard groups, not individual test children. Do not make child
+identity depend on a node-local fork directory name or a per-agent child count.
+
+Acceptance must distinguish these milestones rather than call them equivalent:
+
+1. Warm the multi-service environment once in a single guest. Record the exact
+   image, runtime version, readiness checks and service placement. Checkpoint
+   only after services and test fixtures are ready.
+2. Run at least two different suite shards from that same parent on ARM64 KVM.
+   Assert the expected shard identities, disjoint test selection, complete
+   aggregate coverage, exit codes and per-child database/disk isolation. A
+   failed shard must not rerun already committed shards on retry. Measure warm
+   preparation separately from checkpoint transfer, restore and test execution.
+3. Transfer the checkpoint through a native store into an isolated cache in
+   another agent pod, verify its platform before admission, and execute a
+   different shard there. Two pods on one node prove pod handoff, not cross-node
+   scheduling or checkpoint portability.
+4. Execute disjoint shards concurrently on at least two compatible physical
+   nodes. Record node identities, one shared parent digest, global shard
+   coverage and output, and verify cleanup on every participating agent. Do not
+   report the current single-node test as completion of this milestone.
+
+Today's limits affect the delivery boundary:
+
+- External services are not forked. Shared external state requires an explicit
+  isolation/reset contract; the first checkpoint proof should use guest-local
+  services rather than assume external transactions are snapshotted.
+- Networked named live fork is unsupported in v0.18.0. Do not promise networked
+  named children from `vm fork`. Saved checkpoint execution is different:
+  `run --checkpoint` and `checkpoint resume` can attach a fresh gateway under
+  the saved policy, without preserving TCP flows. This needs workload-level
+  testing and fleet policy/binding support before relying on external services.
+- Native `checkpoint fanout` is local orchestration. The current Kubernetes
+  coordinator also deliberately selects one agent. Multi-node execution needs
+  parent publication/materialization per agent, global range assignment,
+  compatibility admission on each destination, concurrent lease execution,
+  retry/terminal-result ownership, and per-agent cleanup. Merely changing CLI
+  names or raising agent replicas does not provide it.
+- A Mac/HVF workload run can establish service and test requirements, but it
+  does not prove Linux/KVM checkpoint compatibility. ARM64 architecture alone
+  is insufficient: compare the full saved platform facts on the target hosts.
+- The v0.18 gateway has an eight-flow TCP pool. The Buildkite workload trial
+  reached this limit while fetching dependencies, before running its browser
+  suite. Serialize build stages and cap dependency-fetch concurrency for the
+  first proof; keep runtime services guest-local. This is a setup constraint,
+  not evidence that the warm application or its test shards have passed.
+
+These limits are grounded in the v0.18.0
+[fan-out](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/fanout.md),
+[named lifecycle](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/lifecycle.md)
+and [networking](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/networking.md)
+contracts and `internal/fleet/coordinator.go`'s single-agent planner.
+
 ### Delivery slices
 
 1. Adapt the agent's capture, local fork, saved-process resume, new-command
@@ -60,7 +125,10 @@ replacement is implemented and verified.
    Supply generation JSON on each child execution and retry. Retain the
    parent until all attempts finish, then remove it through SporeVM before GC.
    Local source runs should reuse their captured parent without downloading
-   RAM or constructing a portable artifact per child. Keep one agent per cell.
+   RAM or constructing a portable artifact per child. Preserve the existing
+   single-agent execution boundary for the migration unless the scope decision
+   below explicitly includes distributed scheduling; use a transferable parent
+   and global generation metadata so that boundary can be lifted later.
 4. Provide AWS CLI v2 in the runtime image and use SporeVM 0.18.0's renewable
    provider chain for all native S3 image/checkpoint reads and writes. Do not
    export one-time role credentials into a lazy reader. Keep result-store AWS
@@ -87,30 +155,41 @@ replacement is implemented and verified.
   Keep old deployments pinned until acceptance passes. Rollback requires the
   old binary and its old state; do not restore v8 state with the old runtime.
 - Human approval is required before merge, release, deployment, dev-node
-  scaling or other infrastructure changes. No such action is authorized by
-  this plan. Request a bounded hardware test window and cleanup proposal
-  separately; keep private infrastructure details out of this public repo.
+  scaling or other infrastructure changes. Operational approvals and bounded
+  hardware test windows are tracked outside this public plan; this document
+  itself grants no permission. Keep private infrastructure details out of this
+  public repo.
 
-### Decisions awaiting review
+### Settled decisions
 
-- Recommend keeping [#50](https://github.com/sporevm/k8s/pull/50) separate rather
+- No backward compatibility is required. Replace old bundle inputs and legacy
+  machine-schema fallbacks rather than add aliases. Source runs retain their
+  aggregate child/fork counts; old prebuilt bundles must be recreated as native
+  checkpoint submissions.
+
+- Keep [#50](https://github.com/sporevm/k8s/pull/50) separate rather
   than folding its capture-only credential exporter into this migration.
   Its claim that SporeVM cannot use profiles/roles is obsolete in 0.18.0;
   importing it would also leave checkpoint pulls and renewable reads uncovered.
-  Leave #50 untouched until its owner chooses whether to supersede it.
-- Recommend a clean checkpoint input contract rather than silently reusing
-  the old `bundle` JSON fields for unrelated store semantics. Existing source
-  run inputs can retain their aggregate child/fork counts; prebuilt bundle
-  submissions must be recreated as checkpoint submissions.
+  Leave #50 untouched; its credential bridge is not a prerequisite.
+- Complete the native v0.18 migration with a guest-local multi-service
+  checkpoint/isolation proof first, then deliver distributed scheduling as a
+  separate PR. Networking for named live forks is upstream runtime work, not
+  something the Kubernetes adapter can supply by renaming commands.
 
 ### Current implementation state
 
-The CLI adaptation in slice 1 is implemented with updated subprocess tests.
-Bundle preparation/materialization and the runtime pin still use the old
-contract. The migration branch is not deployable or ready to merge; native
-checkpoint and hardware acceptance work remains.
+The native checkpoint adapter and v0.18.0 runtime pin are implemented locally.
+Source preparation captures and publishes one parent, and all child attempts
+reuse that parent with distinct generation metadata. Remote submissions pull
+once and compare the checkpoint's saved platform facts with the selected
+host before admission. Cleanup retains the parent through retries and removes
+it through SporeVM when aggregate execution finishes. Legacy bundle inputs and
+machine-schema fallbacks are removed; AWS CLI v2 is included for native stores.
+The migration branch is not ready to merge: image-build, real ARM64 saved-state
+acceptance, multi-service isolation and private-store acceptance remain gates.
 
-Validation for slice 1: `go test ./...`, `go vet ./...`, `mise run scripts:test`,
+Local validation: `go test ./...`, `go vet ./...`, `mise run scripts:test`,
 `mise run chart:lint`, `mise run public:leak-scan` and `git diff --check` pass.
 The exact release source builds with `mise run build:release` on Linux AMD64.
 Its live version/system-info/GC results and absent-VM exec/removal JSON match

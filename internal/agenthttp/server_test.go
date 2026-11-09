@@ -19,7 +19,7 @@ const testPinnedImage = "docker.io/library/node@sha256:6db9be2ebb4bafb687a078ef5
 
 func TestClientServerRoundTripRunsShard(t *testing.T) {
 	run := testBundleRun()
-	fake := fakeSporeClient{digest: run.Bundle.Digest}
+	fake := fakeSporeClient{digest: run.Checkpoint.Digest}
 	store, err := agent.NewLocalResultStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocalResultStore: %v", err)
@@ -38,7 +38,6 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 		Client:  fake,
 		AgentID: "spore-agent-test-0001",
 		CellID:  "test-cell-0001",
-		Region:  "us-east-1",
 		Backend: "kvm",
 		Now:     func() time.Time { return time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC) },
 	}).Handler()
@@ -57,7 +56,7 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 
-	inspection, err := client.InspectRunBundle(context.Background(), run)
+	inspection, err := client.InspectRunCheckpoint(context.Background(), run)
 	if err != nil {
 		t.Fatalf("InspectRunBundle: %v", err)
 	}
@@ -66,14 +65,14 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 	}
 
 	lease := fleet.ShardLease{
-		RunID:         run.RunID,
-		BundleDigest:  run.Bundle.Digest,
-		ShardID:       "ruby-counter-20260620-shard-0001",
-		ChildStart:    0,
-		ChildCount:    1,
-		AttemptBudget: 1,
-		HostClassID:   run.HostClass.ID,
-		AgentID:       status.AgentID,
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ShardID:          "ruby-counter-20260620-shard-0001",
+		ChildStart:       0,
+		ChildCount:       1,
+		AttemptBudget:    1,
+		HostClassID:      run.HostClass.ID,
+		AgentID:          status.AgentID,
 	}
 	results, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -92,11 +91,9 @@ func TestClientServerRoundTripRunsShard(t *testing.T) {
 }
 
 func TestServerCachesCacheRootStatusBriefly(t *testing.T) {
-	bundleRoot := t.TempDir()
 	rootFSRoot := t.TempDir()
 	now := time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)
 	server := &Server{
-		BundleCacheRoot: bundleRoot,
 		RootFSCacheRoot: rootFSRoot,
 		Now:             func() time.Time { return now },
 	}
@@ -155,21 +152,21 @@ func TestServerReadyzWaitsForStartup(t *testing.T) {
 func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	source := testRun()
 	client := newTestHTTPClientWithSporeClient(t, testBundleRun(), fakeSporeClient{
-		digest:     "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		digest:     "blake3:2222222222222222222222222222222222222222222222222222222222222222",
 		childCount: 1,
 	})
 
-	prepared, err := client.PrepareBundle(context.Background(), source)
+	prepared, err := client.PrepareCheckpoint(context.Background(), source)
 	if err != nil {
 		t.Fatalf("PrepareBundle: %v", err)
 	}
-	if prepared.Bundle.Digest != "sha256:2222222222222222222222222222222222222222222222222222222222222222" {
-		t.Fatalf("prepared digest = %q", prepared.Bundle.Digest)
+	if prepared.Checkpoint.Digest != "blake3:2222222222222222222222222222222222222222222222222222222222222222" {
+		t.Fatalf("prepared digest = %q", prepared.Checkpoint.Digest)
 	}
 	if prepared.ChildCount != 1 {
 		t.Fatalf("prepared child count = %d", prepared.ChildCount)
 	}
-	if prepared.Local == nil || prepared.Local.ChildrenDir == "" || prepared.Local.BundleDir == "" {
+	if prepared.Local == nil || prepared.Local.ParentDir == "" {
 		t.Fatalf("prepared local metadata = %+v", prepared.Local)
 	}
 	if _, err := source.Compile(prepared); err != nil {
@@ -180,7 +177,7 @@ func TestClientServerRoundTripPreparesBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReleasePrepared: %v", err)
 	}
-	if cleanup.RunID != source.RunID || cleanup.RemovedChildren != 1 {
+	if cleanup.RunID != source.RunID || cleanup.RemovedChildren != 0 {
 		t.Fatalf("cleanup = %+v", cleanup)
 	}
 }
@@ -218,14 +215,14 @@ func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
 	run := testBundleRun()
 	client := newTestHTTPClient(t, run)
 	lease := fleet.ShardLease{
-		RunID:         run.RunID,
-		BundleDigest:  run.Bundle.Digest,
-		ShardID:       "ruby-counter-20260620-shard-0001",
-		ChildStart:    0,
-		ChildCount:    1,
-		AttemptBudget: 1,
-		HostClassID:   run.HostClass.ID,
-		AgentID:       "spore-agent-other-0001",
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ShardID:          "ruby-counter-20260620-shard-0001",
+		ChildStart:       0,
+		ChildCount:       1,
+		AttemptBudget:    1,
+		HostClassID:      run.HostClass.ID,
+		AgentID:          "spore-agent-other-0001",
 	}
 	_, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -240,18 +237,18 @@ func TestServerRejectsLeaseForDifferentAgent(t *testing.T) {
 func TestServerReturnsShardResultsWhenRunnerReportsChildError(t *testing.T) {
 	run := testBundleRun()
 	client := newTestHTTPClientWithSporeClient(t, run, fakeSporeClient{
-		digest:    run.Bundle.Digest,
+		digest:    run.Checkpoint.Digest,
 		resumeErr: errors.New("resume failed"),
 	})
 	lease := fleet.ShardLease{
-		RunID:         run.RunID,
-		BundleDigest:  run.Bundle.Digest,
-		ShardID:       "ruby-counter-20260620-shard-0001",
-		ChildStart:    0,
-		ChildCount:    1,
-		AttemptBudget: 1,
-		HostClassID:   run.HostClass.ID,
-		AgentID:       "spore-agent-test-0001",
+		RunID:            run.RunID,
+		CheckpointDigest: run.Checkpoint.Digest,
+		ShardID:          "ruby-counter-20260620-shard-0001",
+		ChildStart:       0,
+		ChildCount:       1,
+		AttemptBudget:    1,
+		HostClassID:      run.HostClass.ID,
+		AgentID:          "spore-agent-test-0001",
 	}
 	results, err := client.RunShard(context.Background(), fleet.ShardExecutionRequest{
 		Run:     run,
@@ -276,16 +273,16 @@ func TestShardResultCountIgnoresEmptySlots(t *testing.T) {
 	}
 }
 
-func testBundleRun() fleet.BundleRun {
-	return fleet.BundleRun{
+func testBundleRun() fleet.CheckpointRun {
+	return fleet.CheckpointRun{
 		RunID: "ruby-counter-20260620",
-		Bundle: fleet.Bundle{
+		Checkpoint: fleet.Checkpoint{
 			URI:    "s3://example-sporevm-artifacts/runs/ruby-counter.bundle",
-			Digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Digest: "blake3:1111111111111111111111111111111111111111111111111111111111111111",
 		},
 		Children: fleet.ChildRange{Start: 0, Count: 1},
 		HostClass: fleet.HostClass{
-			ID:                   "linux-aarch64-kvm-graviton1-v0",
+			ID:                   "linux-arm64-kvm-graviton1-v0",
 			SporePlatformVersion: "v0",
 			Architecture:         "aarch64",
 			Backend:              "kvm",
@@ -299,12 +296,12 @@ func testBundleRun() fleet.BundleRun {
 	}
 }
 
-func newTestHTTPClient(t *testing.T, run fleet.BundleRun) Client {
+func newTestHTTPClient(t *testing.T, run fleet.CheckpointRun) Client {
 	t.Helper()
-	return newTestHTTPClientWithSporeClient(t, run, fakeSporeClient{digest: run.Bundle.Digest})
+	return newTestHTTPClientWithSporeClient(t, run, fakeSporeClient{digest: run.Checkpoint.Digest})
 }
 
-func newTestHTTPClientWithSporeClient(t *testing.T, run fleet.BundleRun, fake fakeSporeClient) Client {
+func newTestHTTPClientWithSporeClient(t *testing.T, run fleet.CheckpointRun, fake fakeSporeClient) Client {
 	t.Helper()
 	store, err := agent.NewLocalResultStore(t.TempDir())
 	if err != nil {
@@ -324,7 +321,6 @@ func newTestHTTPClientWithSporeClient(t *testing.T, run fleet.BundleRun, fake fa
 		Client:  fake,
 		AgentID: "spore-agent-test-0001",
 		CellID:  "test-cell-0001",
-		Region:  "us-east-1",
 		Backend: "kvm",
 		Now:     func() time.Time { return time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC) },
 	}).Handler()
@@ -352,8 +348,8 @@ func (c fakeSporeClient) Version(context.Context) (string, error) {
 
 func (c fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	return agent.HostInfo{
-		Schema:        "spore.host-info.v2",
-		SchemaVersion: 2,
+		Schema:        "spore.host-info.v3",
+		SchemaVersion: 3,
 		HostClass:     "linux-arm64-kvm",
 		Platform: agent.PlatformFacts{
 			Arch:               "aarch64",
@@ -368,16 +364,13 @@ func (c fakeSporeClient) HostInfo(context.Context) (agent.HostInfo, error) {
 	}, nil
 }
 
-func (c fakeSporeClient) InspectBundle(context.Context, agent.InspectBundleRequest) (agent.InspectBundleResult, error) {
-	childCount := c.childCount
-	if childCount == 0 {
-		childCount = 1
-	}
-	return agent.InspectBundleResult{
-		Schema:        "spore.bundle.inspect.v1",
+func (c fakeSporeClient) InspectCheckpoint(context.Context, agent.InspectCheckpointRequest) (agent.InspectCheckpointResult, error) {
+	info, _ := c.HostInfo(context.Background())
+	return agent.InspectCheckpointResult{
+		Schema:        "spore.inspect.result.v1",
 		SchemaVersion: 1,
-		BundleDigest:  testDigest(c.digest),
-		ChildCount:    childCount,
+		Version:       8, VMStatePresent: true, CanAttach: true, CanRunFrom: true,
+		Platform: info.Platform,
 	}, nil
 }
 
@@ -411,16 +404,17 @@ func (c fakeSporeClient) Fork(_ context.Context, req agent.ForkRequest) error {
 	return os.MkdirAll(filepath.Join(req.OutDir, "shared-chunks"), 0o755)
 }
 
-func (c fakeSporeClient) Pack(context.Context, agent.PackRequest) error {
-	return nil
+func (c fakeSporeClient) Push(_ context.Context, req agent.PushRequest) (agent.PushResult, error) {
+	return agent.PushResult{Schema: "spore.push.result.v2", SchemaVersion: 2, SporeDigest: c.digest, DigestRef: req.To + "/" + c.digest}, nil
 }
 
 func (c fakeSporeClient) Pull(_ context.Context, req agent.PullRequest) (agent.PullResult, error) {
 	return agent.PullResult{
-		Schema:        "spore.pull.result.v1",
-		SchemaVersion: 1,
+		Schema:        "spore.pull.result.v2",
+		SchemaVersion: 2,
 		OutDir:        req.OutDir,
-		BundleDigest:  testDigest(c.digest),
+		SporeDigest:   c.digest,
+		Ref:           req.Source,
 	}, nil
 }
 
@@ -489,13 +483,6 @@ func (c fakeSporeClient) RemoveSavedSpore(_ context.Context, req agent.RemoveSav
 
 func (c fakeSporeClient) CollectCache(context.Context) (agent.CacheGCResult, error) {
 	return agent.CacheGCResult{}, nil
-}
-
-func testDigest(raw string) agent.DigestRef {
-	return agent.DigestRef{
-		Algorithm: "sha256",
-		Hex:       raw[len("sha256:"):],
-	}
 }
 
 func testRun() fleet.Run {

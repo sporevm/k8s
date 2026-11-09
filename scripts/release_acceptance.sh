@@ -59,7 +59,7 @@ release_templates() {
     root="$1"
     for template in "${root}"/work/templates/*/parent.spore "${root}"/work/templates/.build-*/parent.spore; do
       [ -d "${template}" ] || continue
-      /usr/local/bin/spore --json rm --spore "${template}"
+      /usr/local/bin/spore --json checkpoint rm "${template}"
     done
     rm -rf "${root}"
   ' sh "${acceptance_root}"
@@ -189,7 +189,6 @@ spec:
             --spore-path=/usr/local/bin/spore \
             --result-store-root=${acceptance_root}/agent-results \
             --work-root=${acceptance_root}/work \
-            --bundle-cache-root=/var/lib/sporevm/bundle-cache \
             --rootfs-cache-root=/var/lib/sporevm/rootfs-cache \
             --backend=kvm \
             --child-timeout=90s >/tmp/spore-agent-acceptance.log 2>&1 &
@@ -200,10 +199,10 @@ spec:
             --timeout=5m >/tmp/spore-coordinator-acceptance.log 2>&1 &
           wait
       env:
+        - name: SPOREVM_RUNTIME_DIR
+          value: ${acceptance_root}/runtime
         - name: SPOREVM_KERNEL_CACHE_DIR
           value: /var/lib/sporevm/kernels
-        - name: SPOREVM_BUNDLE_CACHE_DIR
-          value: /var/lib/sporevm/bundle-cache
         - name: SPOREVM_ROOTFS_CACHE_DIR
           value: /var/lib/sporevm/rootfs-cache
       volumeMounts:
@@ -217,9 +216,7 @@ spec:
         path: /dev/kvm
         type: CharDevice
     - name: sporevm-var
-      hostPath:
-        path: /var/lib/sporevm
-        type: DirectoryOrCreate
+      emptyDir: {}
 YAML
 kube -n "${namespace}" wait --for=condition=Ready "pod/${runtime_pod}" --timeout=5m
 

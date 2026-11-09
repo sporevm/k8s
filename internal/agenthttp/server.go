@@ -22,21 +22,18 @@ const statusCacheTTL = 5 * time.Second
 
 // Server serves fleet agent status, bundle inspection, and shard execution.
 type Server struct {
-	Runner                  *agent.Runner
-	Client                  agent.SporeClient
-	AgentID                 string
-	CellID                  string
-	Region                  string
-	Backend                 string
-	BundleCacheRoot         string
-	RootFSCacheRoot         string
-	Pressure                fleet.Pressure
-	AllowMetadataOnlyRootFS bool
-	Now                     func() time.Time
-	Started                 func() bool // /readyz fails until it returns true; nil means started
-	statusMu                sync.Mutex
-	statusCache             fleet.CacheStatus
-	statusCacheAt           time.Time
+	Runner          *agent.Runner
+	Client          agent.SporeClient
+	AgentID         string
+	CellID          string
+	Backend         string
+	RootFSCacheRoot string
+	Pressure        fleet.Pressure
+	Now             func() time.Time
+	Started         func() bool // /readyz fails until it returns true; nil means started
+	statusMu        sync.Mutex
+	statusCache     fleet.CacheStatus
+	statusCacheAt   time.Time
 }
 
 // Handler returns the HTTP handler for the agent API.
@@ -48,10 +45,10 @@ func (s *Server) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /status", s.handleStatus)
-	mux.HandleFunc("POST /inspect-run-bundle", s.handleInspectRunBundle)
-	mux.HandleFunc("POST /prepare-bundle", s.handlePrepareBundle)
-	mux.HandleFunc("POST /prepare-local", s.handlePrepareLocal)
+	mux.HandleFunc("POST /inspect-run-checkpoint", s.handleInspectRunCheckpoint)
+	mux.HandleFunc("POST /prepare-checkpoint", s.handlePrepareCheckpoint)
 	mux.HandleFunc("POST /release-prepared", s.handleReleasePrepared)
+	mux.HandleFunc("POST /release-checkpoint", s.handleReleaseCheckpoint)
 	mux.HandleFunc("POST /run-shard", s.handleRunShard)
 	mux.HandleFunc("POST /runs", s.handleRun)
 	mux.HandleFunc("POST /sandboxes", s.handleCreateSandbox)
@@ -124,7 +121,7 @@ func (s *Server) cacheStatus() (fleet.CacheStatus, error) {
 	if !s.statusCacheAt.IsZero() && now.Before(s.statusCacheAt.Add(statusCacheTTL)) {
 		return s.statusCache, nil
 	}
-	status, err := statusForCacheRoots(s.BundleCacheRoot, s.RootFSCacheRoot)
+	status, err := statusForCacheRoots(s.RootFSCacheRoot)
 	if err != nil {
 		return fleet.CacheStatus{}, err
 	}
@@ -133,12 +130,12 @@ func (s *Server) cacheStatus() (fleet.CacheStatus, error) {
 	return status, nil
 }
 
-func (s *Server) handleInspectRunBundle(w http.ResponseWriter, r *http.Request) {
-	var run fleet.BundleRun
+func (s *Server) handleInspectRunCheckpoint(w http.ResponseWriter, r *http.Request) {
+	var run fleet.CheckpointRun
 	if !decodeJSON(w, r, &run) {
 		return
 	}
-	inspection, err := (agent.RunBundleInspector{Client: s.Client}).InspectRunBundle(r.Context(), run)
+	inspection, err := (agent.RunCheckpointInspector{Runner: s.Runner}).InspectRunCheckpoint(r.Context(), run)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -146,14 +143,26 @@ func (s *Server) handleInspectRunBundle(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, inspection)
 }
 
-func (s *Server) handlePrepareBundle(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleReleaseCheckpoint(w http.ResponseWriter, r *http.Request) {
+	var run fleet.CheckpointRun
+	if !decodeJSON(w, r, &run) {
+		return
+	}
+	if err := s.Runner.ReleaseCheckpoint(r.Context(), run); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+func (s *Server) handlePrepareCheckpoint(w http.ResponseWriter, r *http.Request) {
 	var run fleet.Run
 	if !decodeJSON(w, r, &run) {
 		return
 	}
 	start := time.Now()
 	log.Printf("prepare-bundle start run_id=%s children=%d agent_id=%s", run.RunID, run.Children.Count, s.AgentID)
-	prepared, err := s.Runner.PrepareBundle(r.Context(), agent.PrepareBundleRequest{
+	prepared, err := s.Runner.PrepareCheckpoint(r.Context(), agent.PrepareCheckpointRequest{
 		Run:     run,
 		Backend: s.backend(),
 	})
@@ -162,27 +171,7 @@ func (s *Server) handlePrepareBundle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	log.Printf("prepare-bundle complete run_id=%s digest=%s children=%d duration=%s", run.RunID, prepared.Bundle.Digest, prepared.ChildCount, time.Since(start))
-	writeJSON(w, http.StatusOK, prepared)
-}
-
-func (s *Server) handlePrepareLocal(w http.ResponseWriter, r *http.Request) {
-	var run fleet.Run
-	if !decodeJSON(w, r, &run) {
-		return
-	}
-	start := time.Now()
-	log.Printf("prepare-local start run_id=%s children=%d agent_id=%s", run.RunID, run.Children.Count, s.AgentID)
-	prepared, err := s.Runner.PrepareLocal(r.Context(), agent.PrepareBundleRequest{
-		Run:     run,
-		Backend: s.backend(),
-	})
-	if err != nil {
-		log.Printf("prepare-local failed run_id=%s duration=%s: %v", run.RunID, time.Since(start), err)
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	log.Printf("prepare-local complete run_id=%s digest=%s children=%d duration=%s", run.RunID, prepared.Bundle.Digest, prepared.ChildCount, time.Since(start))
+	log.Printf("prepare-bundle complete run_id=%s digest=%s children=%d duration=%s", run.RunID, prepared.Checkpoint.Digest, prepared.ChildCount, time.Since(start))
 	writeJSON(w, http.StatusOK, prepared)
 }
 
@@ -215,11 +204,9 @@ func (s *Server) handleRunShard(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	log.Printf("run-shard start run_id=%s shard_id=%s child_start=%d child_count=%d attempt=%d agent_id=%s", req.Run.RunID, req.Lease.ShardID, req.Lease.ChildStart, req.Lease.ChildCount, req.Attempt, s.AgentID)
 	results, err := (agent.RunnerShardExecutor{
-		Runner:                  s.Runner,
-		Pressure:                s.pressure(),
-		Region:                  s.Region,
-		AllowMetadataOnlyRootFS: s.AllowMetadataOnlyRootFS,
-		Backend:                 s.backend(),
+		Runner:   s.Runner,
+		Pressure: s.pressure(),
+		Backend:  s.backend(),
 	}).RunShard(r.Context(), req)
 	resultCount := shardResultCount(results)
 	if err != nil {
@@ -301,19 +288,13 @@ func (s *Server) pressure() fleet.Pressure {
 	return s.Pressure
 }
 
-func statusForCacheRoots(bundleRoot, rootFSRoot string) (fleet.CacheStatus, error) {
-	bundleBytes, bundleEntries, err := dirStats(bundleRoot)
-	if err != nil {
-		return fleet.CacheStatus{}, fmt.Errorf("bundle cache status: %w", err)
-	}
+func statusForCacheRoots(rootFSRoot string) (fleet.CacheStatus, error) {
 	rootFSBytes, rootFSEntries, err := dirStats(rootFSRoot)
 	if err != nil {
 		return fleet.CacheStatus{}, fmt.Errorf("rootfs cache status: %w", err)
 	}
 	return fleet.CacheStatus{
-		BundleCacheBytes:   bundleBytes,
 		RootFSCacheBytes:   rootFSBytes,
-		BundleCacheEntries: bundleEntries,
 		RootFSCacheEntries: rootFSEntries,
 	}, nil
 }
