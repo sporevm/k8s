@@ -181,7 +181,41 @@ contracts and `internal/fleet/coordinator.go`'s single-agent planner.
   separate PR. Networking for named live forks is upstream runtime work, not
   something the Kubernetes adapter can supply by renaming commands.
 
-### Current implementation state
+### Distributed checkpoint execution
+
+The next slice distributes prebuilt shared-S3 checkpoint runs across a static
+inventory of agent-specific endpoints. `internal/fleet/coordinator.go` assigns
+one disjoint contiguous range per selected agent, weighted by available slots
+and capped by `execution.maxInFlightPerAgent`. Each lease records its admitted
+`maxInFlight`; capacity is a concurrency ceiling, not a requirement to reserve
+the full run limit when fewer slots are available. Global shard identity and
+the full run's child count remain unchanged at every destination. Plan reports
+contain `leases`, replacing the single `lease` field.
+
+`cmd/spore-coordinator` materializes and validates every selected destination
+before dispatch. Agents retain their verified parent across all local retries.
+The coordinator executes leases concurrently, allows healthy siblings to finish
+when another lease fails, joins errors into the aggregate result, and releases
+the parent on every selected agent with an independent cleanup deadline.
+Terminal-result commits remain authoritative across replay and changed range
+placement. A stale capacity observation can still cause admission refusal; this
+slice does not add a dynamic scheduler or reschedule failed agents.
+
+Source preparation remains node-local. The subsequent slice must publish the
+one prepared parent to an explicit shared store before distributing it; do not
+send another agent a preparing agent's private filesystem path. Discovery and
+durable coordinator recovery remain outside this static scheduling slice.
+Use stable per-agent endpoints, not a Service that may route consecutive
+requests to different agents. No per-child Kubernetes objects are introduced.
+
+Local acceptance covers uneven capacity and nonzero global child ranges,
+concurrent agent execution, retry/replay, destination-admission refusal before
+any child executes, and cleanup of every selected destination. Real multi-pod
+KVM acceptance is pending. Cross-node acceptance requires at least two compatible
+physical hosts; the previous same-node handoff is not that proof. Runtime image
+publication and rollout remain separate from merging adapter code.
+
+### Migration implementation state
 
 The native checkpoint adapter and v0.18.0 runtime pin are implemented in
 [#51](https://github.com/sporevm/k8s/pull/51).

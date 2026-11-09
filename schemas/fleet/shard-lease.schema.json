@@ -35,6 +35,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "maxInFlight": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Lease-local concurrency cap; zero or omitted uses the run's per-agent limit."
+    },
     "attemptBudget": {
       "type": "integer",
       "minimum": 1

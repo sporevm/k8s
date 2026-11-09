@@ -66,6 +66,83 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRunsAgentsConcurrentlyAndRetriesOnlyUnfinishedChildren(t *testing.T) {
+	run := loadExampleRun(t)
+	run.Children = ChildRange{Start: 17, Count: 5}
+	run.Execution.MaxInFlightPerAgent = 2
+	run.RetryPolicy.MaxAttemptsPerChild = 2
+	agents := makeAgents(t, 2, 2, run.HostClass)
+	agents[0].ExecutionSlots.Available = 1
+	store := newFakeTerminalStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entered := make(chan string, 2)
+	proceed := make(chan struct{})
+	executor := &fakeShardExecutor{fn: func(ctx context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+		if req.Attempt == 1 {
+			entered <- req.Lease.AgentID
+			select {
+			case <-proceed:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		var results []AttemptResult
+		for id := req.Lease.ChildStart; id < req.Lease.ChildRange().End(); id++ {
+			if _, exists, _ := store.TerminalResult(ctx, run, id); exists {
+				continue
+			}
+			terminal := id != 17 || req.Attempt > 1
+			status := AttemptSucceeded
+			if !terminal {
+				status = AttemptFailed
+			}
+			result := runtimeAttemptResult(run, req.Lease, id, req.Attempt, status, terminal)
+			if terminal {
+				store.commit(result)
+			}
+			results = append(results, result)
+		}
+		return results, nil
+	}}
+	coordinator := newTestCoordinator(t, run, agents, store, map[string]ShardExecutor{
+		agents[0].AgentID: executor, agents[1].AgentID: executor,
+	}, nil)
+	type outcome struct {
+		report RuntimeReport
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		report, err := coordinator.Run(ctx, run)
+		done <- outcome{report, err}
+	}()
+	seen := make(map[string]bool)
+	for len(seen) < 2 {
+		select {
+		case id := <-entered:
+			seen[id] = true
+		case <-ctx.Done():
+			t.Fatal("agents did not start concurrently")
+		}
+	}
+	close(proceed)
+	result := <-done
+	if result.err != nil || result.report.Summary.SucceededChildren != 5 || result.report.Summary.AttemptCount != 6 || result.report.Summary.AssignedShards != 2 {
+		t.Fatalf("report = %+v, error = %v", result.report, result.err)
+	}
+	for id := 17; id < 22; id++ {
+		terminal, exists, err := store.TerminalResult(ctx, run, id)
+		if err != nil || !exists || terminal.Status != AttemptSucceeded {
+			t.Fatalf("child %d = %+v, exists %v, error %v", id, terminal, exists, err)
+		}
+	}
+	replay, err := coordinator.Run(ctx, run)
+	if err != nil || replay.Summary.AttemptCount != 0 || replay.Summary.SucceededChildren != 5 {
+		t.Fatalf("replay = %+v, error = %v", replay, err)
+	}
+}
+
 func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)

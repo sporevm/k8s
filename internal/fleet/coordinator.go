@@ -26,14 +26,16 @@ func RequiredInFlightSlots(childCount int, execution Execution) int {
 
 // ShardSlotDemand returns the execution slots a lease can consume at once.
 func ShardSlotDemand(run CheckpointRun, lease ShardLease) int {
-	return RequiredInFlightSlots(lease.ChildCount, run.Execution)
+	demand := RequiredInFlightSlots(lease.ChildCount, run.Execution)
+	if lease.MaxInFlight > 0 {
+		demand = min(demand, lease.MaxInFlight)
+	}
+	return demand
 }
 
-// BuildSingleAgentSequentialPlan assigns an entire run to one compatible agent,
-// because a cell runs one agent until multi-agent bundle handoff exists. The
-// lease may cover more children than the agent can run concurrently; execution
-// remains bounded by RequiredInFlightSlots.
-func BuildSingleAgentSequentialPlan(run CheckpointRun, agents []AgentStatus) (Plan, error) {
+// BuildPlan divides the global child range across compatible agents in proportion
+// to their available execution slots. Each agent receives one bounded lease.
+func BuildPlan(run CheckpointRun, agents []AgentStatus) (Plan, error) {
 	if err := run.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -42,43 +44,50 @@ func BuildSingleAgentSequentialPlan(run CheckpointRun, agents []AgentStatus) (Pl
 	summary.RunID = run.RunID
 	summary.State = "refused"
 	summary.ChildCount = run.Children.Count
-	summary.ShardCount = 1
 	if err != nil {
 		return Plan{Summary: summary}, err
 	}
 
-	required := RequiredInFlightSlots(run.Children.Count, run.Execution)
-	candidateIndex := firstCandidateWithCapacity(candidates, required)
-	if candidateIndex < 0 {
-		return Plan{Summary: summary}, fmt.Errorf(
-			"%w: need %d compatible in-flight child slots on one agent, have %d",
-			ErrInsufficientCapacity,
-			required,
-			bestCandidateCapacity(candidates),
-		)
+	if len(candidates) == 0 {
+		return Plan{Summary: summary}, ErrInsufficientCapacity
 	}
 
-	candidate := candidates[candidateIndex]
-	lease := ShardLease{
-		RunID:            run.RunID,
-		CheckpointDigest: run.Checkpoint.Digest,
-		ShardID:          fmt.Sprintf("%s-shard-%04d", run.RunID, 0),
-		ChildStart:       run.Children.Start,
-		ChildCount:       run.Children.Count,
-		AttemptBudget:    run.RetryPolicy.MaxAttemptsPerChild,
-		HostClassID:      run.HostClass.ID,
-		AgentID:          candidate.status.AgentID,
+	var leases []ShardLease
+	remaining := run.Children.Count
+	slots := summary.AvailableChildSlots
+	start := run.Children.Start
+	for _, candidate := range candidates {
+		count := remaining/slots*candidate.remaining + (remaining%slots)*candidate.remaining/slots
+		slots -= candidate.remaining
+		if count == 0 {
+			continue
+		}
+		leases = append(leases, ShardLease{
+			RunID:            run.RunID,
+			CheckpointDigest: run.Checkpoint.Digest,
+			ShardID:          fmt.Sprintf("%s-shard-%04d", run.RunID, len(leases)),
+			ChildStart:       start,
+			ChildCount:       count,
+			MaxInFlight:      min(count, candidate.remaining),
+			AttemptBudget:    run.RetryPolicy.MaxAttemptsPerChild,
+			HostClassID:      run.HostClass.ID,
+			AgentID:          candidate.status.AgentID,
+		})
+		start += count
+		remaining -= count
 	}
 
-	summary.AssignedShards = 1
+	summary.ShardCount = len(leases)
+	summary.AssignedShards = len(leases)
 	summary.AssignedChildren = run.Children.Count
 	summary.State = "planned"
-	return Plan{Summary: summary, Lease: lease}, nil
+	return Plan{Summary: summary, Leases: leases}, nil
 }
 
 func candidateAgents(run CheckpointRun, agents []AgentStatus) ([]candidateAgent, PlanSummary, error) {
 	summary := PlanSummary{AgentCount: len(agents)}
 	candidates := make([]candidateAgent, 0, len(agents))
+	seen := make(map[string]bool, len(agents))
 
 	sorted := append([]AgentStatus(nil), agents...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -89,6 +98,10 @@ func candidateAgents(run CheckpointRun, agents []AgentStatus) ([]candidateAgent,
 		if err := agent.Validate(); err != nil {
 			return nil, summary, err
 		}
+		if seen[agent.AgentID] {
+			return nil, summary, contractError("duplicate agentID %q", agent.AgentID)
+		}
+		seen[agent.AgentID] = true
 		if agent.Healthy {
 			summary.HealthyAgents++
 		}
@@ -111,23 +124,4 @@ func candidateAgents(run CheckpointRun, agents []AgentStatus) ([]candidateAgent,
 		return nil, summary, ErrNoCompatibleAgents
 	}
 	return candidates, summary, nil
-}
-
-func firstCandidateWithCapacity(candidates []candidateAgent, required int) int {
-	for i, candidate := range candidates {
-		if candidate.remaining >= required {
-			return i
-		}
-	}
-	return -1
-}
-
-func bestCandidateCapacity(candidates []candidateAgent) int {
-	best := 0
-	for _, candidate := range candidates {
-		if candidate.remaining > best {
-			best = candidate.remaining
-		}
-	}
-	return best
 }

@@ -50,8 +50,8 @@ func TestRunCoordinatorRunPreparesAndExecutesOnSameAgent(t *testing.T) {
 	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 1 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
-	if report.Plan.Lease.AgentID != "spore-agent-test-0001" {
-		t.Fatalf("lease = %+v", report.Plan.Lease)
+	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].AgentID != "spore-agent-test-0001" {
+		t.Fatalf("leases = %+v", report.Plan.Leases)
 	}
 	if report.Prepare == nil ||
 		report.Prepare.TimingsMS.RunSave < 0 ||
@@ -221,8 +221,8 @@ func TestRunCoordinatorRunExecutesSingleAgentSequentially(t *testing.T) {
 	if report.Summary.State != "succeeded" || report.Summary.CompletedChildren != 2 {
 		t.Fatalf("summary = %+v", report.Summary)
 	}
-	if report.Plan.Lease.ChildCount != 2 {
-		t.Fatalf("lease = %+v", report.Plan.Lease)
+	if len(report.Plan.Leases) != 1 || report.Plan.Leases[0].ChildCount != 2 {
+		t.Fatalf("leases = %+v", report.Plan.Leases)
 	}
 	if pulls := spore.pullRequests(); len(pulls) != 0 {
 		t.Fatalf("pulls = %+v, want prepared local child fast path", pulls)
@@ -469,6 +469,92 @@ func TestSelectRunEndpointChoosesAvailableCapacity(t *testing.T) {
 	second.Status.ExecutionSlots.Available = 0
 	if _, err := selectRunEndpoint([]agentEndpoint{first, second}); !errors.Is(err, fleet.ErrNoCompatibleAgents) {
 		t.Fatalf("selectRunEndpoint error = %v, want ErrNoCompatibleAgents", err)
+	}
+}
+
+func TestRunBundleAdmitsAllAgentsAndReleasesEveryParent(t *testing.T) {
+	for _, failure := range []string{"none", "admission", "release"} {
+		t.Run(failure, func(t *testing.T) {
+			store, err := agent.NewLocalResultStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var endpoints []agentEndpoint
+			var spores []*fakeSporeClient
+			var mu sync.Mutex
+			shardCalls := 0
+			released := make(map[string]bool)
+			for i := 0; i < 2; i++ {
+				spore := &fakeSporeClient{digest: testBundleDigest}
+				spores = append(spores, spore)
+				runner, err := agent.NewRunner(i+1, agent.WithSporeClient(spore), agent.WithResultStore(store), agent.WithWorkRoot(t.TempDir()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				id := fmt.Sprintf("spore-agent-test-%04d", i+1)
+				handler, err := (&agenthttp.Server{Runner: runner, Client: spore, AgentID: id, CellID: "test-cell-0001", Backend: "kvm"}).Handler()
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/inspect-run-checkpoint" && i == 1 && failure == "admission" {
+						writeHTTPError(w, http.StatusBadRequest, errors.New("saved platform incompatible"))
+						return
+					}
+					if r.URL.Path == "/run-shard" {
+						mu.Lock()
+						shardCalls++
+						mu.Unlock()
+					}
+					if r.URL.Path == "/release-checkpoint" {
+						mu.Lock()
+						released[id] = true
+						mu.Unlock()
+						if i == 0 && failure == "release" {
+							writeHTTPError(w, http.StatusBadRequest, errors.New("parent cleanup failed"))
+							return
+						}
+					}
+					handler.ServeHTTP(w, r)
+				}))
+				t.Cleanup(server.Close)
+				client := agenthttp.Client{BaseURL: server.URL, HTTPClient: server.Client()}
+				status, err := client.Status(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				endpoints = append(endpoints, agentEndpoint{URL: server.URL, Client: client, Status: status})
+			}
+			source := testRun()
+			source.Fork.Count = 5
+			source.Children = fleet.RunChildren{Start: 1, Count: 4, Command: source.Children.Command}
+			source.Execution.MaxInFlightPerAgent = 2
+			run, err := source.Compile(fleet.PreparedCheckpoint{
+				Checkpoint: fleet.Checkpoint{URI: "s3://example-checkpoints/store/", Digest: testBundleDigest},
+				ChildCount: 5, HostClass: endpoints[0].Status.HostClass,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := runBundle(context.Background(), run, store, endpoints)
+			if len(released) != 2 {
+				t.Fatalf("released agents = %v", released)
+			}
+			if failure == "admission" {
+				if err == nil || shardCalls != 0 {
+					t.Fatalf("failed admission executed %d shards, error %v", shardCalls, err)
+				}
+				return
+			}
+			if (err != nil) != (failure == "release") || report.Summary.SucceededChildren != 4 || shardCalls != 2 {
+				t.Fatalf("report = %+v, shard calls = %d, error = %v", report, shardCalls, err)
+			}
+			for i, spore := range spores {
+				if len(spore.pullRequests()) != 1 || (len(spore.removeSavedRequests()) == 0 && !(failure == "release" && i == 0)) {
+					t.Fatalf("agent %d did not pull once and release its parent", i)
+				}
+			}
+		})
 	}
 }
 

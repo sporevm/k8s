@@ -342,6 +342,9 @@ func (l ShardLease) Validate(run CheckpointRun) error {
 	if l.ChildStart < run.Children.Start || l.ChildRange().End() > run.Children.End() {
 		return contractError("shardLease child range is outside the run")
 	}
+	if l.MaxInFlight < 0 || l.MaxInFlight > run.Execution.MaxInFlightPerAgent {
+		return contractError("shardLease.maxInFlight must be between zero and the run's per-agent limit")
+	}
 	if l.AttemptBudget < 1 {
 		return contractError("shardLease.attemptBudget must be >= 1")
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -85,7 +86,7 @@ func NewCoordinator(
 	}, nil
 }
 
-// Run admits, plans, and executes one bundle run on one of the coordinator's agents.
+// Run admits and executes disjoint child ranges concurrently on compatible agents.
 func (c *Coordinator) Run(ctx context.Context, run CheckpointRun) (RuntimeReport, error) {
 	startedAt := c.now()
 	if err := run.Validate(); err != nil {
@@ -99,16 +100,26 @@ func (c *Coordinator) Run(ctx context.Context, run CheckpointRun) (RuntimeReport
 		return RuntimeReport{}, err
 	}
 
-	plan, err := BuildSingleAgentSequentialPlan(run, c.agents)
+	plan, err := BuildPlan(run, c.agents)
 	if err != nil {
 		return RuntimeReport{Plan: plan}, err
 	}
 
 	state := newRuntimeState(run, plan, startedAt)
-	err = c.runLease(ctx, run, plan.Lease, state)
-	if err != nil {
-		state.leaseErrors++
+	leaseErrors := make([]error, len(plan.Leases))
+	var workers sync.WaitGroup
+	for i, lease := range plan.Leases {
+		workers.Go(func() {
+			leaseErrors[i] = c.runLease(ctx, run, lease, state)
+		})
 	}
+	workers.Wait()
+	for _, leaseErr := range leaseErrors {
+		if leaseErr != nil {
+			state.leaseErrors++
+		}
+	}
+	err = errors.Join(leaseErrors...)
 	return RuntimeReport{
 		Plan:    plan,
 		Summary: state.summary(c.now(), err),
@@ -199,6 +210,7 @@ func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run Checkpoin
 }
 
 type runtimeState struct {
+	mu                  sync.Mutex
 	run                 CheckpointRun
 	plan                Plan
 	startedAt           time.Time
@@ -219,11 +231,15 @@ func newRuntimeState(run CheckpointRun, plan Plan, startedAt time.Time) *runtime
 }
 
 func (s *runtimeState) terminalKnown(childID int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, ok := s.terminal[childID]
 	return ok
 }
 
 func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.terminal[childID]; ok {
 		return
 	}
@@ -234,6 +250,8 @@ func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult)
 }
 
 func (s *runtimeState) recordResults(results []AttemptResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, result := range results {
 		if result.AttemptID == "" {
 			continue

@@ -189,6 +189,7 @@ type ShardLease struct {
 	ShardID          string `json:"shardID"`
 	ChildStart       int    `json:"childStart"`
 	ChildCount       int    `json:"childCount"`
+	MaxInFlight      int    `json:"maxInFlight,omitempty"`
 	AttemptBudget    int    `json:"attemptBudget"`
 	HostClassID      string `json:"hostClassID"`
 	AgentID          string `json:"agentID"`
@@ -276,8 +277,8 @@ type PlanSummary struct {
 
 // Plan is the output of one coordinator admission decision.
 type Plan struct {
-	Summary PlanSummary `json:"summary"`
-	Lease   ShardLease  `json:"lease,omitzero"`
+	Summary PlanSummary  `json:"summary"`
+	Leases  []ShardLease `json:"leases,omitempty"`
 }
 
 // CheckpointInspection is the coordinator's admission-time view of bundle metadata.
