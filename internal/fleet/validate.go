@@ -85,8 +85,10 @@ func (r Run) Validate() error {
 	if r.Children.ChildRange().End() > r.Fork.Count {
 		return contractError("children range must fit fork.count")
 	}
-	if err := (CommandSpec{Command: r.Children.Command}).Validate("children"); err != nil {
-		return err
+	if len(r.Children.Command) > 0 {
+		if err := (CommandSpec{Command: r.Children.Command}).Validate("children"); err != nil {
+			return err
+		}
 	}
 	if r.Execution.MaxInFlightPerAgent < 1 {
 		return contractError("execution.maxInFlightPerAgent must be >= 1")
@@ -206,9 +208,9 @@ func (r CheckpointRun) Validate() error {
 		return err
 	}
 	if r.Checkpoint.URI == "" {
-		return contractError("bundle.uri must not be empty")
+		return contractError("checkpoint.uri must not be empty")
 	}
-	if err := validateDigest(r.Checkpoint.Digest, "bundle.digest"); err != nil {
+	if err := validateDigest(r.Checkpoint.Digest, "checkpoint.digest"); err != nil {
 		return err
 	}
 	if err := r.Children.Validate("children"); err != nil {
