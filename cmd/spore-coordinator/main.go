@@ -466,27 +466,38 @@ func runBundle(ctx context.Context, run fleet.CheckpointRun, store fleet.Termina
 	for _, endpoint := range endpoints {
 		agents = append(agents, endpoint.Status)
 	}
-	plan, err := fleet.BuildSingleAgentSequentialPlan(run, agents)
+	plan, err := fleet.BuildPlan(run, agents)
 	if err != nil {
 		return fleet.RuntimeReport{Plan: plan}, err
 	}
-	var selected agentEndpoint
-	for _, endpoint := range endpoints {
-		if endpoint.Status.AgentID == plan.Lease.AgentID {
-			selected = endpoint
-			break
+	if len(plan.Leases) > 1 && !strings.HasPrefix(run.Checkpoint.URI, "s3://") {
+		return fleet.RuntimeReport{Plan: plan}, errors.New("multi-agent execution requires a shared S3 checkpoint store")
+	}
+	selected := make([]agentEndpoint, 0, len(plan.Leases))
+	inspectors := make(map[string]fleet.CheckpointInspector, len(plan.Leases))
+	executors := make(map[string]fleet.ShardExecutor, len(plan.Leases))
+	for _, lease := range plan.Leases {
+		for _, endpoint := range endpoints {
+			if endpoint.Status.AgentID == lease.AgentID {
+				selected = append(selected, endpoint)
+				inspectors[lease.AgentID] = endpoint.Client
+				executors[lease.AgentID] = endpoint.Client
+				break
+			}
 		}
 	}
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preparedCleanupTimeout)
-		defer cancel()
-		err = errors.Join(err, selected.Client.ReleaseCheckpoint(cleanupCtx, run))
+		for _, endpoint := range selected {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), preparedCleanupTimeout)
+			err = errors.Join(err, endpoint.Client.ReleaseCheckpoint(cleanupCtx, run))
+			cancel()
+		}
 	}()
 	coordinator, err := fleet.NewCoordinator(
-		[]fleet.AgentStatus{selected.Status},
-		selected.Client,
+		agents,
+		inspectors,
 		store,
-		map[string]fleet.ShardExecutor{selected.Status.AgentID: selected.Client},
+		executors,
 		fleet.CoordinatorOptions{},
 	)
 	if err != nil {

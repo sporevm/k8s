@@ -45,13 +45,13 @@ func TestDecodeBundleRunRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
-func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
+func TestBuildPlanAssigns1000Children(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)
 
-	plan, err := BuildSingleAgentSequentialPlan(run, agents)
+	plan, err := BuildPlan(run, agents)
 	if err != nil {
-		t.Fatalf("BuildSingleAgentSequentialPlan: %v", err)
+		t.Fatalf("BuildPlan: %v", err)
 	}
 
 	if plan.Summary.ShardCount != 1 {
@@ -64,7 +64,7 @@ func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 		t.Fatalf("assigned children = %d, want 1000", plan.Summary.AssignedChildren)
 	}
 
-	lease := plan.Lease
+	lease := plan.Leases[0]
 	if lease.AgentID != agents[0].AgentID {
 		t.Fatalf("lease agent = %q, want %q", lease.AgentID, agents[0].AgentID)
 	}
@@ -73,31 +73,63 @@ func TestBuildSingleAgentSequentialPlanAssigns1000Children(t *testing.T) {
 	}
 }
 
-func TestBuildSingleAgentSequentialPlanRejectsInsufficientInFlightCapacity(t *testing.T) {
+func TestBuildPlanRejectsNoAvailableSlots(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 99, run.HostClass)
+	agents[0].ExecutionSlots.Available = 0
 
-	plan, err := BuildSingleAgentSequentialPlan(run, agents)
+	plan, err := BuildPlan(run, agents)
 	if !errors.Is(err, ErrInsufficientCapacity) {
-		t.Fatalf("BuildSingleAgentSequentialPlan error = %v, want ErrInsufficientCapacity", err)
+		t.Fatalf("BuildPlan error = %v, want ErrInsufficientCapacity", err)
 	}
 	if plan.Summary.State != "refused" {
 		t.Fatalf("summary state = %q, want refused", plan.Summary.State)
 	}
 }
 
-func TestBuildSingleAgentSequentialPlanRejectsHostClassMismatch(t *testing.T) {
+func TestBuildPlanRejectsHostClassMismatch(t *testing.T) {
 	run := loadExampleRun(t)
 	hostClass := run.HostClass
 	hostClass.CPUProfile = "graviton2"
 	agents := makeAgents(t, 1, 100, hostClass)
 
-	plan, err := BuildSingleAgentSequentialPlan(run, agents)
+	plan, err := BuildPlan(run, agents)
 	if !errors.Is(err, ErrNoCompatibleAgents) {
-		t.Fatalf("BuildSingleAgentSequentialPlan error = %v, want ErrNoCompatibleAgents", err)
+		t.Fatalf("BuildPlan error = %v, want ErrNoCompatibleAgents", err)
 	}
 	if plan.Summary.State != "refused" {
 		t.Fatalf("summary state = %q, want refused", plan.Summary.State)
+	}
+}
+
+func TestBuildPlanCoversGlobalRangeWithinAgentCapacity(t *testing.T) {
+	run := loadExampleRun(t)
+	run.Children = ChildRange{Start: 11, Count: 7}
+	agents := makeAgents(t, 3, 3, run.HostClass)
+	agents[0].ExecutionSlots.Available = 1
+	agents[2].Pressure.Memory = PressureCritical
+	agents[2].Healthy = false
+	plan, err := BuildPlan(run, []AgentStatus{agents[2], agents[1], agents[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Leases) != 2 || plan.Summary.AssignedChildren != 7 || plan.Summary.AvailableChildSlots != 4 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	for i, want := range []ChildRange{{Start: 11, Count: 1}, {Start: 12, Count: 6}} {
+		lease := plan.Leases[i]
+		if lease.ChildRange() != want || lease.AgentID != agents[i].AgentID || lease.CheckpointDigest != run.Checkpoint.Digest {
+			t.Fatalf("lease %d = %+v, want range %+v on %s", i, lease, want, agents[i].AgentID)
+		}
+		if err := lease.Validate(run); err != nil {
+			t.Fatal(err)
+		}
+		if got := ShardSlotDemand(run, lease); got != []int{1, 3}[i] {
+			t.Fatalf("lease %d slot demand = %d", i, got)
+		}
+	}
+	if _, err := BuildPlan(run, []AgentStatus{agents[0], agents[0]}); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("duplicate agent error = %v", err)
 	}
 }
 

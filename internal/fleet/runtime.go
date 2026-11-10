@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -43,22 +44,22 @@ type CoordinatorOptions struct {
 
 // Coordinator owns run admission and static single-cell shard execution.
 type Coordinator struct {
-	agents    []AgentStatus
-	inspector CheckpointInspector
-	terminal  TerminalResultReader
-	executors map[string]ShardExecutor
-	now       func() time.Time
+	agents     []AgentStatus
+	inspectors map[string]CheckpointInspector
+	terminal   TerminalResultReader
+	executors  map[string]ShardExecutor
+	now        func() time.Time
 }
 
 // NewCoordinator creates a single-cell coordinator over a static agent inventory.
 func NewCoordinator(
 	agents []AgentStatus,
-	inspector CheckpointInspector,
+	inspectors map[string]CheckpointInspector,
 	terminal TerminalResultReader,
 	executors map[string]ShardExecutor,
 	opts CoordinatorOptions,
 ) (*Coordinator, error) {
-	if inspector == nil || terminal == nil {
+	if len(inspectors) == 0 || terminal == nil {
 		return nil, ErrCoordinatorNotConfigured
 	}
 	if len(executors) == 0 {
@@ -69,6 +70,13 @@ func NewCoordinator(
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	copiedAgents := append([]AgentStatus(nil), agents...)
+	copiedInspectors := make(map[string]CheckpointInspector, len(inspectors))
+	for agentID, inspector := range inspectors {
+		if inspector == nil {
+			return nil, ErrCoordinatorNotConfigured
+		}
+		copiedInspectors[agentID] = inspector
+	}
 	copiedExecutors := make(map[string]ShardExecutor, len(executors))
 	for agentID, executor := range executors {
 		if executor == nil {
@@ -77,38 +85,55 @@ func NewCoordinator(
 		copiedExecutors[agentID] = executor
 	}
 	return &Coordinator{
-		agents:    copiedAgents,
-		inspector: inspector,
-		terminal:  terminal,
-		executors: copiedExecutors,
-		now:       now,
+		agents:     copiedAgents,
+		inspectors: copiedInspectors,
+		terminal:   terminal,
+		executors:  copiedExecutors,
+		now:        now,
 	}, nil
 }
 
-// Run admits, plans, and executes one bundle run on one of the coordinator's agents.
+// Run admits and executes disjoint child ranges concurrently on compatible agents.
 func (c *Coordinator) Run(ctx context.Context, run CheckpointRun) (RuntimeReport, error) {
 	startedAt := c.now()
 	if err := run.Validate(); err != nil {
 		return RuntimeReport{}, err
 	}
-	inspection, err := c.inspector.InspectRunCheckpoint(ctx, run)
-	if err != nil {
-		return RuntimeReport{}, err
-	}
-	if err := inspection.Validate(run); err != nil {
-		return RuntimeReport{}, err
-	}
-
-	plan, err := BuildSingleAgentSequentialPlan(run, c.agents)
+	plan, err := BuildPlan(run, c.agents)
 	if err != nil {
 		return RuntimeReport{Plan: plan}, err
 	}
+	// Admit every destination before dispatch, and include transfer/validation
+	// in aggregate elapsed time and time-to-child-ready measurements.
+	for _, lease := range plan.Leases {
+		inspector, ok := c.inspectors[lease.AgentID]
+		if !ok {
+			return RuntimeReport{Plan: plan}, fmt.Errorf("%w: inspector for %s", ErrCoordinatorNotConfigured, lease.AgentID)
+		}
+		inspection, err := inspector.InspectRunCheckpoint(ctx, run)
+		if err == nil {
+			err = inspection.Validate(run)
+		}
+		if err != nil {
+			return RuntimeReport{Plan: plan}, fmt.Errorf("admit agent %s: %w", lease.AgentID, err)
+		}
+	}
 
 	state := newRuntimeState(run, plan, startedAt)
-	err = c.runLease(ctx, run, plan.Lease, state)
-	if err != nil {
-		state.leaseErrors++
+	leaseErrors := make([]error, len(plan.Leases))
+	var workers sync.WaitGroup
+	for i, lease := range plan.Leases {
+		workers.Go(func() {
+			leaseErrors[i] = c.runLease(ctx, run, lease, state)
+		})
 	}
+	workers.Wait()
+	for _, leaseErr := range leaseErrors {
+		if leaseErr != nil {
+			state.leaseErrors++
+		}
+	}
+	err = errors.Join(leaseErrors...)
 	return RuntimeReport{
 		Plan:    plan,
 		Summary: state.summary(c.now(), err),
@@ -199,6 +224,7 @@ func (c *Coordinator) leaseHasPendingChildren(ctx context.Context, run Checkpoin
 }
 
 type runtimeState struct {
+	mu                  sync.Mutex
 	run                 CheckpointRun
 	plan                Plan
 	startedAt           time.Time
@@ -219,11 +245,15 @@ func newRuntimeState(run CheckpointRun, plan Plan, startedAt time.Time) *runtime
 }
 
 func (s *runtimeState) terminalKnown(childID int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, ok := s.terminal[childID]
 	return ok
 }
 
 func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.terminal[childID]; ok {
 		return
 	}
@@ -234,6 +264,8 @@ func (s *runtimeState) recordExistingTerminal(childID int, result AttemptResult)
 }
 
 func (s *runtimeState) recordResults(results []AttemptResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, result := range results {
 		if result.AttemptID == "" {
 			continue

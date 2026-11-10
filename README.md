@@ -40,11 +40,23 @@ chain. Configure its AWS region and workload identity in the environment;
 do not freeze role credentials into an agent process. Result storage keeps its
 separate AWS SDK configuration.
 
-The current coordinator still executes a run on one compatible agent. Warming
-the application, database and cache inside the guest provides forkable service
-state; external services are not checkpointed. Cross-node scheduling is the
-next delivery slice, not a feature enabled by this upgrade. The acceptance
-milestones and networking limits are in [the design plan](docs/plans/design.md#sporevm-0180-migration).
+Prebuilt checkpoint runs divide their global child range across explicitly
+configured compatible agents and execute the ranges concurrently. Supply one
+stable, agent-specific `--agent-url` per destination (or comma-separated
+`SPORE_AGENT_URLS`); do not use a load-balanced Service URL for multiple agents.
+Every selected destination materializes and checks the same checkpoint before
+any child starts. Multi-agent runs require a shared S3 checkpoint store, and
+the report exposes `plan.leases`, not a single `plan.lease`. Per-lease
+`maxInFlight` caps execution at the capacity observed during planning, bounded
+by the run's `execution.maxInFlightPerAgent`.
+
+Source runs still prepare and execute on one agent because their generated
+checkpoint store is local. Automatic publication of that parent to a shared
+store and agent discovery remain follow-ups. Warming the application, database
+and cache inside the guest provides forkable service state; external services
+are not checkpointed. Multi-node acceptance and large-suite speedup remain
+unproven. See the [design plan](docs/plans/design.md#sporevm-0180-migration)
+for the acceptance milestones and networking limits.
 
 ## Chart
 

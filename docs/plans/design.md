@@ -82,15 +82,21 @@ Today's limits affect the delivery boundary:
   `run --checkpoint` and `checkpoint resume` can attach a fresh gateway under
   the saved policy, without preserving TCP flows. This needs workload-level
   testing and fleet policy/binding support before relying on external services.
-- Native `checkpoint fanout` is local orchestration. The current Kubernetes
-  coordinator also deliberately selects one agent. Multi-node execution needs
-  parent publication/materialization per agent, global range assignment,
-  compatibility admission on each destination, concurrent lease execution,
-  retry/terminal-result ownership, and per-agent cleanup. Merely changing CLI
-  names or raising agent replicas does not provide it.
+- Native `checkpoint fanout` is local orchestration. The distributed adapter
+  below adds global ranges, per-destination materialization/admission,
+  concurrent execution and cleanup for a prebuilt shared-S3 parent. Source
+  preparation still selects one agent; automatic parent publication and real
+  cross-node acceptance remain follow-ups. Merely raising replicas does not
+  distribute source runs.
 - A Mac/HVF workload run can establish service and test requirements, but it
   does not prove Linux/KVM checkpoint compatibility. ARM64 architecture alone
   is insufficient: compare the full saved platform facts on the target hosts.
+- Generation, entropy and resume-clock acceptance is specific to the guest
+  kernel and initrd. The separate Buildkite trial reports `/dev/mem` open
+  failure and missing generation files with its fetched Linux 6.1.191 kernel;
+  the Rails result does not establish that kernel's restore behavior. The
+  initrd has both generation-device polling and request-supplied generation
+  paths, so command execution alone does not prove the saved-process path.
 - The v0.18 gateway has an eight-flow TCP pool. The Buildkite workload trial
   reached this limit while fetching dependencies, before running its browser
   suite. Serialize build stages and cap dependency-fetch concurrency for the
@@ -99,13 +105,15 @@ Today's limits affect the delivery boundary:
 - The separate Buildkite workload trial reports a guest PID 1 cleanup panic
   after timed-out Docker commands on both HVF and KVM. Its browser suite has
   not passed. Ordinary-shell cancellation and Rails/PostgreSQL acceptance do
-  not validate Docker/cgroup cleanup; that runtime issue remains separate.
+  not validate Docker/cgroup cleanup. An empty-child-cgroup removal failure is
+  independently reproduced, but is not established as the app-build panic's
+  cause; Docker-wait cancellation also has a surviving control.
 
 These limits are grounded in the v0.18.0
 [fan-out](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/fanout.md),
 [named lifecycle](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/lifecycle.md)
 and [networking](https://github.com/sporevm/sporevm/blob/v0.18.0/docs/networking.md)
-contracts and `internal/fleet/coordinator.go`'s single-agent planner.
+contracts and the adapter's source-preparation and distributed planning paths.
 
 ### Delivery slices
 
@@ -148,6 +156,12 @@ contracts and `internal/fleet/coordinator.go`'s single-agent planner.
   directories. Exercise cold and warm `/runs`, named sandbox exec/removal,
   signal capture and saved-process generation-aware resume, nonzero guest
   exits, bounded concurrency, retry/terminal-result behavior, and cleanup/GC.
+- Record the actual guest kernel release, kernel/initrd digests and exact
+  restore path. Check generation-file refresh and identity before shard work,
+  distinct resume entropy seeds and guest clock proximity to host time.
+  Distinguish fresh commands from resumed already-running processes. Random
+  output uniqueness alone does not prove reseeding, and guest kernel RNG
+  reseeding does not reset process-local PRNG state inherited from the parent.
 - Exercise a directory store first, then private S3 image and checkpoint
   transfer into a fresh cache, followed by offline execution of the fully
   materialized checkpoint. Record exact revisions, command outcomes and any
@@ -181,7 +195,68 @@ contracts and `internal/fleet/coordinator.go`'s single-agent planner.
   separate PR. Networking for named live forks is upstream runtime work, not
   something the Kubernetes adapter can supply by renaming commands.
 
-### Current implementation state
+### Distributed checkpoint execution
+
+The next slice distributes prebuilt shared-S3 checkpoint runs across a static
+inventory of agent-specific endpoints. `internal/fleet/coordinator.go` assigns
+one disjoint contiguous range per selected agent, weighted by available slots
+and capped by `execution.maxInFlightPerAgent`. Each lease records its admitted
+`maxInFlight`; capacity is a concurrency ceiling, not a requirement to reserve
+the full run limit when fewer slots are available. Global shard identity and
+the full run's child count remain unchanged at every destination. Plan reports
+contain `leases`, replacing the single `lease` field.
+
+The fleet coordinator materializes and validates every selected destination
+before dispatch, including those transfers in aggregate elapsed and child-ready
+timings. Agents retain their verified parent across all local retries.
+The coordinator executes leases concurrently, allows healthy siblings to finish
+when another lease fails, joins errors into the aggregate result, and releases
+the parent on every selected agent with an independent cleanup deadline.
+Terminal-result commits remain authoritative across replay and changed range
+placement. A stale capacity observation can still cause admission refusal; this
+slice does not add a dynamic scheduler or reschedule failed agents.
+
+Source preparation remains node-local. The subsequent slice must publish the
+one prepared parent to an explicit shared store before distributing it; do not
+send another agent a preparing agent's private filesystem path. Discovery and
+durable coordinator recovery remain outside this static scheduling slice.
+Use stable per-agent endpoints, not a Service that may route consecutive
+requests to different agents. No per-child Kubernetes objects are introduced.
+
+Local acceptance covers uneven capacity and nonzero global child ranges,
+concurrent agent execution, retry/replay, destination-admission refusal before
+any child executes, and cleanup of every selected destination.
+
+Real ARM64 KVM acceptance uses two isolated agent pods on one physical node,
+with capacities one and two and one shared Rails/PostgreSQL parent. Both cold
+destinations admit the checkpoint before executing disjoint global ranges
+covering all three shards. Each reports HTTP 200, its own shard identity and
+one passing RSpec example. The cold run takes 98.963 seconds including both
+transfers; a later cached-parent run with the final agent takes 5.899 seconds.
+These are single samples, not a large-suite benchmark. Replay launches zero
+attempts. An exit-seven control fails only that child. After interruption,
+the two terminal results committed before cancellation remain unchanged while
+the unfinished child completes on retry. Both agents return all slots, remove
+their work roots and leave no runtime processes; disposable pods and checkpoint
+objects are removed after downloading evidence.
+
+The fresh-command probe on actual Linux 6.1.191 initially fails because the
+agent's explicit generation JSON replaces SporeVM's automatically minted resume
+fields. The adapter now supplies a fresh 128-bit entropy seed and host clock
+sample on each destination after materialization. The unchanged probe then
+passes for all three children: distinct seed hashes and random samples, global
+indices zero through two, generation one after parent zero, and clocks matching
+the run interval after the deliberate 20-second sleep. Saved-process Rails
+resume also passes with the final payload. This does not establish independent
+generation-device polling or reseed an already-running process's private PRNG.
+Original kernel/initrd artifact digests are unavailable from this transferred
+parent, so the full provenance gate remains open despite the verified kernel
+release and request-supplied generation path.
+
+Cross-node acceptance still requires two compatible physical hosts. Runtime
+image publication and rollout remain separate from merging adapter code.
+
+### Migration implementation state
 
 The native checkpoint adapter and v0.18.0 runtime pin are implemented in
 [#51](https://github.com/sporevm/k8s/pull/51).
@@ -195,6 +270,8 @@ Saved-process resumes use the checkpoint's saved generation and its successor
 alongside global shard identity; without that barrier a warm process can remain
 asleep instead of running its shard. Source runs may omit `children.command`
 to resume the captured process rather than replace it with a new command.
+Explicit child generation payloads also carry newly minted resume entropy and
+destination wall-clock samples; they must not inherit these from a saved parent.
 
 Warm capture, new-command checkpoint execution and named exec disable the
 CLI's default 30-second execution limit: caller contexts and the configured

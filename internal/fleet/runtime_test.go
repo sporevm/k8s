@@ -29,11 +29,11 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	}
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+		map[string]CheckpointInspector{agents[0].AgentID: fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: run.Checkpoint.Digest,
 			ChildCount:       run.Children.End(),
 			HostClass:        run.HostClass,
-		}},
+		}}},
 		store,
 		map[string]ShardExecutor{agents[0].AgentID: executor},
 		CoordinatorOptions{},
@@ -66,17 +66,129 @@ func TestCoordinatorRunExecutesSingleAgentSequentialPlan(t *testing.T) {
 	}
 }
 
+func TestCoordinatorTimingIncludesEveryDestinationAdmission(t *testing.T) {
+	run := smallRuntimeRun(t, 2, 1)
+	agents := makeAgents(t, 2, 1, run.HostClass)
+	store := newFakeTerminalStore()
+	clock := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	inspector := fakeBundleInspector{
+		inspection: CheckpointInspection{CheckpointDigest: run.Checkpoint.Digest, HostClass: run.HostClass},
+		onInspect:  func() { clock = clock.Add(9 * time.Second) },
+	}
+	executor := &fakeShardExecutor{fn: func(_ context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+		result := runtimeAttemptResult(run, req.Lease, req.Lease.ChildStart, req.Attempt, AttemptSucceeded, true)
+		result.StartedAt, result.FinishedAt = clock, clock
+		result.TimingsMS = AttemptTimings{}
+		store.commit(result)
+		return []AttemptResult{result}, nil
+	}}
+	coordinator, err := NewCoordinator(agents,
+		map[string]CheckpointInspector{agents[0].AgentID: inspector, agents[1].AgentID: inspector},
+		store, map[string]ShardExecutor{agents[0].AgentID: executor, agents[1].AgentID: executor},
+		CoordinatorOptions{Now: func() time.Time { return clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := coordinator.Run(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := report.Summary.FinishedAt.Sub(report.Summary.StartedAt); elapsed != 18*time.Second {
+		t.Fatalf("aggregate duration = %v, want both nine-second admissions", elapsed)
+	}
+	if report.Timings == nil || report.Timings.ChildReadyMS.P50 != 18000 {
+		t.Fatalf("child-ready timings = %+v, want admission-inclusive 18000ms", report.Timings)
+	}
+}
+
+func TestCoordinatorRunsAgentsConcurrentlyAndRetriesOnlyUnfinishedChildren(t *testing.T) {
+	run := loadExampleRun(t)
+	run.Children = ChildRange{Start: 17, Count: 5}
+	run.Execution.MaxInFlightPerAgent = 2
+	run.RetryPolicy.MaxAttemptsPerChild = 2
+	agents := makeAgents(t, 2, 2, run.HostClass)
+	agents[0].ExecutionSlots.Available = 1
+	store := newFakeTerminalStore()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entered := make(chan string, 2)
+	proceed := make(chan struct{})
+	executor := &fakeShardExecutor{fn: func(ctx context.Context, req ShardExecutionRequest) ([]AttemptResult, error) {
+		if req.Attempt == 1 {
+			entered <- req.Lease.AgentID
+			select {
+			case <-proceed:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		var results []AttemptResult
+		for id := req.Lease.ChildStart; id < req.Lease.ChildRange().End(); id++ {
+			if _, exists, _ := store.TerminalResult(ctx, run, id); exists {
+				continue
+			}
+			terminal := id != 17 || req.Attempt > 1
+			status := AttemptSucceeded
+			if !terminal {
+				status = AttemptFailed
+			}
+			result := runtimeAttemptResult(run, req.Lease, id, req.Attempt, status, terminal)
+			if terminal {
+				store.commit(result)
+			}
+			results = append(results, result)
+		}
+		return results, nil
+	}}
+	coordinator := newTestCoordinator(t, run, agents, store, map[string]ShardExecutor{
+		agents[0].AgentID: executor, agents[1].AgentID: executor,
+	}, nil)
+	type outcome struct {
+		report RuntimeReport
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		report, err := coordinator.Run(ctx, run)
+		done <- outcome{report, err}
+	}()
+	seen := make(map[string]bool)
+	for len(seen) < 2 {
+		select {
+		case id := <-entered:
+			seen[id] = true
+		case <-ctx.Done():
+			t.Fatal("agents did not start concurrently")
+		}
+	}
+	close(proceed)
+	result := <-done
+	if result.err != nil || result.report.Summary.SucceededChildren != 5 || result.report.Summary.AttemptCount != 6 || result.report.Summary.AssignedShards != 2 {
+		t.Fatalf("report = %+v, error = %v", result.report, result.err)
+	}
+	for id := 17; id < 22; id++ {
+		terminal, exists, err := store.TerminalResult(ctx, run, id)
+		if err != nil || !exists || terminal.Status != AttemptSucceeded {
+			t.Fatalf("child %d = %+v, exists %v, error %v", id, terminal, exists, err)
+		}
+	}
+	replay, err := coordinator.Run(ctx, run)
+	if err != nil || replay.Summary.AttemptCount != 0 || replay.Summary.SucceededChildren != 5 {
+		t.Fatalf("replay = %+v, error = %v", replay, err)
+	}
+}
+
 func TestCoordinatorRejectsBundleDigestMismatchBeforePlanning(t *testing.T) {
 	run := loadExampleRun(t)
 	agents := makeAgents(t, 1, 100, run.HostClass)
 	executor := &fakeShardExecutor{}
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+		map[string]CheckpointInspector{agents[0].AgentID: fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: "blake3:2222222222222222222222222222222222222222222222222222222222222222",
 			ChildCount:       run.Children.Count,
 			HostClass:        run.HostClass,
-		}},
+		}}},
 		newFakeTerminalStore(),
 		map[string]ShardExecutor{agents[0].AgentID: executor},
 		CoordinatorOptions{},
@@ -103,11 +215,11 @@ func TestCoordinatorRejectsInspectedHostClassMismatch(t *testing.T) {
 	hostClass.ID = "linux-aarch64-kvm-graviton2-v0"
 	coordinator, err := NewCoordinator(
 		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+		map[string]CheckpointInspector{agents[0].AgentID: fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: run.Checkpoint.Digest,
 			ChildCount:       run.Children.Count,
 			HostClass:        hostClass,
-		}},
+		}}},
 		newFakeTerminalStore(),
 		map[string]ShardExecutor{agents[0].AgentID: executor},
 		CoordinatorOptions{},
@@ -275,13 +387,17 @@ func newTestCoordinator(
 	now func() time.Time,
 ) *Coordinator {
 	t.Helper()
-	coordinator, err := NewCoordinator(
-		agents,
-		fakeBundleInspector{inspection: CheckpointInspection{
+	inspectors := make(map[string]CheckpointInspector, len(agents))
+	for _, agent := range agents {
+		inspectors[agent.AgentID] = fakeBundleInspector{inspection: CheckpointInspection{
 			CheckpointDigest: run.Checkpoint.Digest,
 			ChildCount:       run.Children.End(),
 			HostClass:        run.HostClass,
-		}},
+		}}
+	}
+	coordinator, err := NewCoordinator(
+		agents,
+		inspectors,
 		store,
 		executors,
 		CoordinatorOptions{Now: now},
@@ -295,9 +411,13 @@ func newTestCoordinator(
 type fakeBundleInspector struct {
 	inspection CheckpointInspection
 	err        error
+	onInspect  func()
 }
 
 func (i fakeBundleInspector) InspectRunCheckpoint(context.Context, CheckpointRun) (CheckpointInspection, error) {
+	if i.onInspect != nil {
+		i.onInspect()
+	}
 	if i.err != nil {
 		return CheckpointInspection{}, i.err
 	}
