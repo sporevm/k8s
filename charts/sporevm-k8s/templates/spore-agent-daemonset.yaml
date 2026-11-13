@@ -64,6 +64,7 @@ spec:
             - --work-root={{ .Values.agent.cache.workDir }}
             - --rootfs-cache-root={{ .Values.agent.cache.rootfsDir }}
             - --template-retain={{ .Values.agent.cache.templateRetain }}
+            - --checkpoint-retain={{ .Values.agent.cache.checkpointRetain }}
             - --template-reconcile-interval={{ .Values.agent.cache.templateReconcileInterval }}
             - --reset-runtime-on-start=true
             - --cache-gc=true

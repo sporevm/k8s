@@ -116,6 +116,15 @@ func WithCacheGC(enabled bool) RunnerOption {
 	}
 }
 
+// WithCheckpointRetain sets how many pulled parents the agent keeps after no
+// run uses them, so a later run with the same checkpoint digest skips the
+// pull. Zero removes a parent when its last run releases it.
+func WithCheckpointRetain(count int) RunnerOption {
+	return func(r *Runner) {
+		r.checkpointRetain = count
+	}
+}
+
 // WithMetricsSink configures an in-process sink for child attempt metrics.
 func WithMetricsSink(sink MetricsSink) RunnerOption {
 	return func(r *Runner) {
@@ -227,7 +236,16 @@ type Runner struct {
 	prepareOpsMu     sync.Mutex
 	prepareOps       map[string]*prepareOperation
 	checkpoints      sync.Map // run ID -> materializedCheckpoint; operations use the run gate
+	checkpointRetain int
+	retainedMu       sync.Mutex
+	retained         map[string]uint64 // digest of each parent this process pulled -> retainedUses at its last use
+	retainedUses     uint64
 }
+
+const (
+	checkpointsDirName     = "checkpoints"
+	checkpointDigestPrefix = "blake3:"
+)
 
 type materializedCheckpoint struct {
 	Checkpoint fleet.Checkpoint
@@ -256,6 +274,7 @@ func NewRunner(totalSlots int, opts ...RunnerOption) (*Runner, error) {
 		templateUses: make(map[string]int),
 		sandboxes:    make(map[string]func()),
 		prepareOps:   make(map[string]*prepareOperation),
+		retained:     make(map[string]uint64),
 	}
 	// Saved-spore removals set cacheGCPending; start pending so the first
 	// collection runs.
