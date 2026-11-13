@@ -31,9 +31,12 @@ define it.
 
 ## SporeVM 0.18.0 migration
 
-The source runtime now pins [v0.18.5](https://github.com/sporevm/sporevm/releases/tag/v0.18.5),
-source `65158e3ab041457b157fd8853bdde38bcb0ac09d`. Its Linux ARM64 archive
-SHA-256 is `f390ab92a2bfcad54b23594e06c887695de295bff8368addd747ea2ef5e31b3a`.
+The source runtime now pins [v0.18.6](https://github.com/sporevm/sporevm/releases/tag/v0.18.6),
+source [c19186c](https://github.com/sporevm/sporevm/commit/c19186cd287968bd330cbf74dc2bbd423bc70f82).
+Its Linux ARM64 archive SHA-256 is `f79b9aacd8656b19bf4757ff2abed86f397f47b3cbe6b5677166d5c843b6bd6a`.
+Runtime/chart 0.1.21 includes recovery from idle HTTP connections expiring while
+local RAM backing is prepared, before the disk phase of a cold checkpoint pull.
+The retry/time budgets and content verification are unchanged.
 The original v0.18.0 migration was a breaking change, not just a runtime pin.
 The older design sections below retain historical bundle-based design context;
 this section describes the native replacement and remaining acceptance gates.
