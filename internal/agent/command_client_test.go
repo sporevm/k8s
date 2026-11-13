@@ -177,7 +177,7 @@ exit 2
 	}
 
 	args := strings.TrimSpace(readFile(t, argsFile))
-	want := "--json checkpoint pull s3://example-sporevm-artifacts/runs/blake3:1111111111111111111111111111111111111111111111111111111111111111 --output /work/child-42.spore"
+	want := "--json checkpoint pull s3://example-sporevm-artifacts/runs/blake3:1111111111111111111111111111111111111111111111111111111111111111 --output /work/child-42.spore --local-ram-backing"
 	if args != want {
 		t.Fatalf("args = %q, want %q", args, want)
 	}

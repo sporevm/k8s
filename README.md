@@ -16,9 +16,18 @@ runbooks out of this repository.
 
 ## SporeVM 0.18 migration
 
-The source runtime image now builds with SporeVM 0.18.0 and AWS CLI v2. This
-does not change already-published image tags. Deploy a newly built image
-explicitly; the chart's existing published default is not a v0.18 upgrade.
+The source runtime image builds with SporeVM 0.18.5 and AWS CLI v2. This
+does not change already-published image tags. Deploy runtime/chart 0.1.20 or a
+newly built image explicitly; older chart defaults do not provide this upgrade.
+
+Remote-parent preparation requires `checkpoint pull --local-ram-backing`.
+SporeVM verifies and reconstructs a read-only local RAM backing once per pulled
+parent so its children share clean RAM pages; child writes remain private.
+Preparation fails rather than falling back to a private RAM copy per child.
+Allow local storage for the sparse backing in addition to the native object
+cache, and include its construction in cold-parent preparation measurements.
+Parents remain scoped to one run on each agent, not shared across agents or
+independent runs.
 
 This is a clean break. Stop old named VMs before replacing the runtime and
 recreate old checkpoints and boot templates as format v8. Old bundles cannot
@@ -72,7 +81,7 @@ Private environments should keep their values file in ops:
 
 ```bash
 helm upgrade --install sporevm-k8s oci://ghcr.io/sporevm/charts/sporevm-k8s \
-  --version 0.1.19 \
+  --version 0.1.20 \
   --namespace sporevm-system \
   --create-namespace \
   -f values/sporevm-k8s.yaml

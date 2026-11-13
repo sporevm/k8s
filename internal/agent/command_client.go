@@ -98,12 +98,12 @@ func (c CommandClient) InspectCheckpoint(ctx context.Context, req InspectCheckpo
 	return result, nil
 }
 
-// Pull runs `spore --json checkpoint pull`.
+// Pull prepares a shared local RAM backing for all children of the pulled parent.
 func (c CommandClient) Pull(ctx context.Context, req PullRequest) (PullResult, error) {
 	if err := req.validate(); err != nil {
 		return PullResult{}, err
 	}
-	args := []string{"--json", "checkpoint", "pull", req.Source, "--output", req.OutDir}
+	args := []string{"--json", "checkpoint", "pull", req.Source, "--output", req.OutDir, "--local-ram-backing"}
 
 	var result PullResult
 	if err := c.runJSON(ctx, &result, args...); err != nil {
