@@ -31,12 +31,34 @@ define it.
 
 ## SporeVM 0.18.0 migration
 
-The released runtime is [v0.18.0](https://github.com/sporevm/sporevm/releases/tag/v0.18.0),
-source `1197f65baec9bf4618334d113e145a6833763fa8`. Its Linux ARM64 archive
-SHA-256 is `184ff27b58e8994ed61b94b01ca78e5533fa0ef81b3111d8e8f45925a8fd15df`.
-This is a breaking migration, not a runtime-pin update. The older design
-sections below retain historical bundle-based design context; this section
-describes the native checkpoint replacement and its remaining acceptance gates.
+The source runtime now pins [v0.18.5](https://github.com/sporevm/sporevm/releases/tag/v0.18.5),
+source `65158e3ab041457b157fd8853bdde38bcb0ac09d`. Its Linux ARM64 archive
+SHA-256 is `f390ab92a2bfcad54b23594e06c887695de295bff8368addd747ea2ef5e31b3a`.
+The original v0.18.0 migration was a breaking change, not just a runtime pin.
+The older design sections below retain historical bundle-based design context;
+this section describes the native replacement and remaining acceptance gates.
+
+### Shared RAM backing for pulled parents
+
+Every agent pull requires `--local-ram-backing` (SporeVM v0.18.5 or later).
+SporeVM reconstructs and verifies a sparse read-only backing before publishing
+the pulled manifest. Failed backing preparation fails destination admission;
+there is no retry without the flag. The existing offline fork and restore paths
+then share clean file-backed RAM while keeping writes private. Local source
+captures already supply this backing and need no extra materialization.
+
+Retain the verified parent across children and retries using the existing
+per-run agent cache, and release it after the aggregate run. This does not
+introduce cross-run or cross-agent backing reuse. Separate agents, even on one
+node, may still retain separate copies; digest-keyed node-wide retention is a
+later slice, not a property of this cache.
+
+Charge backing reconstruction to cold-parent preparation, and budget local
+storage for the sparse RAM backing as well as CAS disk/RAM objects. Measure
+representative service-backed test batches with one prepared parent: pull and
+backing time, first-child readiness, aggregate throughput, PSS, and private
+dirty growth. Synthetic shared-mapping measurements are not full-workload
+acceptance or a claim of cross-node speedup.
 
 ### Target workload and acceptance boundary
 
