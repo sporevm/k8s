@@ -1593,6 +1593,145 @@ func TestRunBundleInspectorMaterializesParentOnce(t *testing.T) {
 	}
 }
 
+func TestRunnerRetainsPulledParentForLaterRunWithSameDigest(t *testing.T) {
+	client := &fakeSporeClient{hostInfo: validHostInfo()}
+	runner := newCheckpointRetainRunner(t, client, 1)
+	first := testBundleRun()
+	second := testBundleRun()
+	second.RunID = "ruby-counter-next"
+
+	firstParent := materializeForTest(t, runner, first)
+	releaseForTest(t, runner, first)
+	secondParent := materializeForTest(t, runner, second)
+
+	if secondParent.ParentDir != firstParent.ParentDir {
+		t.Fatalf("second run parent = %q, want retained %q", secondParent.ParentDir, firstParent.ParentDir)
+	}
+	if _, err := os.Stat(secondParent.ParentDir); err != nil {
+		t.Fatalf("retained parent: %v", err)
+	}
+	if pulls := client.pullRequests(); len(pulls) != 1 {
+		t.Fatalf("pulls = %+v, want one", pulls)
+	}
+}
+
+func TestRunnerEvictsLeastRecentlyUsedParentBeyondRetainCount(t *testing.T) {
+	client := &fakeSporeClient{hostInfo: validHostInfo(), pullFunc: pullRequestedDigest}
+	runner := newCheckpointRetainRunner(t, client, 1)
+	older := testBundleRun()
+	newer := testBundleRun()
+	newer.RunID = "ruby-counter-next"
+	newer.Checkpoint.Digest = "blake3:2222222222222222222222222222222222222222222222222222222222222222"
+
+	olderParent := materializeForTest(t, runner, older)
+	newerParent := materializeForTest(t, runner, newer)
+	releaseForTest(t, runner, newer)
+	if _, err := os.Stat(olderParent.ParentDir); err != nil {
+		t.Fatalf("parent in use by another run: %v", err)
+	}
+	// Releasing older makes it the most recently used, so newer is evicted.
+	releaseForTest(t, runner, older)
+
+	if _, err := os.Stat(newerParent.ParentDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("least recently used parent still exists or stat failed differently: %v", err)
+	}
+	if _, err := os.Stat(olderParent.ParentDir); err != nil {
+		t.Fatalf("most recently used parent: %v", err)
+	}
+	materializeForTest(t, runner, newer)
+	if pulls := client.pullRequests(); len(pulls) != 3 || pulls[2].Source != bundleSource(newer) {
+		t.Fatalf("pulls = %+v, want the evicted parent pulled again", pulls)
+	}
+}
+
+func TestRunnerKeepsParentUntilLastRunReleasesIt(t *testing.T) {
+	client := &fakeSporeClient{hostInfo: validHostInfo()}
+	runner := newCheckpointRetainRunner(t, client, 0)
+	first := testBundleRun()
+	second := testBundleRun()
+	second.RunID = "ruby-counter-next"
+
+	parent := materializeForTest(t, runner, first)
+	materializeForTest(t, runner, second)
+	releaseForTest(t, runner, first)
+	if _, err := os.Stat(parent.ParentDir); err != nil {
+		t.Fatalf("parent in use by the second run: %v", err)
+	}
+	releaseForTest(t, runner, second)
+
+	if _, err := os.Stat(filepath.Dir(parent.ParentDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("released parent still exists or stat failed differently: %v", err)
+	}
+	if pulls := client.pullRequests(); len(pulls) != 1 {
+		t.Fatalf("pulls = %+v, want one shared pull", pulls)
+	}
+}
+
+func TestRunnerRemoveStaleCheckpointsKeepsParentsItPulled(t *testing.T) {
+	client := &fakeSporeClient{hostInfo: validHostInfo()}
+	runner := newCheckpointRetainRunner(t, client, 1)
+	run := testBundleRun()
+	parent := materializeForTest(t, runner, run)
+	releaseForTest(t, runner, run)
+	stale := filepath.Join(filepath.Dir(filepath.Dir(parent.ParentDir)), strings.Repeat("3", 64), "parent.spore")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runner.RemoveStaleCheckpoints(context.Background()); err != nil {
+		t.Fatalf("RemoveStaleCheckpoints: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Dir(stale)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("earlier agent's parent still exists or stat failed differently: %v", err)
+	}
+	if removed := client.removeSavedSporeRequests(); len(removed) == 0 || removed[len(removed)-1].SporeDir != stale {
+		t.Fatalf("saved-spore removals = %+v, want the stale parent removed through SporeVM", removed)
+	}
+	if _, err := os.Stat(parent.ParentDir); err != nil {
+		t.Fatalf("retained parent: %v", err)
+	}
+}
+
+func newCheckpointRetainRunner(t *testing.T, client *fakeSporeClient, retain int) *Runner {
+	t.Helper()
+	runner, err := NewRunner(1, WithSporeClient(client), WithWorkRoot(t.TempDir()), WithCheckpointRetain(retain))
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	return runner
+}
+
+func materializeForTest(t *testing.T, runner *Runner, run fleet.CheckpointRun) materializedCheckpoint {
+	t.Helper()
+	parent, _, err := runner.materializeCheckpoint(context.Background(), run)
+	if err != nil {
+		t.Fatalf("materialize %s: %v", run.RunID, err)
+	}
+	return parent
+}
+
+func releaseForTest(t *testing.T, runner *Runner, run fleet.CheckpointRun) {
+	t.Helper()
+	if err := runner.ReleaseCheckpoint(context.Background(), run); err != nil {
+		t.Fatalf("release %s: %v", run.RunID, err)
+	}
+}
+
+// pullRequestedDigest pulls whichever digest the request names.
+func pullRequestedDigest(_ context.Context, req PullRequest) (PullResult, error) {
+	if err := os.MkdirAll(req.OutDir, 0o755); err != nil {
+		return PullResult{}, err
+	}
+	result := pullResult(req.OutDir, "")
+	result.Ref = req.Source
+	result.SporeDigest = req.Source[strings.LastIndex(req.Source, "/")+1:]
+	return result, nil
+}
+
 func TestCheckpointAdmissionRejectsIncompatibleSavedPlatform(t *testing.T) {
 	for _, field := range []string{"architecture", "cpu", "devices", "ram", "gic", "counter", "format", "session"} {
 		t.Run(field, func(t *testing.T) {

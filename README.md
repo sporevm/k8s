@@ -28,8 +28,12 @@ parent so its children share clean RAM pages; child writes remain private.
 Preparation fails rather than falling back to a private RAM copy per child.
 Allow local storage for the sparse backing in addition to the native object
 cache, and include its construction in cold-parent preparation measurements.
-Parents remain scoped to one run on each agent, not shared across agents or
-independent runs.
+An agent keeps one parent per checkpoint digest and shares it between runs.
+After the last run releases it, the agent keeps the most recently used parents
+(`agent.cache.checkpointRetain`, default 1), so a later run with the same
+digest skips the pull. Allow local storage for that many parents plus those of
+the runs in flight. Parents are not shared across agents, and an agent restart
+pulls each digest again.
 
 This is a clean break. Stop old named VMs before replacing the runtime and
 recreate old checkpoints and boot templates as format v8. Old bundles cannot

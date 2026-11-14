@@ -50,11 +50,22 @@ there is no retry without the flag. The existing offline fork and restore paths
 then share clean file-backed RAM while keeping writes private. Local source
 captures already supply this backing and need no extra materialization.
 
-Retain the verified parent across children and retries using the existing
-per-run agent cache, and release it after the aggregate run. This does not
-introduce cross-run or cross-agent backing reuse. Separate agents, even on one
-node, may still retain separate copies; digest-keyed node-wide retention is a
-later slice, not a property of this cache.
+An agent keeps one verified parent per checkpoint digest under
+`<work root>/checkpoints/<digest>/parent.spore`. Children, retries, and
+concurrent runs with that digest share it, and each run ends its use when the
+coordinator releases the aggregate run. The agent then keeps the most recently
+used parents that no run uses, one by default (`--checkpoint-retain`, chart
+value `agent.cache.checkpointRetain`), so a later run with the same digest
+skips the pull, and removes the rest through SporeVM. A parent in use is never
+evicted, so local storage must hold the retain count plus the parents of the
+runs in flight. Zero removes a parent when its last run releases it.
+
+The agent reuses only parents it pulled itself. Nothing local proves which
+digest a directory left by an earlier process holds, so the agent removes those
+before serving and the startup GC collects their storage: an agent restart
+costs one pull per digest. Separate agents, even on one node, still keep
+separate copies. Scheduling runs onto agents that already hold their digest is
+a later slice.
 
 Charge backing reconstruction to cold-parent preparation, and budget local
 storage for the sparse RAM backing as well as CAS disk/RAM objects. Measure

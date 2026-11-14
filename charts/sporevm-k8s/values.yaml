@@ -44,6 +44,7 @@ agent:
     resultDir: /var/lib/sporevm/results
     workDir: /var/lib/sporevm/work
     templateRetain: 16
+    checkpointRetain: 1
     templateReconcileInterval: 15m
   resultStore:
     backend: local

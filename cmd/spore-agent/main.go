@@ -24,6 +24,7 @@ const (
 	defaultChildMemoryBytes   = int64(512 * 1024 * 1024)
 	defaultMemoryReserveBytes = int64(256 * 1024 * 1024)
 	defaultTemplateRetain     = 16
+	defaultCheckpointRetain   = 1
 	defaultTemplateReconcile  = 15 * time.Minute
 	templateReconcileTimeout  = 2 * time.Minute
 	cacheGCTimeout            = 10 * time.Minute
@@ -56,6 +57,7 @@ func main() {
 	var childTimeout time.Duration
 	var templateRetain int
 	var templateReconcileInterval time.Duration
+	var checkpointRetain int
 	var resetRuntimeOnStart bool
 	var cacheGC bool
 
@@ -78,6 +80,7 @@ func main() {
 	flag.DurationVar(&childTimeout, "child-timeout", envDuration("SPORE_AGENT_CHILD_TIMEOUT", 0), "optional per-child resume timeout; 0 disables the agent-side timeout")
 	flag.IntVar(&templateRetain, "template-retain", envInt("SPORE_AGENT_TEMPLATE_RETAIN", defaultTemplateRetain), "newest completed boot templates retained on this agent")
 	flag.DurationVar(&templateReconcileInterval, "template-reconcile-interval", envDuration("SPORE_AGENT_TEMPLATE_RECONCILE_INTERVAL", defaultTemplateReconcile), "interval between boot-template reconciliation passes; 0 disables periodic reconciliation")
+	flag.IntVar(&checkpointRetain, "checkpoint-retain", envInt("SPORE_AGENT_CHECKPOINT_RETAIN", defaultCheckpointRetain), "pulled checkpoint parents kept after no run uses them, so a later run with the same digest skips the pull")
 	flag.BoolVar(&resetRuntimeOnStart, "reset-runtime-on-start", envBool("SPORE_AGENT_RESET_RUNTIME_ON_START", false), "remove process-local SporeVM runtime state before serving while retaining local backing authority")
 	flag.BoolVar(&cacheGC, "cache-gc", envBool("SPORE_AGENT_CACHE_GC", false), "run 'spore cache gc --force' after the agent removes saved spores; set only on the one agent that owns this node's SporeVM caches")
 	flag.Parse()
@@ -108,6 +111,9 @@ func main() {
 	}
 	if templateRetain < 0 {
 		log.Fatalf("template-retain must be >= 0: template_retain=%d", templateRetain)
+	}
+	if checkpointRetain < 0 {
+		log.Fatalf("checkpoint-retain must be >= 0: checkpoint_retain=%d", checkpointRetain)
 	}
 	if templateReconcileInterval < 0 {
 		log.Fatalf("template-reconcile-interval must be >= 0: template_reconcile_interval=%s", templateReconcileInterval)
@@ -143,6 +149,7 @@ func main() {
 		agent.WithBackend(backend),
 		agent.WithChildTimeout(childTimeout),
 		agent.WithCacheGC(cacheGC),
+		agent.WithCheckpointRetain(checkpointRetain),
 	)
 	if err != nil {
 		log.Fatalf("create runner: %v", err)
@@ -180,6 +187,13 @@ func main() {
 	// serves health checks but reports not ready until startup GC finishes.
 	var started atomic.Bool
 	go func() {
+		// Pulled parents are tracked in memory, so remove the ones an earlier
+		// agent process left before the startup GC collects their storage.
+		removeCtx, cancel := context.WithTimeout(ctx, templateReconcileTimeout)
+		if err := runner.RemoveStaleCheckpoints(removeCtx); err != nil {
+			log.Printf("remove stale checkpoint parents: %v", err)
+		}
+		cancel()
 		collectCache()
 		started.Store(true)
 		if templateReconcileInterval == 0 {
