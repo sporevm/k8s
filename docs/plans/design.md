@@ -31,11 +31,13 @@ define it.
 
 ## SporeVM 0.18.0 migration
 
-The source runtime now pins [v0.18.6](https://github.com/sporevm/sporevm/releases/tag/v0.18.6),
-source [c19186c](https://github.com/sporevm/sporevm/commit/c19186cd287968bd330cbf74dc2bbd423bc70f82).
-Its Linux ARM64 archive SHA-256 is `f79b9aacd8656b19bf4757ff2abed86f397f47b3cbe6b5677166d5c843b6bd6a`.
-Runtime/chart 0.1.21 includes recovery from idle HTTP connections expiring while
-local RAM backing is prepared, before the disk phase of a cold checkpoint pull.
+The source runtime now pins [v0.18.7](https://github.com/sporevm/sporevm/releases/tag/v0.18.7),
+source [9c82bef](https://github.com/sporevm/sporevm/commit/9c82bef2855b44de900dfd4bfa4d74e1ca311fd2).
+Its Linux ARM64 archive SHA-256 is `c8d4f3a3fe687ac89623aab5b89dfa60759e02b422ae21a7b1d5edd3ac558294`.
+SporeVM 0.18.7 sends each store request in one write and fetches 64 objects at
+a time, which shortens cold pulls of checkpoints with many small objects.
+Runtime/chart 0.1.22 also keeps pulled parents by checkpoint digest, so a run
+skips the pull when its agent already holds that digest.
 The retry/time budgets and content verification are unchanged.
 The original v0.18.0 migration was a breaking change, not just a runtime pin.
 The older design sections below retain historical bundle-based design context;
