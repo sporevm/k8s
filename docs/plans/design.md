@@ -31,9 +31,13 @@ define it.
 
 ## SporeVM 0.18.0 migration
 
-The source runtime now pins [v0.19.0](https://github.com/sporevm/sporevm/releases/tag/v0.19.0),
-source [26d6dbb](https://github.com/sporevm/sporevm/commit/26d6dbb6e9026d43dadef8aeea61f9c1e671887a).
-Its Linux ARM64 archive SHA-256 is `dc64ecb55f4b02b0c4fc95529a6db5a4e5256f43cf8919e1019dee878f2905ae`.
+The source runtime now pins [v0.19.1](https://github.com/sporevm/sporevm/releases/tag/v0.19.1),
+source [e1f4bc4](https://github.com/sporevm/sporevm/commit/e1f4bc4ef7af8c5109c39f9dfd94513c76a5a70b).
+Its Linux ARM64 archive SHA-256 is `d7e3633b270ea7f3d150b0a374399be85bda2b11e153d36c62fc7290c685331e`.
+SporeVM 0.19.1 pushes to S3 by listing the store and uploading only the
+missing objects with up to eight aws processes at once. In a KVM ARM64 trial
+the first push of an 18.8 GB checkpoint took 178 seconds instead of 978, and
+pushing it again took 18 seconds instead of 104.
 SporeVM 0.19.0 pushes a checkpoint's disk objects as packs as well and pulls
 them with ranged reads of up to 2 MiB. In a KVM ARM64 trial a cold pull of an
 18.8 GB checkpoint from S3 took 28 seconds instead of 221. A parent pushed by
