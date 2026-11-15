@@ -31,13 +31,17 @@ define it.
 
 ## SporeVM 0.18.0 migration
 
-The source runtime now pins [v0.18.7](https://github.com/sporevm/sporevm/releases/tag/v0.18.7),
-source [9c82bef](https://github.com/sporevm/sporevm/commit/9c82bef2855b44de900dfd4bfa4d74e1ca311fd2).
-Its Linux ARM64 archive SHA-256 is `c8d4f3a3fe687ac89623aab5b89dfa60759e02b422ae21a7b1d5edd3ac558294`.
-SporeVM 0.18.7 sends each store request in one write and fetches 64 objects at
-a time, which shortens cold pulls of checkpoints with many small objects.
-Runtime/chart 0.1.22 also keeps pulled parents by checkpoint digest, so a run
-skips the pull when its agent already holds that digest.
+The source runtime now pins [v0.19.0](https://github.com/sporevm/sporevm/releases/tag/v0.19.0),
+source [26d6dbb](https://github.com/sporevm/sporevm/commit/26d6dbb6e9026d43dadef8aeea61f9c1e671887a).
+Its Linux ARM64 archive SHA-256 is `dc64ecb55f4b02b0c4fc95529a6db5a4e5256f43cf8919e1019dee878f2905ae`.
+SporeVM 0.19.0 pushes a checkpoint's disk objects as packs as well and pulls
+them with ranged reads of up to 2 MiB. In a KVM ARM64 trial a cold pull of an
+18.8 GB checkpoint from S3 took 28 seconds instead of 221. A parent pushed by
+an earlier runtime has no packs and pulls as before. Its Linux ARM64 build
+also uses the CPU's AES instructions for TLS, so agent nodes need an ARM64 CPU
+that has them, as Graviton and Ampere CPUs do.
+Runtime/chart 0.1.22 and later keep pulled parents by checkpoint digest, so a
+run skips the pull when its agent already holds that digest.
 The retry/time budgets and content verification are unchanged.
 The original v0.18.0 migration was a breaking change, not just a runtime pin.
 The older design sections below retain historical bundle-based design context;
