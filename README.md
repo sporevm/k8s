@@ -16,14 +16,20 @@ runbooks out of this repository.
 
 ## SporeVM 0.18 migration
 
-The source runtime image builds with SporeVM 0.19.0 and AWS CLI v2. This
-does not change already-published image tags. Deploy runtime/chart 0.1.23 or a
+The source runtime image builds with SporeVM 0.19.1 and AWS CLI v2. This
+does not change already-published image tags. Deploy runtime/chart 0.1.24 or a
 newly built image explicitly; older chart defaults do not provide this upgrade.
-SporeVM 0.19.0 pushes a checkpoint's disk objects as packs as well and pulls
+SporeVM 0.19 pushes a checkpoint's disk objects as packs as well and pulls
 them with a few large ranged reads, which shortens cold checkpoint pulls with
-many small objects. A parent pushed by an earlier runtime has no packs and
-pulls as before; push it again with this runtime to add them. Packs roughly
-double what a store holds for disks.
+many small objects. A parent pushed by a runtime before 0.1.23 has no packs
+and pulls as before; push it again with this runtime to add them. Packs
+roughly double what a store holds for disks.
+SporeVM 0.19.1 pushes to S3 by listing the store and uploading only the
+missing objects with up to eight aws processes at once. In a trial push of an
+18.8 GB checkpoint `spore` itself peaked at about 0.9 GiB of memory; the aws
+processes come on top of that and were not measured. Check
+`agent.resources.limits.memory` (default 2Gi) before pushing large
+checkpoints from an agent.
 
 Remote-parent preparation requires `checkpoint pull --local-ram-backing`.
 SporeVM verifies and reconstructs a read-only local RAM backing once per pulled
@@ -90,7 +96,7 @@ Private environments should keep their values file in ops:
 
 ```bash
 helm upgrade --install sporevm-k8s oci://ghcr.io/sporevm/charts/sporevm-k8s \
-  --version 0.1.23 \
+  --version 0.1.24 \
   --namespace sporevm-system \
   --create-namespace \
   -f values/sporevm-k8s.yaml
